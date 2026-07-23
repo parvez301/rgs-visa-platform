@@ -32,6 +32,11 @@ const FIELD_LABELS: Record<keyof Omit<Traveller, "photoKey" | "passportKey">, st
   passportExpiryDate: "Passport expiry date",
 };
 
+function displayFieldError(message: string): string {
+  if (message.includes("expected YYYY-MM-DD")) return "Enter the date";
+  return message;
+}
+
 function monthsBetween(fromDate: string, toDate: string): number {
   const from = new Date(`${fromDate}T00:00:00Z`);
   const to = new Date(`${toDate}T00:00:00Z`);
@@ -123,7 +128,9 @@ export function TravellersStep({ application, onAdvance }: TravellersStepProps) 
       if (!parseResult.success) {
         for (const issue of parseResult.error.issues) {
           const fieldName = String(issue.path[0] ?? "fullName");
-          nextFieldErrors[`${travellerIndex}.${fieldName}`] = issue.message;
+          nextFieldErrors[`${travellerIndex}.${fieldName}`] = displayFieldError(
+            issue.message,
+          );
         }
       }
       if (!traveller.fullName.trim()) {
