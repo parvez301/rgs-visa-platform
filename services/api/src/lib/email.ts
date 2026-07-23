@@ -38,3 +38,19 @@ export class InMemoryEmailSender implements EmailSender {
     this.sentEmails.push(email);
   }
 }
+
+/**
+ * Email is a notification, never a transaction: a failed send (SES sandbox,
+ * unverified identity) must not fail the user's submit/transition.
+ */
+export class BestEffortEmailSender implements EmailSender {
+  constructor(private readonly innerSender: EmailSender) {}
+
+  async send(email: OutboundEmail): Promise<void> {
+    try {
+      await this.innerSender.send(email);
+    } catch (error) {
+      console.error(`Email send failed (to=${email.toAddress}, subject=${email.subject})`, error);
+    }
+  }
+}

@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda
 import type { AppContext } from "../lib/context";
 import { DynamoTableClient } from "../lib/db";
 import { S3DocumentStore } from "../lib/documentStore";
-import { SesEmailSender } from "../lib/email";
+import { BestEffortEmailSender, SesEmailSender } from "../lib/email";
 import { buildAdminRouter } from "./adminApi";
 import { buildUserRouter } from "./userApi";
 
@@ -19,7 +19,7 @@ function buildProductionContext(): AppContext {
   return {
     table: new DynamoTableClient(tableName),
     documents: new S3DocumentStore(documentsBucket),
-    email: new SesEmailSender(senderAddress),
+    email: new BestEffortEmailSender(new SesEmailSender(senderAddress)),
     adminNotificationAddress,
     now: () => new Date(),
   };
