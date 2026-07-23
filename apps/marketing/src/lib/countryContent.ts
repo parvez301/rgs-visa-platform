@@ -257,7 +257,12 @@ import type { CountryProduct } from "@rgs/shared";
 import { COUNTRY_PRODUCTS } from "@rgs/shared";
 
 /** Country codes that ship a real photo in public/countries/. */
-export const PHOTO_COUNTRY_CODES = new Set(["AE", "AU", "CA", "NZ", "TZ", "UG", "NG", "ZM"]);
+export const PHOTO_COUNTRY_CODES = new Set([
+  "AE", "AU", "CA", "NZ", "TZ", "UG", "NG", "ZM",
+  "SG", "TH", "MY", "VN", "ID", "LK", "NP", "MV", "KH", "PH",
+  "JP", "KR", "CN", "HK", "TR", "GE", "AM", "AZ", "EG", "KE",
+  "US", "GB", "FR", "DE", "IT", "NL",
+]);
 
 export function flagEmojiFromCode(countryCode: string): string {
   return String.fromCodePoint(
