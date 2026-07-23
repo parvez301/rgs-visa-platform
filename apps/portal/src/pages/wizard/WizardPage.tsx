@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams } from "react-router";
 import { WIZARD_STEPS, type WizardStep } from "@rgs/shared";
@@ -41,24 +41,6 @@ export function WizardPage() {
     }
   }, [application, activeStep]);
 
-  const advanceMutation = useMutation({
-    mutationFn: (nextStep: WizardStep) =>
-      portalApi.patchDraft(idToken!, applicationId, { stepReached: nextStep }),
-    onSuccess: (updatedApplication) => {
-      queryClient.setQueryData(["application", applicationId], (previous: unknown) => {
-        const previousPayload = previous as
-          | { application: typeof updatedApplication; documents: typeof documents }
-          | undefined;
-        return {
-          application: updatedApplication,
-          documents: previousPayload?.documents ?? documents,
-        };
-      });
-      setActiveStep(updatedApplication.stepReached);
-      void queryClient.invalidateQueries({ queryKey: ["applications"] });
-    },
-  });
-
   const reachedStepIndex = application ? stepIndex(application.stepReached) : 0;
   const completedStepsCount = useMemo(() => {
     if (!application) return 0;
@@ -66,8 +48,11 @@ export function WizardPage() {
   }, [application, reachedStepIndex]);
   const progressPercent = Math.round((completedStepsCount / WIZARD_STEPS.length) * 100);
 
-  async function advanceToStep(nextStep: WizardStep): Promise<void> {
-    await advanceMutation.mutateAsync(nextStep);
+  /** Called by step components after they have already patchDraft'd stepReached. */
+  async function handleStepAdvanced(nextStep: WizardStep): Promise<void> {
+    await queryClient.invalidateQueries({ queryKey: ["application", applicationId] });
+    await queryClient.invalidateQueries({ queryKey: ["applications"] });
+    setActiveStep(nextStep);
   }
 
   if (applicationQuery.isLoading || activeStep === null) {
@@ -164,14 +149,14 @@ export function WizardPage() {
           {activeStep === "travellers" && (
             <TravellersStep
               application={application}
-              onAdvance={() => advanceToStep("docs")}
+              onAdvance={() => handleStepAdvanced("docs")}
             />
           )}
           {activeStep === "docs" && (
             <DocsStep
               application={application}
               documents={documents}
-              onAdvance={() => advanceToStep("essentials")}
+              onAdvance={() => handleStepAdvanced("essentials")}
               onDocumentsChanged={() => {
                 void queryClient.invalidateQueries({
                   queryKey: ["application", applicationId],
@@ -182,19 +167,11 @@ export function WizardPage() {
           {activeStep === "essentials" && (
             <EssentialsStep
               application={application}
-              onAdvance={() => advanceToStep("review")}
+              onAdvance={() => handleStepAdvanced("review")}
             />
           )}
           {activeStep === "review" && (
             <ReviewStep application={application} documents={documents} />
-          )}
-
-          {advanceMutation.isError && (
-            <p className="mt-4 rounded-xl border border-rgs-red/30 bg-rgs-red/5 px-4 py-3 text-sm text-rgs-red">
-              {advanceMutation.error instanceof Error
-                ? advanceMutation.error.message
-                : "Could not save progress"}
-            </p>
           )}
 
           {currentStepIndex > 0 && (
