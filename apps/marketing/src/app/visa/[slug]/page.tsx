@@ -4,14 +4,17 @@ import type { Metadata } from "next";
 import { getCountryProduct, listActiveProducts } from "@rgs/shared";
 import {
   COUNTRY_CONTENT,
-  DOC_TYPE_LABELS,
   countryCodeFromSlug,
 } from "@/lib/countryContent";
-import { applyUrl, formatInr } from "@/lib/site";
+import { formatInr } from "@/lib/site";
 import { SiteHeader } from "@/components/SiteHeader";
 import { SiteFooter } from "@/components/SiteFooter";
-import { GetByDate } from "@/components/GetByDate";
 import { CountryCard } from "@/components/CountryCard";
+import {
+  LiveDocsList,
+  LiveFeeCard,
+  LiveProcessingBadge,
+} from "@/components/LiveCountryHydration";
 
 export function generateStaticParams() {
   return Object.values(COUNTRY_CONTENT).map((content) => ({ slug: content.slug }));
@@ -40,7 +43,6 @@ export default async function CountryVisaPage({
   const countryCode = countryCodeFromSlug(slug);
   const countryProduct = getCountryProduct(countryCode);
   const content = COUNTRY_CONTENT[countryCode]!;
-  const totalFee = countryProduct.governmentFeeInr + countryProduct.serviceFeeInr;
   const otherProducts = listActiveProducts()
     .filter((product) => product.countryCode !== countryCode)
     .slice(0, 4);
@@ -71,7 +73,10 @@ export default async function CountryVisaPage({
                   {content.heroTagline}
                 </h1>
                 <p className="mt-3 inline-block rounded-full bg-paper/95 px-4 py-1.5 text-sm font-semibold">
-                  <GetByDate processingDays={countryProduct.processingDays} />
+                  <LiveProcessingBadge
+                    countryProduct={countryProduct}
+                    countryCode={countryCode}
+                  />
                 </p>
               </div>
             </div>
@@ -99,20 +104,7 @@ export default async function CountryVisaPage({
 
             <section>
               <h2 className="text-2xl font-bold mb-4">Documents you&apos;ll need</h2>
-              <ul className="space-y-3">
-                {countryProduct.docsRequired.map((docType) => (
-                  <li
-                    key={docType}
-                    className="flex items-center gap-3 rounded-xl border border-line p-4"
-                  >
-                    <span
-                      className="h-2 w-2 rounded-full bg-rgs-red shrink-0"
-                      aria-hidden="true"
-                    />
-                    <span className="font-medium">{DOC_TYPE_LABELS[docType]}</span>
-                  </li>
-                ))}
-              </ul>
+              <LiveDocsList countryProduct={countryProduct} countryCode={countryCode} />
               <p className="mt-3 text-sm text-ink-soft">
                 Upload photos or scans from your phone — our team checks
                 everything against government guidelines before submission.
@@ -159,30 +151,7 @@ export default async function CountryVisaPage({
             </section>
           </div>
 
-          {/* Sticky price card */}
-          <aside className="lg:sticky lg:top-28 rounded-2xl border border-line bg-paper p-6 shadow-[0_16px_48px_rgb(23_25_31/0.10)]">
-            <p className="mrz text-xs text-ink-soft">Total per traveller</p>
-            <p className="mt-1 text-4xl font-bold font-display">{formatInr(totalFee)}</p>
-            <dl className="mt-4 space-y-2 border-t border-dashed border-line pt-4 text-sm">
-              <div className="flex justify-between">
-                <dt className="text-ink-soft">Government fee</dt>
-                <dd className="font-medium">{formatInr(countryProduct.governmentFeeInr)}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-ink-soft">RGS service fee</dt>
-                <dd className="font-medium">{formatInr(countryProduct.serviceFeeInr)}</dd>
-              </div>
-            </dl>
-            <a
-              href={applyUrl(countryCode)}
-              className="mt-5 block rounded-full bg-rgs-red px-6 py-3.5 text-center font-semibold text-white hover:bg-rgs-red-deep transition-colors"
-            >
-              Start application
-            </a>
-            <p className="mt-3 text-xs text-ink-soft text-center">
-              No online payment needed — pay after our team reviews your file.
-            </p>
-          </aside>
+          <LiveFeeCard countryProduct={countryProduct} countryCode={countryCode} />
         </div>
 
         <section className="mx-auto max-w-6xl px-4 pb-16">
