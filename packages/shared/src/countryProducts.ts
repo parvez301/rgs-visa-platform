@@ -1,4 +1,4 @@
-import type { DocType } from "./statuses.js";
+import type { DocType } from "./statuses";
 
 export interface CountryProduct {
   countryCode: string;

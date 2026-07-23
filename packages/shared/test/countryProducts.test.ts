@@ -5,7 +5,7 @@ import {
   getCountryProduct,
   getDocsChecklist,
   listActiveProducts,
-} from "../src/countryProducts.js";
+} from "../src/countryProducts";
 
 const V1_COUNTRY_CODES = ["AE", "AU", "CA", "NZ", "TZ", "UG", "NG", "ZM"] as const;
 

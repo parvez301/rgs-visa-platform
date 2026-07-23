@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { APPLICATION_STATUSES, type ApplicationStatus } from "../src/statuses.js";
+import { APPLICATION_STATUSES, type ApplicationStatus } from "../src/statuses";
 import {
   IllegalStatusTransitionError,
   LEGAL_STATUS_TRANSITIONS,
   assertTransition,
   canTransition,
-} from "../src/statusMachine.js";
+} from "../src/statusMachine";
 
 const legalPairs: Array<[ApplicationStatus, ApplicationStatus]> = [
   ["DRAFT", "SUBMITTED"],

@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+@theme {
+  --color-rgs-red: #ef3250;
+  --color-rgs-red-deep: #c4173a;
+  --color-ink: #17191f;
+  --color-ink-soft: #5b616e;
+  --color-paper: #ffffff;
+  --color-mist: #f5f6f8;
+  --color-line: #e6e8ec;
+
+  --font-display: var(--font-bricolage), "Bricolage Grotesque", sans-serif;
+  --font-body: var(--font-figtree), "Figtree", sans-serif;
+  --font-mrz: var(--font-spline-mono), "Spline Sans Mono", monospace;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-ink);
+  background: var(--color-paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* Passport machine-readable-zone strip */
+.mrz {
+  font-family: var(--font-mrz);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Speed lines from the RGS logo mark (///) */
+.speedlines {
+  background-image: repeating-linear-gradient(
+    115deg,
+    transparent 0px,
+    transparent 22px,
+    rgb(239 50 80 / 0.06) 22px,
+    rgb(239 50 80 / 0.06) 34px
+  );
+}
+
+/* Hero rubber stamp */
+@keyframes stamp-down {
+  0% {
+    opacity: 0;
+    transform: rotate(-12deg) scale(2.4);
+  }
+  60% {
+    opacity: 1;
+    transform: rotate(-12deg) scale(0.96);
+  }
+  80% {
+    transform: rotate(-12deg) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: rotate(-12deg) scale(1);
+  }
+}
+
+.stamp {
+  animation: stamp-down 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.4) 0.35s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stamp {
+    animation: none;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-rgs-red);
+  outline-offset: 2px;
+}

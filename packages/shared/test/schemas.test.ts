@@ -5,7 +5,7 @@ import {
   ActivityEventSchema,
   TravellerSchema,
   UserSchema,
-} from "../src/schemas.js";
+} from "../src/schemas";
 
 const validTraveller = {
   fullName: "Asha Verma",

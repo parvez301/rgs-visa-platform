@@ -6,7 +6,7 @@ import {
   DOC_TYPES,
   PAYMENT_STATUSES,
   WIZARD_STEPS,
-} from "./statuses.js";
+} from "./statuses";
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
 const isoDateTime = z.string().datetime();

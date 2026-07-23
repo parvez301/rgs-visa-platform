@@ -1,4 +1,4 @@
-import type { ApplicationStatus } from "./statuses.js";
+import type { ApplicationStatus } from "./statuses";
 
 export const LEGAL_STATUS_TRANSITIONS: Record<ApplicationStatus, readonly ApplicationStatus[]> = {
   DRAFT: ["SUBMITTED"],

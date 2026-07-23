@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SHARED_PACKAGE_NAME } from "../src/index.js";
+import { SHARED_PACKAGE_NAME } from "../src/index";
 
 describe("workspace sanity", () => {
   it("resolves the shared package entry point", () => {
