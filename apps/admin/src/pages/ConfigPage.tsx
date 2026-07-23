@@ -14,6 +14,13 @@ import {
 import { AdminShell } from "../components/AdminShell";
 import { adminApi } from "../lib/adminApi";
 import { useAuth } from "../lib/auth";
+import {
+  buildImportPreview,
+  configCsvFilename,
+  parseConfigCsv,
+  serializeConfigCsv,
+  type ImportPreviewRow,
+} from "../lib/configCsv";
 
 const DOC_TYPE_LABELS: Record<DocType, string> = {
   PASSPORT_BIO: "Passport bio page",
@@ -74,6 +81,20 @@ export function ConfigPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRegion, setSelectedRegion] = useState<Region | "ALL">("ALL");
   const [selectedTierFilter, setSelectedTierFilter] = useState<TierFilter>("ALL");
+  const [importPreviewRows, setImportPreviewRows] = useState<ImportPreviewRow[] | null>(
+    null,
+  );
+  const [acceptedImportRowNumbers, setAcceptedImportRowNumbers] = useState<Set<number>>(
+    new Set(),
+  );
+  const [importProgress, setImportProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
+  const [importFailures, setImportFailures] = useState<
+    Array<{ rowNumber: number; countryName: string; message: string }>
+  >([]);
+  const [isImporting, setIsImporting] = useState(false);
 
   const countriesQuery = useQuery({
     queryKey: ["admin-countries"],
@@ -148,16 +169,64 @@ export function ConfigPage() {
             )}
           </p>
         </div>
-        {showSeedButton && (
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={seedMutation.isPending}
-            onClick={() => seedMutation.mutate()}
+            onClick={() => {
+              const csvText = serializeConfigCsv(products);
+              const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+              const objectUrl = URL.createObjectURL(blob);
+              const anchor = document.createElement("a");
+              anchor.href = objectUrl;
+              anchor.download = configCsvFilename();
+              anchor.click();
+              URL.revokeObjectURL(objectUrl);
+            }}
+            disabled={products.length === 0}
             className="rounded-full border border-line px-4 py-2 text-sm font-semibold hover:border-ink transition-colors disabled:opacity-60"
           >
-            Seed catalog
+            Export CSV
           </button>
-        )}
+          <label className="cursor-pointer rounded-full border border-line px-4 py-2 text-sm font-semibold hover:border-ink transition-colors">
+            Import CSV
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(changeEvent) => {
+                const file = changeEvent.target.files?.[0];
+                changeEvent.target.value = "";
+                if (!file) return;
+                void file.text().then((csvText) => {
+                  const parsedRows = parseConfigCsv(csvText);
+                  const previewRows = buildImportPreview(parsedRows, products);
+                  const defaultAccepted = new Set(
+                    previewRows
+                      .filter(
+                        (previewRow) =>
+                          previewRow.kind === "changed" || previewRow.kind === "new",
+                      )
+                      .map((previewRow) => previewRow.rowNumber),
+                  );
+                  setAcceptedImportRowNumbers(defaultAccepted);
+                  setImportFailures([]);
+                  setImportProgress(null);
+                  setImportPreviewRows(previewRows);
+                });
+              }}
+            />
+          </label>
+          {showSeedButton && (
+            <button
+              type="button"
+              disabled={seedMutation.isPending}
+              onClick={() => seedMutation.mutate()}
+              className="rounded-full border border-line px-4 py-2 text-sm font-semibold hover:border-ink transition-colors disabled:opacity-60"
+            >
+              Seed catalog
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mb-4 flex flex-col gap-3">
@@ -333,6 +402,72 @@ export function ConfigPage() {
               return;
             }
             putMutation.mutate(editingProduct);
+          }}
+        />
+      )}
+
+      {importPreviewRows && (
+        <CsvImportDrawer
+          previewRows={importPreviewRows}
+          acceptedRowNumbers={acceptedImportRowNumbers}
+          isImporting={isImporting}
+          importProgress={importProgress}
+          importFailures={importFailures}
+          onClose={() => {
+            if (isImporting) return;
+            setImportPreviewRows(null);
+            setImportFailures([]);
+            setImportProgress(null);
+          }}
+          onToggleRow={(rowNumber, isAccepted) => {
+            setAcceptedImportRowNumbers((previousAccepted) => {
+              const nextAccepted = new Set(previousAccepted);
+              if (isAccepted) nextAccepted.add(rowNumber);
+              else nextAccepted.delete(rowNumber);
+              return nextAccepted;
+            });
+          }}
+          onConfirm={async () => {
+            if (!idToken) return;
+            const rowsToPut = importPreviewRows.filter(
+              (previewRow) =>
+                previewRow.product &&
+                acceptedImportRowNumbers.has(previewRow.rowNumber) &&
+                (previewRow.kind === "changed" || previewRow.kind === "new"),
+            );
+            if (rowsToPut.length === 0) return;
+            setIsImporting(true);
+            setImportFailures([]);
+            setImportProgress({ completed: 0, total: rowsToPut.length });
+            const failures: Array<{
+              rowNumber: number;
+              countryName: string;
+              message: string;
+            }> = [];
+            for (let rowIndex = 0; rowIndex < rowsToPut.length; rowIndex += 1) {
+              const previewRow = rowsToPut[rowIndex]!;
+              try {
+                await adminApi.putCountry(idToken, previewRow.product!);
+              } catch (error) {
+                failures.push({
+                  rowNumber: previewRow.rowNumber,
+                  countryName: previewRow.product!.countryName,
+                  message: error instanceof Error ? error.message : "Save failed",
+                });
+              }
+              setImportProgress({ completed: rowIndex + 1, total: rowsToPut.length });
+            }
+            setImportFailures(failures);
+            setIsImporting(false);
+            setHasSuccessfulPut(true);
+            void queryClient.invalidateQueries({ queryKey: ["admin-countries"] });
+            if (failures.length === 0) {
+              setToastMessage(
+                `Imported ${rowsToPut.length} countr${rowsToPut.length === 1 ? "y" : "ies"}`,
+              );
+              setImportPreviewRows(null);
+              setImportProgress(null);
+            }
           }}
         />
       )}
@@ -587,3 +722,151 @@ function ConfigEditDrawer({
     </div>
   );
 }
+
+function CsvImportDrawer({
+  previewRows,
+  acceptedRowNumbers,
+  isImporting,
+  importProgress,
+  importFailures,
+  onClose,
+  onToggleRow,
+  onConfirm,
+}: {
+  previewRows: ImportPreviewRow[];
+  acceptedRowNumbers: Set<number>;
+  isImporting: boolean;
+  importProgress: { completed: number; total: number } | null;
+  importFailures: Array<{ rowNumber: number; countryName: string; message: string }>;
+  onClose: () => void;
+  onToggleRow: (rowNumber: number, isAccepted: boolean) => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const actionableCount = previewRows.filter(
+    (previewRow) =>
+      (previewRow.kind === "changed" || previewRow.kind === "new") &&
+      acceptedRowNumbers.has(previewRow.rowNumber),
+  ).length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-ink/40">
+      <div className="flex h-full w-full max-w-2xl flex-col bg-paper shadow-xl">
+        <div className="flex items-center justify-between border-b border-line px-5 py-4">
+          <div>
+            <h2 className="font-bold">Import CSV preview</h2>
+            <p className="mt-0.5 text-xs text-ink-soft">
+              Validate with schema, accept rows, then PUT sequentially. No deletes.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={isImporting}
+            onClick={onClose}
+            className="text-sm text-ink-soft disabled:opacity-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-line text-ink-soft">
+              <tr>
+                <th className="py-2 pr-2 font-medium">Accept</th>
+                <th className="py-2 pr-2 font-medium">Row</th>
+                <th className="py-2 pr-2 font-medium">Country</th>
+                <th className="py-2 pr-2 font-medium">Diff</th>
+                <th className="py-2 font-medium">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {previewRows.map((previewRow) => {
+                const canAccept =
+                  previewRow.kind === "changed" || previewRow.kind === "new";
+                const rowHighlight =
+                  previewRow.kind === "changed"
+                    ? "bg-amber-50"
+                    : previewRow.kind === "new"
+                      ? "bg-emerald-50"
+                      : previewRow.kind === "invalid"
+                        ? "bg-rgs-red/5"
+                        : "";
+                return (
+                  <tr
+                    key={previewRow.rowNumber}
+                    className={`border-b border-line last:border-0 ${rowHighlight}`}
+                  >
+                    <td className="py-2 pr-2">
+                      {canAccept ? (
+                        <input
+                          type="checkbox"
+                          disabled={isImporting}
+                          checked={acceptedRowNumbers.has(previewRow.rowNumber)}
+                          onChange={(changeEvent) =>
+                            onToggleRow(previewRow.rowNumber, changeEvent.target.checked)
+                          }
+                        />
+                      ) : (
+                        <span className="text-ink-soft">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-2 mrz text-xs">{previewRow.rowNumber}</td>
+                    <td className="py-2 pr-2 font-medium">
+                      {previewRow.product?.countryName ??
+                        previewRow.existingProduct?.countryName ??
+                        "—"}
+                    </td>
+                    <td className="py-2 pr-2 text-xs font-semibold uppercase tracking-wide">
+                      {previewRow.kind}
+                    </td>
+                    <td className="py-2 text-xs text-ink-soft">
+                      {previewRow.validationError ??
+                        (previewRow.kind === "changed"
+                          ? "Will overwrite existing row"
+                          : previewRow.kind === "new"
+                            ? "New product code"
+                            : previewRow.kind === "unchanged"
+                              ? "Identical — skipped"
+                              : "")}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {importProgress && (
+            <p className="mt-4 text-sm text-ink-soft">
+              Progress: {importProgress.completed} / {importProgress.total}
+            </p>
+          )}
+
+          {importFailures.length > 0 && (
+            <div className="mt-4 space-y-1 rounded-xl border border-rgs-red/30 bg-rgs-red/5 px-3 py-2 text-sm text-rgs-red">
+              <p className="font-semibold">Failures</p>
+              {importFailures.map((failure) => (
+                <p key={`${failure.rowNumber}-${failure.message}`}>
+                  Row {failure.rowNumber} ({failure.countryName}): {failure.message}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-line px-5 py-4">
+          <button
+            type="button"
+            disabled={isImporting || actionableCount === 0}
+            onClick={() => void onConfirm()}
+            className="w-full rounded-full bg-ink px-4 py-3 text-sm font-semibold text-paper hover:bg-ink/90 disabled:opacity-60"
+          >
+            {isImporting
+              ? `Saving ${importProgress?.completed ?? 0}/${importProgress?.total ?? 0}…`
+              : `Apply ${actionableCount} accepted row${actionableCount === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
