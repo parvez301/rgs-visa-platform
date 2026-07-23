@@ -58,6 +58,20 @@ export function QueuePage() {
     enabled: idToken !== null,
   });
 
+  const countriesQuery = useQuery({
+    queryKey: ["admin-countries"],
+    queryFn: () => adminApi.listCountries(idToken!),
+    enabled: idToken !== null,
+  });
+
+  const countryNameByCode = useMemo(() => {
+    const nameByCode = new Map<string, string>();
+    for (const countryProduct of countriesQuery.data ?? []) {
+      nameByCode.set(countryProduct.countryCode, countryProduct.countryName);
+    }
+    return nameByCode;
+  }, [countriesQuery.data]);
+
   const countsByStatus = useMemo(() => {
     const counts: Partial<Record<ApplicationStatus, number>> = {};
     APPLICATION_STATUSES.forEach((status, statusIndex) => {
@@ -157,7 +171,10 @@ export function QueuePage() {
                   className="cursor-pointer border-b border-line last:border-0 hover:bg-mist/70 transition-colors"
                 >
                   <td className="px-4 py-3 mrz text-xs">{shortId(application.applicationId)}</td>
-                  <td className="px-4 py-3 font-medium">{application.countryCode}</td>
+                  <td className="px-4 py-3 font-medium">
+                    {countryNameByCode.get(application.countryCode) ??
+                      application.countryCode}
+                  </td>
                   <td className="px-4 py-3">{application.travellers.length}</td>
                   <td className="px-4 py-3 text-ink-soft">
                     {relativeTime(application.updatedAt)}
