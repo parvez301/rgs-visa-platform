@@ -1,5 +1,6 @@
 import { SiteHeader } from "@/components/SiteHeader";
 import { Hero } from "@/components/Hero";
+import { HomeLeadForm } from "@/components/HomeLeadForm";
 import { CountryGrid } from "@/components/CountryGrid";
 import { HowItWorks } from "@/components/HowItWorks";
 import { Services } from "@/components/Services";
@@ -13,6 +14,7 @@ export default function HomePage() {
       <SiteHeader />
       <main>
         <Hero />
+        <HomeLeadForm />
         <CountryGrid />
         <HowItWorks />
         <Services />
