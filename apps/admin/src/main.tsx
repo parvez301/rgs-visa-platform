@@ -3,9 +3,13 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AuthProvider, useAuth } from "./lib/auth";
+import { ActivityPage } from "./pages/ActivityPage";
+import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
 import { AuthPage } from "./pages/AuthPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { WizardPage } from "./pages/wizard/WizardPage";
+import { ConfigPage } from "./pages/ConfigPage";
+import { LeadsPage } from "./pages/LeadsPage";
+import { QueuePage } from "./pages/QueuePage";
+import { UserActivityPage } from "./pages/UserActivityPage";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -36,15 +40,47 @@ createRoot(document.getElementById("root")!).render(
               path="/"
               element={
                 <RequireAuth>
-                  <DashboardPage />
+                  <QueuePage />
                 </RequireAuth>
               }
             />
             <Route
-              path="/apply/:applicationId"
+              path="/applications/:applicationId"
               element={
                 <RequireAuth>
-                  <WizardPage />
+                  <ApplicationDetailPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/activity"
+              element={
+                <RequireAuth>
+                  <ActivityPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/leads"
+              element={
+                <RequireAuth>
+                  <LeadsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/config"
+              element={
+                <RequireAuth>
+                  <ConfigPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/users/:userId"
+              element={
+                <RequireAuth>
+                  <UserActivityPage />
                 </RequireAuth>
               }
             />

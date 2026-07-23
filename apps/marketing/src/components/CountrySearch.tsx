@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { findLiveProduct, useLiveCatalog } from "@/lib/useLiveCatalog";
 
 export interface SearchableCountry {
   countryCode: string;
@@ -18,16 +19,29 @@ export function CountrySearch({ countries }: { countries: SearchableCountry[] })
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const liveCatalog = useLiveCatalog();
+
+  const hydratedCountries = useMemo(() => {
+    return countries.map((country) => {
+      const liveProduct = findLiveProduct(liveCatalog, country.countryCode);
+      if (!liveProduct) return country;
+      return {
+        ...country,
+        totalFeeInr: liveProduct.governmentFeeInr + liveProduct.serviceFeeInr,
+        processingDays: liveProduct.processingDays,
+      };
+    });
+  }, [countries, liveCatalog]);
 
   const matches = useMemo(() => {
     const trimmedQuery = query.trim().toLowerCase();
-    if (!trimmedQuery) return countries;
-    return countries.filter(
+    if (!trimmedQuery) return hydratedCountries;
+    return hydratedCountries.filter(
       (country) =>
         country.countryName.toLowerCase().includes(trimmedQuery) ||
         country.countryCode.toLowerCase() === trimmedQuery,
     );
-  }, [countries, query]);
+  }, [hydratedCountries, query]);
 
   useEffect(() => {
     setHighlightedIndex(0);

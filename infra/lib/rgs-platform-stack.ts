@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as cdk from "aws-cdk-lib";
 import type { Construct } from "constructs";
@@ -261,10 +262,37 @@ function handler(event) {
       memoryLimit: 512,
     });
 
+    // ---------- Portal + Admin SPA hosting ----------
+    const { distribution: portalDistribution } = this.createSpaHosting({
+      stage,
+      removalPolicy,
+      autoDeleteObjects: !isProduction,
+      idPrefix: "Portal",
+      bucketName: `rgs-portal-${stage}`,
+      distRelativePath: "../../apps/portal/dist",
+      comment: `RGS portal (${stage})`,
+    });
+
+    const { distribution: adminDistribution } = this.createSpaHosting({
+      stage,
+      removalPolicy,
+      autoDeleteObjects: !isProduction,
+      idPrefix: "Admin",
+      bucketName: `rgs-admin-${stage}`,
+      distRelativePath: "../../apps/admin/dist",
+      comment: `RGS admin (${stage})`,
+    });
+
     // ---------- Outputs ----------
     new cdk.CfnOutput(this, "ApiUrl", { value: httpApi.apiEndpoint });
     new cdk.CfnOutput(this, "MarketingUrl", {
       value: `https://${marketingDistribution.distributionDomainName}`,
+    });
+    new cdk.CfnOutput(this, "PortalUrl", {
+      value: `https://${portalDistribution.distributionDomainName}`,
+    });
+    new cdk.CfnOutput(this, "AdminUrl", {
+      value: `https://${adminDistribution.distributionDomainName}`,
     });
     new cdk.CfnOutput(this, "TableName", { value: platformTable.tableName });
     new cdk.CfnOutput(this, "DocumentsBucketName", { value: documentsBucket.bucketName });
@@ -272,5 +300,67 @@ function handler(event) {
     new cdk.CfnOutput(this, "UsersPoolClientId", { value: usersPoolClient.userPoolClientId });
     new cdk.CfnOutput(this, "AdminsPoolId", { value: adminsPool.userPoolId });
     new cdk.CfnOutput(this, "AdminsPoolClientId", { value: adminsPoolClient.userPoolClientId });
+  }
+
+  private createSpaHosting(options: {
+    stage: string;
+    removalPolicy: cdk.RemovalPolicy;
+    autoDeleteObjects: boolean;
+    idPrefix: string;
+    bucketName: string;
+    distRelativePath: string;
+    comment: string;
+  }): { bucket: s3.Bucket; distribution: cloudfront.Distribution } {
+    const spaBucket = new s3.Bucket(this, `${options.idPrefix}Bucket`, {
+      bucketName: `${options.bucketName}-${this.account}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy: options.removalPolicy,
+      autoDeleteObjects: options.autoDeleteObjects,
+    });
+
+    const spaDistribution = new cloudfront.Distribution(this, `${options.idPrefix}Distribution`, {
+      defaultBehavior: {
+        origin: cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(spaBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+      defaultRootObject: "index.html",
+      errorResponses: [
+        {
+          httpStatus: 403,
+          responseHttpStatus: 200,
+          responsePagePath: "/index.html",
+          ttl: cdk.Duration.seconds(0),
+        },
+        {
+          httpStatus: 404,
+          responseHttpStatus: 200,
+          responsePagePath: "/index.html",
+          ttl: cdk.Duration.seconds(0),
+        },
+      ],
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_200,
+      comment: options.comment,
+    });
+
+    const distAbsolutePath = path.join(__dirname, options.distRelativePath);
+    const deploymentSources = fs.existsSync(distAbsolutePath)
+      ? [s3deploy.Source.asset(distAbsolutePath)]
+      : [
+          s3deploy.Source.data(
+            "index.html",
+            `<!doctype html><title>${options.idPrefix} build missing</title><p>Run pnpm --filter @rgs/${options.idPrefix.toLowerCase()} build before deploy.</p>`,
+          ),
+        ];
+
+    new s3deploy.BucketDeployment(this, `${options.idPrefix}Deployment`, {
+      sources: deploymentSources,
+      destinationBucket: spaBucket,
+      distribution: spaDistribution,
+      distributionPaths: ["/*"],
+      memoryLimit: 512,
+    });
+
+    return { bucket: spaBucket, distribution: spaDistribution };
   }
 }
