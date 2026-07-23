@@ -10,7 +10,7 @@ const HEADLINE_SLIDES: Array<{ before: string; accent: string; after: string }> 
   { before: "Visas & admissions,\n", accent: "tailored for you", after: "." },
 ];
 
-const ROTATION_INTERVAL_MS = 5000;
+const ROTATION_INTERVAL_MS = 3000;
 
 export function RotatingHeadline() {
   const [slideIndex, setSlideIndex] = useState(0);
