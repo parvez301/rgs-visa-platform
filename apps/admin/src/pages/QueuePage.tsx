@@ -1,4 +1,4 @@
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import {
@@ -46,6 +46,18 @@ export function QueuePage() {
     })),
   });
 
+  const activityWeekQuery = useQuery({
+    queryKey: ["admin-activity", 7],
+    queryFn: () => adminApi.listActivity(idToken!, { daysBack: 7 }),
+    enabled: idToken !== null,
+  });
+
+  const leadsQuery = useQuery({
+    queryKey: ["admin-leads"],
+    queryFn: () => adminApi.listLeads(idToken!),
+    enabled: idToken !== null,
+  });
+
   const countsByStatus = useMemo(() => {
     const counts: Partial<Record<ApplicationStatus, number>> = {};
     APPLICATION_STATUSES.forEach((status, statusIndex) => {
@@ -59,6 +71,18 @@ export function QueuePage() {
       (statusQuery) => statusQuery.data ?? [],
     ) as Application[];
   }, [statusCountQueries]);
+
+  const draftApplications =
+    statusCountQueries[APPLICATION_STATUSES.indexOf("DRAFT")]?.data ?? [];
+  const abandonedDraftCount = draftApplications.filter((application) => {
+    const ageMs = Date.now() - new Date(application.updatedAt).getTime();
+    return ageMs > 24 * 60 * 60 * 1000;
+  }).length;
+
+  const signupsThisWeek = (activityWeekQuery.data ?? []).filter(
+    (activityEvent) => activityEvent.eventType === "SIGNED_UP",
+  ).length;
+  const newLeadsCount = leadsQuery.data?.length ?? 0;
 
   const filteredApplications =
     selectedStatus === "ALL"
@@ -75,6 +99,19 @@ export function QueuePage() {
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Application queue</h1>
         <p className="mt-1 text-ink-soft">Review submissions and advance each case.</p>
+      </div>
+
+      <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <MetricTile label="Signups this week" value={String(signupsThisWeek)} />
+        <MetricTile
+          label="Applications by status"
+          value={APPLICATION_STATUSES.map(
+            (status) => `${status.slice(0, 3)} ${countsByStatus[status] ?? 0}`,
+          ).join(" · ")}
+          compact
+        />
+        <MetricTile label="Abandoned drafts (>24h)" value={String(abandonedDraftCount)} />
+        <MetricTile label="New leads" value={String(newLeadsCount)} />
       </div>
 
       <div className="mb-6 flex flex-wrap gap-2">
@@ -174,5 +211,24 @@ function StatusTab({
       {label}{" "}
       <span className={isActive ? "text-paper/80" : "text-ink-soft"}>({count})</span>
     </button>
+  );
+}
+
+function MetricTile({
+  label,
+  value,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  compact?: boolean;
+}) {
+  return (
+    <div className="rounded-2xl border border-line bg-paper p-4">
+      <p className="mrz text-[10px] text-ink-soft mb-2">{label}</p>
+      <p className={compact ? "text-xs font-semibold leading-relaxed" : "text-3xl font-bold"}>
+        {value}
+      </p>
+    </div>
   );
 }
