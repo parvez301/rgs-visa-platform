@@ -1,5 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Link } from "react-router";
 import type { Application, ApplicationStatus } from "@rgs/shared";
 import { APPLICATION_STATUSES } from "@rgs/shared";
 import { portalApi } from "../lib/api";
@@ -66,6 +67,28 @@ export function DashboardPage() {
   });
 
   const applications = applicationsQuery.data ?? [];
+  const submittedApplicationIds = applications
+    .filter((application) => application.status === "SUBMITTED")
+    .map((application) => application.applicationId);
+
+  const submittedDetailQueries = useQueries({
+    queries: submittedApplicationIds.map((applicationId) => ({
+      queryKey: ["application", applicationId],
+      queryFn: () => portalApi.getApplication(idToken!, applicationId),
+      enabled: idToken !== null,
+    })),
+  });
+
+  const applicationIdsNeedingReupload = new Set(
+    submittedDetailQueries
+      .filter((detailQuery) =>
+        (detailQuery.data?.documents ?? []).some(
+          (document) => document.reviewStatus === "REJECTED",
+        ),
+      )
+      .map((detailQuery) => detailQuery.data!.application.applicationId),
+  );
+
   const ongoingApplications = applications.filter(
     (application) => !["DELIVERED", "REJECTED"].includes(application.status),
   );
@@ -139,7 +162,13 @@ export function DashboardPage() {
             <h2 className="mrz text-xs text-ink-soft mb-3">Ongoing</h2>
             <div className="space-y-4">
               {ongoingApplications.map((application) => (
-                <ApplicationCard key={application.applicationId} application={application} />
+                <ApplicationCard
+                  key={application.applicationId}
+                  application={application}
+                  needsDocumentReupload={applicationIdsNeedingReupload.has(
+                    application.applicationId,
+                  )}
+                />
               ))}
             </div>
           </section>
@@ -160,7 +189,13 @@ export function DashboardPage() {
   );
 }
 
-function ApplicationCard({ application }: { application: Application }) {
+function ApplicationCard({
+  application,
+  needsDocumentReupload = false,
+}: {
+  application: Application;
+  needsDocumentReupload?: boolean;
+}) {
   return (
     <div className="rounded-2xl border border-line bg-paper p-5">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -170,14 +205,22 @@ function ApplicationCard({ application }: { application: Application }) {
             {application.travellers.length === 1 ? "traveller" : "travellers"}
           </p>
           <p className="text-sm text-ink-soft">{STATUS_LABELS[application.status]}</p>
+          {needsDocumentReupload && (
+            <Link
+              to={`/apply/${application.applicationId}`}
+              className="mt-2 inline-flex rounded-full bg-rgs-red/10 px-3 py-1 text-xs font-semibold text-rgs-red hover:bg-rgs-red hover:text-white transition-colors"
+            >
+              Action needed — re-upload document
+            </Link>
+          )}
         </div>
         {application.status === "DRAFT" ? (
-          <a
-            href={`/apply/${application.applicationId}`}
+          <Link
+            to={`/apply/${application.applicationId}`}
             className="rounded-full border border-rgs-red px-5 py-2 text-sm font-semibold text-rgs-red hover:bg-rgs-red hover:text-white transition-colors"
           >
             Resume
-          </a>
+          </Link>
         ) : (
           <span className="mrz text-[10px] text-ink-soft">
             {application.applicationId.slice(0, 12)}

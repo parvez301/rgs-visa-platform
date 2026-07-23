@@ -34,12 +34,20 @@ export function WizardPage() {
 
   const application = applicationQuery.data?.application;
   const documents = applicationQuery.data?.documents ?? [];
+  const hasRejectedDocuments = documents.some(
+    (document) => document.reviewStatus === "REJECTED",
+  );
+  const isReuploadMode =
+    application?.status === "SUBMITTED" && hasRejectedDocuments;
 
   useEffect(() => {
-    if (application && activeStep === null) {
-      setActiveStep(application.stepReached);
+    if (!application || activeStep !== null) return;
+    if (isReuploadMode) {
+      setActiveStep("docs");
+      return;
     }
-  }, [application, activeStep]);
+    setActiveStep(application.stepReached);
+  }, [application, activeStep, isReuploadMode]);
 
   const reachedStepIndex = application ? stepIndex(application.stepReached) : 0;
   const completedStepsCount = useMemo(() => {
@@ -55,7 +63,7 @@ export function WizardPage() {
     setActiveStep(nextStep);
   }
 
-  if (applicationQuery.isLoading || activeStep === null) {
+  if (applicationQuery.isLoading || (activeStep === null && !applicationQuery.isError)) {
     return (
       <div className="flex min-h-screen items-center justify-center text-ink-soft">
         Loading application…
@@ -74,8 +82,16 @@ export function WizardPage() {
     );
   }
 
-  if (application.status !== "DRAFT") {
+  if (application.status !== "DRAFT" && !isReuploadMode) {
     return <Navigate to="/" replace />;
+  }
+
+  if (activeStep === null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-ink-soft">
+        Loading application…
+      </div>
+    );
   }
 
   const currentStepIndex = stepIndex(activeStep);
@@ -105,17 +121,22 @@ export function WizardPage() {
           </div>
         </div>
 
-        <nav aria-label="Application steps" className="px-3 pb-6">
+                <nav aria-label="Application steps" className="px-3 pb-6">
           <ol className="space-y-1">
             {WIZARD_STEPS.map((wizardStep, wizardStepIndex) => {
-              const isReached = wizardStepIndex <= reachedStepIndex;
+              const isReached = isReuploadMode
+                ? wizardStep === "docs"
+                : wizardStepIndex <= reachedStepIndex;
               const isActive = wizardStep === activeStep;
               return (
                 <li key={wizardStep}>
                   <button
                     type="button"
-                    disabled={!isReached}
-                    onClick={() => setActiveStep(wizardStep)}
+                    disabled={!isReached || (isReuploadMode && wizardStep !== "docs")}
+                    onClick={() => {
+                      if (isReuploadMode && wizardStep !== "docs") return;
+                      setActiveStep(wizardStep);
+                    }}
                     className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition-colors ${
                       isActive
                         ? "bg-mist font-semibold text-ink"
@@ -146,7 +167,7 @@ export function WizardPage() {
 
       <main className="flex-1 px-4 py-8 sm:px-8 lg:px-12">
         <div className="mx-auto max-w-2xl">
-          {activeStep === "travellers" && (
+          {activeStep === "travellers" && !isReuploadMode && (
             <TravellersStep
               application={application}
               onAdvance={() => handleStepAdvanced("docs")}
@@ -156,6 +177,7 @@ export function WizardPage() {
             <DocsStep
               application={application}
               documents={documents}
+              reuploadOnly={isReuploadMode}
               onAdvance={() => handleStepAdvanced("essentials")}
               onDocumentsChanged={() => {
                 void queryClient.invalidateQueries({
@@ -164,17 +186,17 @@ export function WizardPage() {
               }}
             />
           )}
-          {activeStep === "essentials" && (
+          {activeStep === "essentials" && !isReuploadMode && (
             <EssentialsStep
               application={application}
               onAdvance={() => handleStepAdvanced("review")}
             />
           )}
-          {activeStep === "review" && (
+          {activeStep === "review" && !isReuploadMode && (
             <ReviewStep application={application} documents={documents} />
           )}
 
-          {currentStepIndex > 0 && (
+          {currentStepIndex > 0 && !isReuploadMode && (
             <button
               type="button"
               onClick={() => setActiveStep(WIZARD_STEPS[currentStepIndex - 1]!)}
