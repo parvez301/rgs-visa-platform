@@ -21,8 +21,9 @@ export const UserSchema = z.object({
 });
 export type User = z.infer<typeof UserSchema>;
 
-// fullName/passportNumber allow draft placeholders (empty / "PENDING");
-// completeness is enforced by submitApplication, not the schema.
+// Storage schema: fullName/passportNumber allow draft placeholders so
+// half-finished drafts round-trip. Forms and the submit guard use
+// CompleteTravellerSchema below instead.
 export const TravellerSchema = z.object({
   fullName: z.string(),
   dateOfBirth: isoDate,
@@ -34,6 +35,37 @@ export const TravellerSchema = z.object({
   passportKey: z.string().optional(),
 });
 export type Traveller = z.infer<typeof TravellerSchema>;
+
+export const DRAFT_PLACEHOLDER_PASSPORT = "PENDING";
+export const DRAFT_PLACEHOLDER_DATE = "1900-01-01";
+
+/** What a traveller must look like to actually submit — used by the wizard form AND the API submit guard. */
+export const CompleteTravellerSchema = TravellerSchema.extend({
+  fullName: z
+    .string()
+    .trim()
+    .min(2, "Enter the full name exactly as in the passport"),
+  passportNumber: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9]{5,15}$/, "Enter a valid passport number")
+    .refine(
+      (passportNumber) => passportNumber !== DRAFT_PLACEHOLDER_PASSPORT,
+      "Enter a valid passport number",
+    ),
+})
+  .refine((traveller) => traveller.dateOfBirth !== DRAFT_PLACEHOLDER_DATE, {
+    message: "Enter the traveller's date of birth",
+    path: ["dateOfBirth"],
+  })
+  .refine(
+    (traveller) => traveller.passportIssueDate !== DRAFT_PLACEHOLDER_DATE,
+    { message: "Enter the passport issue date", path: ["passportIssueDate"] },
+  )
+  .refine(
+    (traveller) => traveller.passportExpiryDate > traveller.passportIssueDate,
+    { message: "Expiry date must be after the issue date", path: ["passportExpiryDate"] },
+  );
 
 export const ApplicationAmountsSchema = z.object({
   governmentFeeInr: z.number().int().nonnegative(),

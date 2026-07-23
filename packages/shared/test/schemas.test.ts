@@ -68,6 +68,47 @@ describe("TravellerSchema", () => {
   });
 });
 
+describe("CompleteTravellerSchema", () => {
+  it("accepts a genuinely complete traveller", async () => {
+    const { CompleteTravellerSchema } = await import("../src/schemas");
+    expect(CompleteTravellerSchema.safeParse(validTraveller).success).toBe(true);
+  });
+
+  it("rejects draft placeholder values that the storage schema allows", async () => {
+    const { CompleteTravellerSchema, DRAFT_PLACEHOLDER_PASSPORT, DRAFT_PLACEHOLDER_DATE } =
+      await import("../src/schemas");
+    expect(
+      CompleteTravellerSchema.safeParse({
+        ...validTraveller,
+        passportNumber: DRAFT_PLACEHOLDER_PASSPORT,
+      }).success,
+    ).toBe(false);
+    expect(
+      CompleteTravellerSchema.safeParse({
+        ...validTraveller,
+        dateOfBirth: DRAFT_PLACEHOLDER_DATE,
+      }).success,
+    ).toBe(false);
+    expect(
+      CompleteTravellerSchema.safeParse({ ...validTraveller, fullName: "  " }).success,
+    ).toBe(false);
+    expect(
+      CompleteTravellerSchema.safeParse({ ...validTraveller, passportNumber: "ab" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects expiry dates on or before the issue date", async () => {
+    const { CompleteTravellerSchema } = await import("../src/schemas");
+    expect(
+      CompleteTravellerSchema.safeParse({
+        ...validTraveller,
+        passportIssueDate: "2030-01-09",
+        passportExpiryDate: "2020-01-10",
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("ApplicationSchema", () => {
   it("accepts a valid draft application", () => {
     expect(ApplicationSchema.parse(validApplication).status).toBe("DRAFT");

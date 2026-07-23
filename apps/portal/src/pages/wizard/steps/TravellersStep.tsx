@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { TravellerSchema, type Application, type Traveller } from "@rgs/shared";
+import {
+  CompleteTravellerSchema,
+  DRAFT_PLACEHOLDER_DATE,
+  DRAFT_PLACEHOLDER_PASSPORT,
+  type Application,
+  type Traveller,
+} from "@rgs/shared";
 import { portalApi } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
 
@@ -44,9 +50,27 @@ function addMonthsIso(isoDate: string, monthsToAdd: number): string {
 
 export function TravellersStep({ application, onAdvance }: TravellersStepProps) {
   const { idToken } = useAuth();
+  // Draft placeholders (PENDING / 1900-01-01) must show as blank fields,
+  // never as prefilled values the traveller might mistake for real input.
   const [travellers, setTravellers] = useState<Traveller[]>(() =>
     application.travellers.length > 0
-      ? application.travellers.map((traveller) => ({ ...traveller }))
+      ? application.travellers.map((traveller) => ({
+          ...traveller,
+          passportNumber:
+            traveller.passportNumber === DRAFT_PLACEHOLDER_PASSPORT
+              ? ""
+              : traveller.passportNumber,
+          dateOfBirth:
+            traveller.dateOfBirth === DRAFT_PLACEHOLDER_DATE ? "" : traveller.dateOfBirth,
+          passportIssueDate:
+            traveller.passportIssueDate === DRAFT_PLACEHOLDER_DATE
+              ? ""
+              : traveller.passportIssueDate,
+          passportExpiryDate:
+            traveller.passportExpiryDate === DRAFT_PLACEHOLDER_DATE
+              ? ""
+              : traveller.passportExpiryDate,
+        }))
       : [{ ...EMPTY_TRAVELLER }],
   );
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -95,7 +119,7 @@ export function TravellersStep({ application, onAdvance }: TravellersStepProps) 
     const nextFieldErrors: Record<string, string> = {};
 
     travellers.forEach((traveller, travellerIndex) => {
-      const parseResult = TravellerSchema.safeParse(traveller);
+      const parseResult = CompleteTravellerSchema.safeParse(traveller);
       if (!parseResult.success) {
         for (const issue of parseResult.error.issues) {
           const fieldName = String(issue.path[0] ?? "fullName");

@@ -1,6 +1,7 @@
 import {
   ApplicationSchema,
   ApplicationEssentialsSchema,
+  CompleteTravellerSchema,
   TravellerSchema,
   type Application,
   type ApplicationDocument,
@@ -171,11 +172,15 @@ export async function submitApplication(
   if (!application.essentials) {
     throw badRequest("Travel details (essentials) must be completed before submitting");
   }
-  const hasIncompleteTraveller = application.travellers.some(
-    (traveller) => traveller.fullName.trim() === "" || traveller.passportNumber === "PENDING",
-  );
-  if (hasIncompleteTraveller) {
-    throw badRequest("All travellers need complete passport details before submitting");
+  const incompleteTravellerNumbers = application.travellers
+    .map((traveller, travellerIndex) =>
+      CompleteTravellerSchema.safeParse(traveller).success ? null : travellerIndex + 1,
+    )
+    .filter((travellerNumber): travellerNumber is number => travellerNumber !== null);
+  if (incompleteTravellerNumbers.length > 0) {
+    throw badRequest(
+      `Traveller ${incompleteTravellerNumbers.join(", ")} still has incomplete passport details — go back to the Travellers step`,
+    );
   }
   const countryProduct = await resolveCountryProduct(
     context,
