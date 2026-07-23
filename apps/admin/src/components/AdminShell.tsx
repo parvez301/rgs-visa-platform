@@ -16,10 +16,17 @@ export function AdminShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen">
       <header className="bg-ink text-paper">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
-          <div>
-            <p className="mrz text-xs text-paper/70">RGS Admin</p>
-            <p className="text-sm text-paper/90">{email}</p>
-          </div>
+          <Link to="/" className="flex items-center gap-3">
+            <img
+              src="/brand/rgs-logo.png"
+              alt="Rays Global Services"
+              className="h-6 w-auto brightness-0 invert"
+            />
+            <span className="mrz rounded border border-rgs-red px-1.5 py-0.5 text-[10px] text-rgs-red">
+              Admin
+            </span>
+            <span className="hidden md:inline text-xs text-paper/60">{email}</span>
+          </Link>
           <nav className="flex flex-wrap items-center gap-4 text-sm">
             {NAV_LINKS.map((navLink) => (
               <NavLink

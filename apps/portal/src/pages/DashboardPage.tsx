@@ -95,12 +95,23 @@ export function DashboardPage() {
   const completedApplications = applications.filter((application) =>
     ["DELIVERED", "REJECTED"].includes(application.status),
   );
+  const countryNamesByCode = new Map(
+    (countriesQuery.data ?? []).map((countryProduct) => [
+      countryProduct.countryCode,
+      countryProduct.countryName,
+    ]),
+  );
 
   return (
     <div className="min-h-screen">
       <header className="border-b border-line bg-paper">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-4">
-          <p className="mrz text-xs text-rgs-red">RGS Visa Portal</p>
+        <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3.5">
+          <div className="flex items-center gap-3">
+            <img src="/brand/rgs-logo.png" alt="Rays Global Services" className="h-6 w-auto" />
+            <span className="mrz rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-soft">
+              Visa Portal
+            </span>
+          </div>
           <div className="flex items-center gap-4 text-sm">
             <span className="text-ink-soft hidden sm:inline">{email}</span>
             <button onClick={signOut} className="font-medium hover:text-rgs-red">
@@ -165,6 +176,7 @@ export function DashboardPage() {
                 <ApplicationCard
                   key={application.applicationId}
                   application={application}
+                  countryName={countryNamesByCode.get(application.countryCode)}
                   needsDocumentReupload={applicationIdsNeedingReupload.has(
                     application.applicationId,
                   )}
@@ -179,7 +191,11 @@ export function DashboardPage() {
             <h2 className="mrz text-xs text-ink-soft mb-3">Completed</h2>
             <div className="space-y-4">
               {completedApplications.map((application) => (
-                <ApplicationCard key={application.applicationId} application={application} />
+                <ApplicationCard
+                  key={application.applicationId}
+                  application={application}
+                  countryName={countryNamesByCode.get(application.countryCode)}
+                />
               ))}
             </div>
           </section>
@@ -191,17 +207,28 @@ export function DashboardPage() {
 
 function ApplicationCard({
   application,
+  countryName,
   needsDocumentReupload = false,
 }: {
   application: Application;
+  countryName?: string;
   needsDocumentReupload?: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-line bg-paper p-5">
+    <div className="flex overflow-hidden rounded-2xl border border-line bg-paper">
+      <div
+        className="hidden sm:block w-28 shrink-0 bg-cover bg-center"
+        style={{
+          backgroundImage: `url(/countries/${application.countryCode.toLowerCase()}.jpg)`,
+        }}
+        aria-hidden="true"
+      />
+      <div className="flex-1 p-5">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <p className="font-display text-lg font-bold">
-            {application.countryCode} visa · {application.travellers.length}{" "}
+            {countryName ?? application.countryCode} ·{" "}
+            {application.travellers.length}{" "}
             {application.travellers.length === 1 ? "traveller" : "travellers"}
           </p>
           <p className="text-sm text-ink-soft">{STATUS_LABELS[application.status]}</p>
@@ -228,6 +255,7 @@ function ApplicationCard({
         )}
       </div>
       <StatusTimeline currentStatus={application.status} />
+      </div>
     </div>
   );
 }

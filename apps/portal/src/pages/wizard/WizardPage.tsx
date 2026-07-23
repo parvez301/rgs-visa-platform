@@ -100,6 +100,11 @@ export function WizardPage() {
     <div className="flex min-h-screen flex-col lg:flex-row">
       <aside className="border-b border-line bg-paper lg:w-72 lg:border-b-0 lg:border-r">
         <div className="px-6 py-5">
+          <img
+            src="/brand/rgs-logo.png"
+            alt="Rays Global Services"
+            className="mb-4 h-6 w-auto"
+          />
           <Link
             to="/"
             className="text-sm font-medium text-ink-soft hover:text-rgs-red transition-colors"
