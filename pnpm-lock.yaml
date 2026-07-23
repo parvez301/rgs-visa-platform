@@ -137,6 +137,9 @@ importers:
         specifier: ^10.4.0
         version: 10.7.1
     devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
       aws-cdk:
         specifier: ^2.170.0
         version: 2.1132.1

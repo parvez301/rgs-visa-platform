@@ -17,6 +17,5 @@ Until then admins can only Approve/Reject without previewing the file.
 
 ## Infra typecheck
 
-`pnpm -r typecheck` fails on `@rgs/infra` because `@types/node` is not declared
-(pre-existing on main). Shared/api/portal/admin/marketing typecheck cleanly.
-OK to add `@types/node` as an infra devDependency in a follow-up?
+Resolved in Task 13 by adding `@types/node` as an infra devDependency so
+`cdk synth` / `tsc --noEmit` work.
