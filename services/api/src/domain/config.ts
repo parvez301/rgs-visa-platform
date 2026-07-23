@@ -16,7 +16,22 @@ function configSortKey(countryCode: string, productCode: string): string {
 
 function itemToCountryProduct(item: Record<string, unknown>): CountryProduct {
   const { PK, SK, ...productAttributes } = item;
-  return CountryProductSchema.parse(productAttributes);
+  const directParse = CountryProductSchema.safeParse(productAttributes);
+  if (directParse.success) return directParse.data;
+  // Schema evolution: rows written before newer fields existed are healed by
+  // merging defaults from the code catalog; admin-edited values still win.
+  const seedDefaults = COUNTRY_PRODUCTS.find(
+    (seedProduct) => seedProduct.productCode === productAttributes["productCode"],
+  );
+  if (seedDefaults) {
+    const mergedParse = CountryProductSchema.safeParse({
+      ...seedDefaults,
+      docsRequired: [...seedDefaults.docsRequired],
+      ...productAttributes,
+    });
+    if (mergedParse.success) return mergedParse.data;
+  }
+  throw directParse.error;
 }
 
 /**

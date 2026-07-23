@@ -82,6 +82,29 @@ describe("seedCountryConfig", () => {
   });
 });
 
+describe("schema evolution", () => {
+  it("reads legacy DB rows (pre region/tier) by merging defaults from the code catalog", async () => {
+    const context = buildTestContext();
+    // Simulate a row seeded before the region/tier/officialUrl fields existed,
+    // including an admin-edited fee that must survive the merge.
+    const { region, tier, officialUrl, ...legacyShape } = {
+      ...uaeSeed,
+      docsRequired: [...uaeSeed.docsRequired],
+    };
+    await context.table.put({
+      PK: "CONFIG#COUNTRY",
+      SK: `${uaeSeed.countryCode}#${uaeSeed.productCode}`,
+      ...legacyShape,
+      governmentFeeInr: 7777,
+    });
+    const catalog = await listCountryConfig(context);
+    const uaeFromDb = catalog.find((product) => product.countryCode === "AE");
+    expect(uaeFromDb?.governmentFeeInr).toBe(7777);
+    expect(uaeFromDb?.region).toBe("MIDDLE_EAST");
+    expect(uaeFromDb?.tier).toBe("FULFILLED");
+  });
+});
+
 describe("config drives pricing and document rules", () => {
   it("createDraft prices from the admin-edited config, not the code seed", async () => {
     const context = buildTestContext();
