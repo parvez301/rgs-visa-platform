@@ -1,0 +1,43 @@
+import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda";
+import type { AppContext } from "../lib/context";
+import { DynamoTableClient } from "../lib/db";
+import { S3DocumentStore } from "../lib/documentStore";
+import { SesEmailSender } from "../lib/email";
+import { buildAdminRouter } from "./adminApi";
+import { buildUserRouter } from "./userApi";
+
+function buildProductionContext(): AppContext {
+  const tableName = process.env["TABLE_NAME"];
+  const documentsBucket = process.env["DOCUMENTS_BUCKET"];
+  const senderAddress = process.env["EMAIL_SENDER"];
+  const adminNotificationAddress = process.env["ADMIN_NOTIFICATION_EMAIL"];
+  if (!tableName || !documentsBucket || !senderAddress || !adminNotificationAddress) {
+    throw new Error(
+      "Missing required environment: TABLE_NAME, DOCUMENTS_BUCKET, EMAIL_SENDER, ADMIN_NOTIFICATION_EMAIL",
+    );
+  }
+  return {
+    table: new DynamoTableClient(tableName),
+    documents: new S3DocumentStore(documentsBucket),
+    email: new SesEmailSender(senderAddress),
+    adminNotificationAddress,
+    now: () => new Date(),
+  };
+}
+
+let cachedUserRouter: ReturnType<typeof buildUserRouter> | undefined;
+let cachedAdminRouter: ReturnType<typeof buildAdminRouter> | undefined;
+
+export async function userApiHandler(
+  event: APIGatewayProxyEventV2,
+): Promise<APIGatewayProxyResultV2> {
+  cachedUserRouter ??= buildUserRouter(buildProductionContext());
+  return cachedUserRouter.dispatch(event);
+}
+
+export async function adminApiHandler(
+  event: APIGatewayProxyEventV2,
+): Promise<APIGatewayProxyResultV2> {
+  cachedAdminRouter ??= buildAdminRouter(buildProductionContext());
+  return cachedAdminRouter.dispatch(event);
+}

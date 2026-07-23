@@ -21,11 +21,13 @@ export const UserSchema = z.object({
 });
 export type User = z.infer<typeof UserSchema>;
 
+// fullName/passportNumber allow draft placeholders (empty / "PENDING");
+// completeness is enforced by submitApplication, not the schema.
 export const TravellerSchema = z.object({
-  fullName: z.string().min(1),
+  fullName: z.string(),
   dateOfBirth: isoDate,
   nationality: iso2CountryCode,
-  passportNumber: z.string().min(5),
+  passportNumber: z.string(),
   passportIssueDate: isoDate,
   passportExpiryDate: isoDate,
   photoKey: z.string().optional(),
