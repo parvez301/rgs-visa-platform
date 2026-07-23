@@ -28,6 +28,80 @@ export const DOC_GUIDANCE: Record<DocType, string[]> = {
   COVER_LETTER: ["We'll help you draft this — upload if you already have one"],
 };
 
+/** Deeper guide content for the "See example & rules" modal. */
+export const DOC_GUIDE_DETAILS: Record<
+  DocType,
+  { donts: string[]; commonRejections: string[]; fileSpec: string }
+> = {
+  PASSPORT_BIO: {
+    donts: [
+      "Don't crop any edge of the page",
+      "Don't shoot at an angle — hold the phone flat above the passport",
+      "Don't use flash directly over the page (causes glare)",
+    ],
+    commonRejections: [
+      "Glare covering the photo or the <<< machine-readable lines",
+      "Blurry text — immigration systems read this page automatically",
+      "Cover page or address page uploaded instead of the photo page",
+    ],
+    fileSpec: "JPEG/PNG/PDF · sharp and readable · at least 800px wide",
+  },
+  PHOTO: {
+    donts: [
+      "Don't wear glasses, caps, or headphones",
+      "Don't smile with teeth — keep a neutral expression",
+      "Don't use old photos, selfies with filters, or cropped group photos",
+    ],
+    commonRejections: [
+      "Background not plain white / shadows behind the head",
+      "Face too small in the frame — head and shoulders should fill most of it",
+      "Photo older than 6 months or reused from an old visa",
+    ],
+    fileSpec: "JPEG/PNG · portrait · at least 400×400px",
+  },
+  BANK_STATEMENT: {
+    donts: [
+      "Don't upload cropped screenshots of the balance",
+      "Don't hide transactions — embassies check statement continuity",
+    ],
+    commonRejections: [
+      "Statement older than required (needs to be recent)",
+      "Account holder name not visible on every page",
+    ],
+    fileSpec: "PDF preferred (net-banking download) · all pages",
+  },
+  FLIGHT_ITINERARY: {
+    donts: ["Don't upload a price quote — it must show a booking/PNR reference"],
+    commonRejections: ["Traveller name spelt differently than the passport"],
+    fileSpec: "PDF or clear image showing name, dates, PNR",
+  },
+  HOTEL_BOOKING: {
+    donts: ["Don't use unconfirmed carts or screenshots without your name"],
+    commonRejections: ["Booking dates not covering the whole stay"],
+    fileSpec: "PDF or clear image showing name, hotel, dates",
+  },
+  YELLOW_FEVER_CERT: {
+    donts: ["Don't upload the appointment slip — it must be the yellow WHO card"],
+    commonRejections: ["Vaccination date fewer than 10 days before travel"],
+    fileSpec: "Clear photo of the full card, both pages if written on",
+  },
+  ITR: {
+    donts: ["Don't upload just Form 16 — the ITR acknowledgement is required"],
+    commonRejections: ["Only one year uploaded when two are required"],
+    fileSpec: "PDF · last 2 assessment years",
+  },
+  EMPLOYMENT_PROOF: {
+    donts: ["Don't use expired ID cards or unsigned letters"],
+    commonRejections: ["Letter without company letterhead or date"],
+    fileSpec: "PDF or clear image on letterhead",
+  },
+  COVER_LETTER: {
+    donts: ["Don't worry about perfect wording — our team polishes it"],
+    commonRejections: ["Missing travel dates or purpose"],
+    fileSpec: "PDF preferred",
+  },
+};
+
 export interface UploadCheckResult {
   /** Hard failures — upload is blocked. */
   blockers: string[];

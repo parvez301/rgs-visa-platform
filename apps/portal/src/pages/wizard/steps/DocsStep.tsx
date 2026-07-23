@@ -9,6 +9,7 @@ import { portalApi, uploadFileToPresignedUrl } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
 import { DOC_TYPE_LABELS } from "../../../lib/docLabels";
 import { DOC_GUIDANCE, checkFileBeforeUpload } from "../../../lib/uploadChecks";
+import { DocumentGuideModal } from "../../../components/DocumentGuideModal";
 
 export interface DocsStepProps {
   application: Application;
@@ -56,6 +57,7 @@ export function DocsStep({
   const [uploadingKeys, setUploadingKeys] = useState<Set<string>>(new Set());
   const [slotErrors, setSlotErrors] = useState<Record<string, string>>({});
   const [slotWarnings, setSlotWarnings] = useState<Record<string, string>>({});
+  const [guideDocType, setGuideDocType] = useState<DocType | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [reuploadDoneMessage, setReuploadDoneMessage] = useState<string | null>(null);
@@ -247,7 +249,16 @@ export function DocsStep({
                           : "border-line"
                     }`}
                   >
-                    <p className="text-sm font-medium">{DOC_TYPE_LABELS[docType]}</p>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-medium">{DOC_TYPE_LABELS[docType]}</p>
+                      <button
+                        type="button"
+                        onClick={() => setGuideDocType(docType)}
+                        className="mrz shrink-0 text-[10px] text-rgs-red hover:underline"
+                      >
+                        Example →
+                      </button>
+                    </div>
                     <ul className="mt-1.5 space-y-0.5">
                       {DOC_GUIDANCE[docType].map((guidanceTip) => (
                         <li
@@ -360,6 +371,10 @@ export function DocsStep({
         >
           {isSaving ? "Saving…" : "Continue"}
         </button>
+      )}
+
+      {guideDocType && (
+        <DocumentGuideModal docType={guideDocType} onClose={() => setGuideDocType(null)} />
       )}
     </div>
   );
