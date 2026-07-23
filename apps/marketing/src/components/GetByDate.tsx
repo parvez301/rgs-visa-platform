@@ -2,12 +2,24 @@
 
 import { useEffect, useState } from "react";
 
+function addWorkingDays(startDate: Date, workingDays: number): Date {
+  const resultDate = new Date(startDate);
+  let remainingDays = workingDays;
+  while (remainingDays > 0) {
+    resultDate.setDate(resultDate.getDate() + 1);
+    const dayOfWeek = resultDate.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      remainingDays -= 1;
+    }
+  }
+  return resultDate;
+}
+
 export function GetByDate({ processingDays }: { processingDays: number }) {
   const [formattedDate, setFormattedDate] = useState<string | null>(null);
 
   useEffect(() => {
-    const deliveryDate = new Date();
-    deliveryDate.setDate(deliveryDate.getDate() + processingDays);
+    const deliveryDate = addWorkingDays(new Date(), processingDays);
     setFormattedDate(
       deliveryDate.toLocaleDateString("en-IN", {
         weekday: "short",
