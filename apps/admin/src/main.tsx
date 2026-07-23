@@ -3,8 +3,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AuthProvider, useAuth } from "./lib/auth";
+import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
 import { AuthPage } from "./pages/AuthPage";
-import { HomePage } from "./pages/HomePage";
+import { QueuePage } from "./pages/QueuePage";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -35,7 +36,15 @@ createRoot(document.getElementById("root")!).render(
               path="/"
               element={
                 <RequireAuth>
-                  <HomePage />
+                  <QueuePage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/applications/:applicationId"
+              element={
+                <RequireAuth>
+                  <ApplicationDetailPage />
                 </RequireAuth>
               }
             />
