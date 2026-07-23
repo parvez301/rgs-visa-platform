@@ -54,7 +54,7 @@ export function CountrySearch({ countries }: { countries: SearchableCountry[] })
 
   return (
     <div ref={containerRef} className="relative max-w-xl">
-      <div className="flex items-center gap-2 rounded-full border border-line bg-paper py-2 pl-6 pr-2 shadow-[0_12px_40px_rgb(23_25_31/0.10)] focus-within:border-rgs-red transition-colors">
+      <div className="flex items-center gap-2 rounded-full border border-line bg-paper py-2 pl-6 pr-2 shadow-[0_12px_40px_rgb(23_25_31/0.10)] focus-within:border-ink/30 transition-colors">
         <svg
           className="h-5 w-5 shrink-0 text-ink-soft"
           fill="none"

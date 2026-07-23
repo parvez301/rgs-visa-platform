@@ -80,3 +80,10 @@ h3 {
   outline: 2px solid var(--color-rgs-red);
   outline-offset: 2px;
 }
+
+/* Form fields signal focus via their container/border, not the red ring */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
