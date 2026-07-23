@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
-import { listActiveProducts } from "@rgs/shared";
-import { COUNTRY_CONTENT } from "@/lib/countryContent";
+import { fetchBuildCatalog } from "@/lib/buildCatalog";
+import { COUNTRY_CONTENT, resolveContent } from "@/lib/countryContent";
 import { YEARS_IN_BUSINESS, applyUrl } from "@/lib/site";
 import { CountrySearch, type SearchableCountry } from "./CountrySearch";
 import { RotatingHeadline } from "./RotatingHeadline";
@@ -24,10 +24,10 @@ const HERO_CARDS = [
   },
 ];
 
-export function Hero() {
-  const activeProducts = listActiveProducts();
+export async function Hero() {
+  const activeProducts = await fetchBuildCatalog();
   const searchableCountries: SearchableCountry[] = activeProducts.map((countryProduct) => {
-    const content = COUNTRY_CONTENT[countryProduct.countryCode]!;
+    const content = resolveContent(countryProduct);
     return {
       countryCode: countryProduct.countryCode,
       countryName: countryProduct.countryName,

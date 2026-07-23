@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { useAuth } from "../lib/auth";
+import { AuthHero } from "../components/AuthHero";
 
 export function AuthPage() {
   const { isSignedIn, needsNewPassword, signIn, completeNewPassword } = useAuth();
@@ -50,14 +51,15 @@ export function AuthPage() {
     "w-full rounded-xl border border-line bg-paper px-4 py-3 text-sm focus:border-ink/30";
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="bg-ink px-6 py-4 text-paper">
-        <p className="mrz text-xs text-paper/70">RGS Admin</p>
-        <h1 className="text-xl font-bold">Staff sign in</h1>
-      </header>
-
-      <div className="flex flex-1 items-center justify-center px-4 py-10">
-        <div className="w-full max-w-md rounded-2xl border border-line bg-paper p-8 shadow-[0_20px_60px_rgb(23_25_31/0.08)]">
+    <div className="min-h-screen bg-paper lg:grid lg:grid-cols-[minmax(400px,3fr)_7fr]">
+      <div className="flex min-h-screen flex-col justify-center px-6 py-10 sm:px-12 lg:min-h-0">
+        <div className="mb-8 flex items-center gap-3 self-start">
+          <img src="/brand/rgs-logo.png" alt="Rays Global Services" className="h-7 w-auto" />
+          <span className="mrz rounded border border-rgs-red px-1.5 py-0.5 text-[10px] text-rgs-red">
+            Admin
+          </span>
+        </div>
+        <div className="w-full max-w-sm">
           {needsNewPassword ? (
             <>
               <h2 className="text-2xl font-bold mb-2">Set a new password</h2>
@@ -143,6 +145,7 @@ export function AuthPage() {
           )}
         </div>
       </div>
+      <AuthHero />
     </div>
   );
 }

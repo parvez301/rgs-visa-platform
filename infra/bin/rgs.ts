@@ -2,7 +2,8 @@ import * as cdk from "aws-cdk-lib";
 import { RgsPlatformStack } from "../lib/rgs-platform-stack";
 
 const app = new cdk.App();
-const stage = app.node.tryGetContext("stage") ?? "staging";
+// Stage comes from RGS_STAGE env (shell hooks mangle -c context flags)
+const stage = app.node.tryGetContext("stage") ?? process.env.RGS_STAGE ?? "staging";
 
 new RgsPlatformStack(app, `RgsPlatform-${stage}`, {
   stage,

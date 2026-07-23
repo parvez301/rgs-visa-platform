@@ -1,12 +1,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Metadata } from "next";
-import { getCountryProduct, listActiveProducts } from "@rgs/shared";
-import {
-  PHOTO_COUNTRY_CODES,
-  countryCodeFromSlug,
-  resolveContent,
-} from "@/lib/countryContent";
+import { fetchBuildCatalog, productFromSlug } from "@/lib/buildCatalog";
+import { PHOTO_COUNTRY_CODES, resolveContent } from "@/lib/countryContent";
 import { formatInr } from "@/lib/site";
 import { SiteHeader } from "@/components/SiteHeader";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -17,8 +13,9 @@ import {
   LiveProcessingBadge,
 } from "@/components/LiveCountryHydration";
 
-export function generateStaticParams() {
-  return listActiveProducts().map((countryProduct) => ({
+export async function generateStaticParams() {
+  const buildCatalog = await fetchBuildCatalog();
+  return buildCatalog.map((countryProduct) => ({
     slug: resolveContent(countryProduct).slug,
   }));
 }
@@ -29,7 +26,8 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const countryProduct = getCountryProduct(countryCodeFromSlug(slug));
+  const buildCatalog = await fetchBuildCatalog();
+  const countryProduct = productFromSlug(buildCatalog, slug);
   const content = resolveContent(countryProduct);
   return {
     title: `${content.heroTagline} — price, documents & apply online | Rays Global Services`,
@@ -43,10 +41,11 @@ export default async function CountryVisaPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const countryCode = countryCodeFromSlug(slug);
-  const countryProduct = getCountryProduct(countryCode);
+  const buildCatalog = await fetchBuildCatalog();
+  const countryProduct = productFromSlug(buildCatalog, slug);
+  const countryCode = countryProduct.countryCode;
   const content = resolveContent(countryProduct);
-  const otherProducts = listActiveProducts()
+  const otherProducts = buildCatalog
     .filter((product) => product.countryCode !== countryCode)
     .slice(0, 4);
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../lib/auth";
+import { AuthHero } from "../components/AuthHero";
 
 type AuthMode = "signIn" | "signUp" | "confirm";
 
@@ -43,19 +44,14 @@ export function AuthPage() {
     "w-full rounded-xl border border-line bg-paper px-4 py-3 text-sm focus:border-ink/30";
 
   return (
-    <div className="speedlines flex min-h-screen flex-col items-center justify-center px-4 py-10">
-      <img
-        src="/brand/rgs-logo.png"
-        alt="Rays Global Services"
-        className="mb-6 h-8 w-auto"
-      />
-      <div className="relative w-full max-w-md rounded-2xl border border-line bg-paper p-8 shadow-[0_20px_60px_rgb(23_25_31/0.08)]">
-        <div
-          className="stamp pointer-events-none absolute -top-4 -right-4 rounded-md border-2 border-rgs-red bg-paper/90 px-2.5 py-1"
-          aria-hidden="true"
-        >
-          <span className="mrz text-[9px] font-semibold text-rgs-red">Visas on time</span>
-        </div>
+    <div className="min-h-screen bg-paper lg:grid lg:grid-cols-[minmax(400px,3fr)_7fr]">
+      <div className="speedlines flex min-h-screen flex-col justify-center px-6 py-10 sm:px-12 lg:min-h-0">
+        <img
+          src="/brand/rgs-logo.png"
+          alt="Rays Global Services"
+          className="mb-8 h-7 w-auto self-start"
+        />
+        <div className="w-full max-w-sm">
         <p className="mrz text-xs text-rgs-red mb-2">RGS Visa Portal</p>
         <h1 className="text-2xl font-bold mb-6">
           {authMode === "signIn" && "Sign in to your account"}
@@ -174,7 +170,9 @@ export function AuthPage() {
             )}
           </p>
         )}
+        </div>
       </div>
+      <AuthHero />
     </div>
   );
 }

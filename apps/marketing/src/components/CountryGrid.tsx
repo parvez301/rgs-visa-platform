@@ -1,4 +1,5 @@
-import { listActiveProducts, REGIONS, type Region } from "@rgs/shared";
+import { REGIONS, type Region } from "@rgs/shared";
+import { fetchBuildCatalog } from "@/lib/buildCatalog";
 import { CONTACT_EMAIL } from "@/lib/site";
 import { CountryCard } from "./CountryCard";
 
@@ -31,8 +32,8 @@ function EnquiryCard() {
   );
 }
 
-export function CountryGrid() {
-  const activeProducts = listActiveProducts();
+export async function CountryGrid() {
+  const activeProducts = await fetchBuildCatalog();
 
   return (
     <section id="destinations" className="mx-auto max-w-6xl px-4 py-16 md:py-20">
