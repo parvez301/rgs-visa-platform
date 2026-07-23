@@ -116,7 +116,7 @@ describe("config drives pricing and document rules", () => {
 
   it("resolveCountryProduct throws for unknown countries", async () => {
     const context = buildTestContext();
-    await expect(resolveCountryProduct(context, "FR")).rejects.toThrow(
+    await expect(resolveCountryProduct(context, "XX")).rejects.toThrow(
       /No visa product configured/,
     );
   });

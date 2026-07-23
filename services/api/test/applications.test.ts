@@ -31,8 +31,15 @@ describe("createDraft", () => {
 
   it("rejects unknown countries", async () => {
     const context = buildTestContext();
-    await expect(createDraft(context, "user_1", "FR")).rejects.toThrow(
-      "No visa product configured for country FR",
+    await expect(createDraft(context, "user_1", "XX")).rejects.toThrow(
+      "No visa product configured for country XX",
+    );
+  });
+
+  it("rejects info-only / inactive countries with a helpful message", async () => {
+    const context = buildTestContext();
+    await expect(createDraft(context, "user_1", "TH")).rejects.toThrow(
+      /aren't available online yet/,
     );
   });
 });

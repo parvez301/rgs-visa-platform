@@ -10,14 +10,27 @@ import {
 const V1_COUNTRY_CODES = ["AE", "AU", "CA", "NZ", "TZ", "UG", "NG", "ZM"] as const;
 
 describe("country product catalog", () => {
-  it("contains exactly the 8 v1 countries, all active", () => {
-    const countryCodes = COUNTRY_PRODUCTS.map((countryProduct) => countryProduct.countryCode).sort();
-    expect(countryCodes).toEqual([...V1_COUNTRY_CODES].sort());
-    expect(listActiveProducts()).toHaveLength(8);
+  it("the 8 launch countries are the only active products", () => {
+    const activeCodes = listActiveProducts()
+      .map((countryProduct) => countryProduct.countryCode)
+      .sort();
+    expect(activeCodes).toEqual([...V1_COUNTRY_CODES].sort());
   });
 
-  it("every product carries positive fees, processing days, and a docs checklist", () => {
+  it("research-batch countries are seeded inactive and info-only until owner review", () => {
+    const researchProducts = COUNTRY_PRODUCTS.filter(
+      (countryProduct) => countryProduct.tier === "INFO_ONLY",
+    );
+    expect(researchProducts.length).toBeGreaterThanOrEqual(26);
+    for (const researchProduct of researchProducts) {
+      expect(researchProduct.active, researchProduct.countryCode).toBe(false);
+      expect(researchProduct.officialUrl, researchProduct.countryCode).toBeTruthy();
+    }
+  });
+
+  it("every fulfilled product carries positive fees, processing days, and a docs checklist", () => {
     for (const countryProduct of COUNTRY_PRODUCTS) {
+      if (countryProduct.tier !== "FULFILLED") continue;
       expect(countryProduct.governmentFeeInr, countryProduct.countryCode).toBeGreaterThan(0);
       expect(countryProduct.serviceFeeInr, countryProduct.countryCode).toBeGreaterThan(0);
       expect(countryProduct.processingDays, countryProduct.countryCode).toBeGreaterThan(0);
@@ -40,9 +53,9 @@ describe("country product catalog", () => {
   });
 
   it("throws a typed error for unknown lookups", () => {
-    expect(() => getCountryProduct("FR")).toThrow(UnknownCountryProductError);
+    expect(() => getCountryProduct("XX")).toThrow(UnknownCountryProductError);
     expect(() => getCountryProduct("AE", "AE_WORK_VISA")).toThrow(UnknownCountryProductError);
-    expect(() => getDocsChecklist("FR")).toThrow(UnknownCountryProductError);
+    expect(() => getDocsChecklist("XX")).toThrow(UnknownCountryProductError);
   });
 
   it("docs checklist matches the country product", () => {

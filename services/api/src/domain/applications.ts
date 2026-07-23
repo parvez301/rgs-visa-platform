@@ -38,6 +38,11 @@ export async function createDraft(
   countryCode: string,
 ): Promise<Application> {
   const countryProduct = await resolveCountryProduct(context, countryCode);
+  if (!countryProduct.active || countryProduct.tier !== "FULFILLED") {
+    throw badRequest(
+      `${countryProduct.countryName} applications aren't available online yet — contact us and we'll assist directly`,
+    );
+  }
   const createdAt = context.now().toISOString();
   const application: Application = {
     applicationId: newId("app", context.now().getTime()),

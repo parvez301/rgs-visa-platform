@@ -46,6 +46,7 @@ export function DashboardPage() {
   const { idToken, email, signOut } = useAuth();
   const queryClient = useQueryClient();
   const [isPickingCountry, setIsPickingCountry] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
 
   const applicationsQuery = useQuery({
     queryKey: ["applications"],
@@ -134,25 +135,54 @@ export function DashboardPage() {
 
         {isPickingCountry && (
           <div className="mb-8 rounded-2xl border border-line bg-paper p-6">
-            <h2 className="font-bold mb-4">Where are you travelling?</h2>
+            <h2 className="font-bold mb-3">Where are you travelling?</h2>
+            <input
+              type="search"
+              placeholder="Search country…"
+              value={pickerQuery}
+              onChange={(changeEvent) => setPickerQuery(changeEvent.target.value)}
+              className="mb-4 w-full rounded-full border border-line bg-paper px-5 py-2.5 text-sm focus:border-ink/30"
+            />
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {(countriesQuery.data ?? []).map((countryProduct) => (
-                <button
-                  key={countryProduct.productCode}
-                  disabled={createDraftMutation.isPending}
-                  onClick={() => createDraftMutation.mutate(countryProduct.countryCode)}
-                  className="rounded-xl border border-line px-4 py-3 text-left text-sm font-medium hover:border-rgs-red transition-colors disabled:opacity-60"
-                >
-                  {countryProduct.countryName}
-                  <span className="mt-1 block text-xs text-ink-soft">
-                    ₹
-                    {new Intl.NumberFormat("en-IN").format(
-                      countryProduct.governmentFeeInr + countryProduct.serviceFeeInr,
-                    )}{" "}
-                    · {countryProduct.processingDays} working days
-                  </span>
-                </button>
-              ))}
+              {(countriesQuery.data ?? [])
+                .filter((countryProduct) =>
+                  countryProduct.countryName
+                    .toLowerCase()
+                    .includes(pickerQuery.trim().toLowerCase()),
+                )
+                .map((countryProduct) => {
+                  const isApplyableCountry = countryProduct.tier === "FULFILLED";
+                  return (
+                    <button
+                      key={countryProduct.productCode}
+                      disabled={createDraftMutation.isPending || !isApplyableCountry}
+                      onClick={() =>
+                        isApplyableCountry &&
+                        createDraftMutation.mutate(countryProduct.countryCode)
+                      }
+                      className={`rounded-xl border px-4 py-3 text-left text-sm font-medium transition-colors ${
+                        isApplyableCountry
+                          ? "border-line hover:border-rgs-red disabled:opacity-60"
+                          : "border-dashed border-line opacity-70 cursor-default"
+                      }`}
+                    >
+                      {countryProduct.countryName}
+                      <span className="mt-1 block text-xs text-ink-soft">
+                        {isApplyableCountry ? (
+                          <>
+                            ₹
+                            {new Intl.NumberFormat("en-IN").format(
+                              countryProduct.governmentFeeInr + countryProduct.serviceFeeInr,
+                            )}{" "}
+                            · {countryProduct.processingDays} working days
+                          </>
+                        ) : (
+                          "Info only — call us to apply"
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
             </div>
           </div>
         )}

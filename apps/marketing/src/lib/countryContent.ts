@@ -253,6 +253,83 @@ export const COUNTRY_CONTENT: Record<string, CountryPageContent> = {
   },
 };
 
+import type { CountryProduct } from "@rgs/shared";
+import { COUNTRY_PRODUCTS } from "@rgs/shared";
+
+/** Country codes that ship a real photo in public/countries/. */
+export const PHOTO_COUNTRY_CODES = new Set(["AE", "AU", "CA", "NZ", "TZ", "UG", "NG", "ZM"]);
+
+export function flagEmojiFromCode(countryCode: string): string {
+  return String.fromCodePoint(
+    ...[...countryCode.toUpperCase()].map(
+      (letter) => 0x1f1e6 + letter.charCodeAt(0) - 65,
+    ),
+  );
+}
+
+const VISA_TYPE_LABELS: Record<CountryProduct["visaType"], string> = {
+  E_VISA: "e-visa",
+  ASSISTED: "visa",
+  VISA_ON_ARRIVAL: "visa on arrival",
+  VISA_FREE: "visa-free entry",
+  ETA: "travel authorisation",
+};
+
+export function visaTypeLabel(visaType: CountryProduct["visaType"]): string {
+  return VISA_TYPE_LABELS[visaType];
+}
+
+function slugify(countryName: string): string {
+  return `${countryName
+    .toLowerCase()
+    .replace(/\(.*\)/g, "")
+    .trim()
+    .replace(/[^a-z\s]/g, "")
+    .replace(/\s+/g, "-")}-visa`;
+}
+
+/** Template content for countries without a hand-written entry — original copy generated from facts. */
+function generatedContentFor(countryProduct: CountryProduct): CountryPageContent {
+  const typeLabel = visaTypeLabel(countryProduct.visaType);
+  return {
+    slug: slugify(countryProduct.countryName),
+    flagEmoji: flagEmojiFromCode(countryProduct.countryCode),
+    heroTagline: `${countryProduct.countryName} ${typeLabel} for Indians`,
+    intro:
+      countryProduct.visaType === "VISA_FREE"
+        ? `Indian passport holders can currently enter ${countryProduct.countryName} without a visa for stays up to ${countryProduct.stayDays} days. Rules change — our team confirms the latest requirements before you fly, and handles tickets, insurance and stay documents.`
+        : `Our team has been processing ${countryProduct.countryName} travel for years. We prepare your file, submit it through the proper channel, and track it until the decision — you'll always know exactly where your application stands.`,
+    rejectionReasons: [
+      {
+        title: "Passport validity too short",
+        detail:
+          "Most countries need your passport valid for at least 6 months beyond your travel date. We check this before submitting.",
+      },
+      {
+        title: "Incomplete or inconsistent documents",
+        detail:
+          "Mismatched names, missing pages and unclear scans cause most delays. Our team reviews everything before it goes anywhere.",
+      },
+    ],
+    faqs: [
+      {
+        question: `How long does the ${countryProduct.countryName} process take?`,
+        answer: `Typically around ${countryProduct.processingDays} working ${countryProduct.processingDays === 1 ? "day" : "days"}. Apply with buffer before your travel date and we'll keep you updated at every step.`,
+      },
+      {
+        question: "Can RGS handle this for me?",
+        answer:
+          "Yes — call or send an enquiry and a consultant will confirm the current requirements and take it from there.",
+      },
+    ],
+  };
+}
+
+/** Hand-written content when we have it, generated otherwise. */
+export function resolveContent(countryProduct: CountryProduct): CountryPageContent {
+  return COUNTRY_CONTENT[countryProduct.countryCode] ?? generatedContentFor(countryProduct);
+}
+
 export function countrySlug(countryCode: string): string {
   const content = COUNTRY_CONTENT[countryCode];
   if (!content) throw new Error(`No marketing content for country ${countryCode}`);
@@ -260,7 +337,13 @@ export function countrySlug(countryCode: string): string {
 }
 
 export function countryCodeFromSlug(slug: string): string {
-  const entry = Object.entries(COUNTRY_CONTENT).find(([, content]) => content.slug === slug);
-  if (!entry) throw new Error(`No country for slug ${slug}`);
-  return entry[0];
+  const handwritten = Object.entries(COUNTRY_CONTENT).find(
+    ([, content]) => content.slug === slug,
+  );
+  if (handwritten) return handwritten[0];
+  const generated = COUNTRY_PRODUCTS.find(
+    (countryProduct) => resolveContent(countryProduct).slug === slug,
+  );
+  if (!generated) throw new Error(`No country for slug ${slug}`);
+  return generated.countryCode;
 }

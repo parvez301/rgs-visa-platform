@@ -3,8 +3,9 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { getCountryProduct, listActiveProducts } from "@rgs/shared";
 import {
-  COUNTRY_CONTENT,
+  PHOTO_COUNTRY_CODES,
   countryCodeFromSlug,
+  resolveContent,
 } from "@/lib/countryContent";
 import { formatInr } from "@/lib/site";
 import { SiteHeader } from "@/components/SiteHeader";
@@ -17,7 +18,9 @@ import {
 } from "@/components/LiveCountryHydration";
 
 export function generateStaticParams() {
-  return Object.values(COUNTRY_CONTENT).map((content) => ({ slug: content.slug }));
+  return listActiveProducts().map((countryProduct) => ({
+    slug: resolveContent(countryProduct).slug,
+  }));
 }
 
 export async function generateMetadata({
@@ -27,7 +30,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { slug } = await params;
   const countryProduct = getCountryProduct(countryCodeFromSlug(slug));
-  const content = COUNTRY_CONTENT[countryProduct.countryCode]!;
+  const content = resolveContent(countryProduct);
   return {
     title: `${content.heroTagline} — price, documents & apply online | Rays Global Services`,
     description: `${countryProduct.countryName} visa for Indian passport holders: ${formatInr(countryProduct.governmentFeeInr + countryProduct.serviceFeeInr)} all-in, ${countryProduct.processingDays} working days. Apply online with RGS.`,
@@ -42,7 +45,7 @@ export default async function CountryVisaPage({
   const { slug } = await params;
   const countryCode = countryCodeFromSlug(slug);
   const countryProduct = getCountryProduct(countryCode);
-  const content = COUNTRY_CONTENT[countryCode]!;
+  const content = resolveContent(countryProduct);
   const otherProducts = listActiveProducts()
     .filter((product) => product.countryCode !== countryCode)
     .slice(0, 4);
@@ -54,6 +57,13 @@ export default async function CountryVisaPage({
         {/* Hero */}
         <section className="relative">
           <div className="relative h-[340px] md:h-[420px] overflow-hidden">
+            {!PHOTO_COUNTRY_CODES.has(countryCode) && (
+              <div
+                className="absolute inset-0 bg-gradient-to-br from-ink via-ink/90 to-rgs-red-deep"
+                aria-hidden="true"
+              />
+            )}
+            {PHOTO_COUNTRY_CODES.has(countryCode) && (
             <Image
               src={`/countries/${countryCode.toLowerCase()}.jpg`}
               alt={countryProduct.countryName}
@@ -62,6 +72,7 @@ export default async function CountryVisaPage({
               sizes="100vw"
               className="object-cover"
             />
+            )}
             <div className="absolute inset-0 bg-gradient-to-t from-ink/85 via-ink/40 to-ink/20" />
             <div className="absolute inset-0 flex items-end">
               <div className="mx-auto max-w-6xl px-4 pb-10 w-full">
