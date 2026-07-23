@@ -4,6 +4,7 @@ import { listActiveProducts } from "@rgs/shared";
 import { COUNTRY_CONTENT } from "@/lib/countryContent";
 import { YEARS_IN_BUSINESS, applyUrl } from "@/lib/site";
 import { CountrySearch, type SearchableCountry } from "./CountrySearch";
+import { RotatingHeadline } from "./RotatingHeadline";
 
 const HERO_CARDS = [
   {
@@ -49,11 +50,7 @@ export function Hero() {
           <p className="mrz text-xs text-rgs-red mb-4">
             Visa specialists · New Delhi · Since {new Date().getFullYear() - YEARS_IN_BUSINESS}
           </p>
-          <h1 className="text-4xl md:text-6xl font-bold leading-[1.05]">
-            Visas for Indians,
-            <br />
-            done <span className="text-rgs-red">properly</span>.
-          </h1>
+          <RotatingHeadline />
           <p className="mt-5 max-w-xl text-lg text-ink-soft">
             Search your destination, apply in about 10 minutes, and track every
             step until the visa is in your inbox — backed by{" "}
