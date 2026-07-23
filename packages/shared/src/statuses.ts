@@ -21,6 +21,10 @@ export const DOC_TYPES = [
   "BANK_STATEMENT",
   "FLIGHT_ITINERARY",
   "HOTEL_BOOKING",
+  "YELLOW_FEVER_CERT",
+  "ITR",
+  "EMPLOYMENT_PROOF",
+  "COVER_LETTER",
 ] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 

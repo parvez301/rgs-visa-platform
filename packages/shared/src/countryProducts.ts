@@ -43,7 +43,8 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 10800,
     serviceFeeInr: 3500,
     processingDays: 30,
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "FLIGHT_ITINERARY"],
+    // Home Affairs discourages booking flights before grant — no itinerary here
+    docsRequired: ["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF"],
     active: true,
   },
   {
@@ -57,7 +58,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 7500,
     serviceFeeInr: 3500,
     processingDays: 45,
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "FLIGHT_ITINERARY"],
+    docsRequired: ["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF"],
     active: true,
   },
   {
@@ -71,7 +72,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 17500,
     serviceFeeInr: 3500,
     processingDays: 30,
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT"],
+    docsRequired: ["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "EMPLOYMENT_PROOF"],
     active: true,
   },
   {
@@ -85,7 +86,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 4300,
     serviceFeeInr: 1500,
     processingDays: 7,
-    docsRequired: ["PASSPORT_BIO", "PHOTO"],
+    docsRequired: ["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING"],
     active: true,
   },
   {
@@ -98,8 +99,9 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     entry: "SINGLE",
     governmentFeeInr: 4300,
     serviceFeeInr: 1500,
-    processingDays: 5,
-    docsRequired: ["PASSPORT_BIO", "PHOTO"],
+    processingDays: 3,
+    // Yellow fever certificate mandatory for all arrivals into Uganda
+    docsRequired: ["PASSPORT_BIO", "PHOTO", "YELLOW_FEVER_CERT", "FLIGHT_ITINERARY"],
     active: true,
   },
   {
@@ -110,10 +112,10 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     validityDays: 90,
     stayDays: 30,
     entry: "SINGLE",
-    governmentFeeInr: 8500,
+    governmentFeeInr: 21500,
     serviceFeeInr: 2500,
-    processingDays: 10,
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING"],
+    processingDays: 5,
+    docsRequired: ["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "BANK_STATEMENT"],
     active: true,
   },
   {
@@ -126,8 +128,9 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     entry: "SINGLE",
     governmentFeeInr: 2200,
     serviceFeeInr: 1500,
-    processingDays: 5,
-    docsRequired: ["PASSPORT_BIO", "PHOTO"],
+    processingDays: 7,
+    // Cover letter addressed to the Director General of Immigration
+    docsRequired: ["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "COVER_LETTER"],
     active: true,
   },
 ];
