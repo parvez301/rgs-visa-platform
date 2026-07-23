@@ -2,10 +2,9 @@ import {
   ApplicationSchema,
   ApplicationEssentialsSchema,
   TravellerSchema,
-  getCountryProduct,
-  getDocsChecklist,
   type Application,
   type ApplicationDocument,
+  type CountryProduct,
   type WizardStep,
 } from "@rgs/shared";
 import { z } from "zod";
@@ -14,6 +13,7 @@ import { logActivity } from "../lib/context";
 import type { TableItem } from "../lib/db";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { newId } from "../lib/ids";
+import { resolveCountryProduct } from "./config";
 
 export function applicationToItem(application: Application): TableItem {
   return {
@@ -36,7 +36,7 @@ export async function createDraft(
   userId: string,
   countryCode: string,
 ): Promise<Application> {
-  const countryProduct = getCountryProduct(countryCode);
+  const countryProduct = await resolveCountryProduct(context, countryCode);
   const createdAt = context.now().toISOString();
   const application: Application = {
     applicationId: newId("app", context.now().getTime()),
@@ -138,10 +138,11 @@ export async function listApplicationDocuments(
 
 /** Docs required for submission: every traveller needs each doc on the country checklist. */
 export function missingDocuments(
+  countryProduct: CountryProduct,
   application: Application,
   uploadedDocuments: ApplicationDocument[],
 ): string[] {
-  const requiredDocTypes = getDocsChecklist(application.countryCode);
+  const requiredDocTypes = countryProduct.docsRequired;
   const missing: string[] = [];
   application.travellers.forEach((_traveller, travellerIndex) => {
     for (const requiredDocType of requiredDocTypes) {
@@ -176,8 +177,13 @@ export async function submitApplication(
   if (hasIncompleteTraveller) {
     throw badRequest("All travellers need complete passport details before submitting");
   }
+  const countryProduct = await resolveCountryProduct(
+    context,
+    application.countryCode,
+    application.productCode,
+  );
   const uploadedDocuments = await listApplicationDocuments(context, applicationId);
-  const missing = missingDocuments(application, uploadedDocuments);
+  const missing = missingDocuments(countryProduct, application, uploadedDocuments);
   if (missing.length > 0) {
     throw badRequest(`Missing documents — ${missing.join(", ")}`);
   }

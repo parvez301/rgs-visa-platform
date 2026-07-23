@@ -17,6 +17,7 @@ import {
   recordDocumentUpload,
 } from "../domain/documents";
 import { CreateLeadSchema, createLead } from "../domain/leads";
+import { listActiveCountryConfig } from "../domain/config";
 import { Router, parseBody, type RequestContext } from "./router";
 
 const CreateDraftSchema = z.object({ countryCode: z.string().regex(/^[A-Z]{2}$/) });
@@ -120,5 +121,9 @@ export function buildUserRouter(context: AppContext): Router {
     .add("POST", "/api/v1/leads", async (requestContext) => {
       const input = parseBody(CreateLeadSchema, requestContext.body);
       return createLead(context, input);
+    })
+    // Public: live catalog for marketing site + portal (no auth)
+    .add("GET", "/api/v1/config/countries", async () => {
+      return listActiveCountryConfig(context);
     });
 }

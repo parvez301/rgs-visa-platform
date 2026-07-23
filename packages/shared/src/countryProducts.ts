@@ -1,4 +1,5 @@
-import type { DocType } from "./statuses";
+import { z } from "zod";
+import { DOC_TYPES, type DocType } from "./statuses";
 
 export interface CountryProduct {
   countryCode: string;
@@ -14,6 +15,22 @@ export interface CountryProduct {
   docsRequired: readonly DocType[];
   active: boolean;
 }
+
+/** Validates admin-edited config rows; the DB copy is the runtime source of truth. */
+export const CountryProductSchema = z.object({
+  countryCode: z.string().regex(/^[A-Z]{2}$/),
+  productCode: z.string().min(1),
+  countryName: z.string().min(1),
+  visaType: z.enum(["E_VISA", "ASSISTED"]),
+  validityDays: z.number().int().positive(),
+  stayDays: z.number().int().positive(),
+  entry: z.enum(["SINGLE", "MULTIPLE"]),
+  governmentFeeInr: z.number().int().positive(),
+  serviceFeeInr: z.number().int().positive(),
+  processingDays: z.number().int().positive(),
+  docsRequired: z.array(z.enum(DOC_TYPES)).min(1),
+  active: z.boolean(),
+}) satisfies z.ZodType<CountryProduct>;
 
 // Launch seed values (fees in INR, processing in working days). Owner-editable;
 // moves to admin-managed DB config post-v1.

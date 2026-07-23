@@ -120,6 +120,7 @@ DRAFT → SUBMITTED → DOCS_VERIFIED → SENT_TO_IMMIGRATION → APPROVED | REJ
 - **Application detail**: traveller data, document viewer with per-doc APPROVE / REJECT + reason (reject notifies user and reopens that doc slot), status transition buttons (validated against the machine), payment controls (`Request payment`, `Mark paid`), internal notes, uploaded visa result file.
 - **Activity feed**: reverse-chron events — signups, application started, step completed, doc uploaded, submitted, stuck/abandoned drafts — the "see what users are doing" requirement.
 - **Metrics tiles**: signups this week, applications by status, abandoned drafts count.
+- **Country config manager** (owner requirement, promoted into v1 2026-07-23): edit per-country docs checklist, government/service fees, processing days, validity/stay/entry, active flag. Runtime source of truth = `CONFIG#COUNTRY` rows in DynamoDB; the code catalog in `@rgs/shared` is seed/fallback only. Every edit is validated (Zod), logged as `CONFIG_CHANGED`, and immediately drives portal pricing, wizard checklists, and API submit guards. Public `GET /api/v1/config/countries` serves the live catalog to marketing + portal.
 
 ## 7. Marketing site
 
@@ -149,4 +150,4 @@ DRAFT → SUBMITTED → DOCS_VERIFIED → SENT_TO_IMMIGRATION → APPROVED | REJ
 
 ## 11. Explicitly out of scope (v1)
 
-Online payment gateway (Razorpay later), passport OCR auto-fill, WhatsApp notifications, approval-chances quiz, guest checkout, mobile app, multi-language, admin-editable country config UI, blog CMS.
+Online payment gateway (Razorpay later), passport OCR auto-fill, WhatsApp notifications, approval-chances quiz, guest checkout, mobile app, multi-language, blog CMS. (Admin-editable country config was promoted INTO v1 on 2026-07-23. Marketing site shows build-time catalog values and will hydrate live values from the public config endpoint once the API is deployed.)

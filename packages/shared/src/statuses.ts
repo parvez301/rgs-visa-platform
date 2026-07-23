@@ -42,5 +42,6 @@ export const ACTIVITY_EVENT_TYPES = [
   "PAYMENT_REQUESTED",
   "PAYMENT_MARKED_PAID",
   "LEAD_CREATED",
+  "CONFIG_CHANGED",
 ] as const;
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];

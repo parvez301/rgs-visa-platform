@@ -12,6 +12,11 @@ import {
   transitionApplication,
 } from "../domain/admin";
 import { listNewLeads } from "../domain/leads";
+import {
+  listCountryConfig,
+  seedCountryConfig,
+  upsertCountryProduct,
+} from "../domain/config";
 import { Router, parseBody, type RequestContext } from "./router";
 
 const TransitionSchema = z.object({
@@ -120,5 +125,19 @@ export function buildAdminRouter(context: AppContext): Router {
     .add("GET", "/api/v1/admin/leads", async (requestContext) => {
       requireAdmin(requestContext);
       return listNewLeads(context);
+    })
+    // Country config management: docs, fees, timelines — admin-editable
+    .add("GET", "/api/v1/admin/config/countries", async (requestContext) => {
+      requireAdmin(requestContext);
+      return listCountryConfig(context);
+    })
+    .add("PUT", "/api/v1/admin/config/countries", async (requestContext) => {
+      const adminId = requireAdmin(requestContext);
+      return upsertCountryProduct(context, adminId, requestContext.body);
+    })
+    .add("POST", "/api/v1/admin/config/seed", async (requestContext) => {
+      requireAdmin(requestContext);
+      const seededCount = await seedCountryConfig(context);
+      return { seededCount };
     });
 }

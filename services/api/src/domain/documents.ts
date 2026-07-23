@@ -1,8 +1,4 @@
-import {
-  getDocsChecklist,
-  type ApplicationDocument,
-  type DocType,
-} from "@rgs/shared";
+import type { ApplicationDocument, DocType } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
 import {
@@ -11,6 +7,7 @@ import {
 } from "../lib/documentStore";
 import { badRequest, notFound } from "../lib/errors";
 import { getOwnedApplication } from "./applications";
+import { resolveCountryProduct } from "./config";
 
 const CONTENT_TYPE_EXTENSIONS: Record<AllowedUploadContentType, string> = {
   "image/jpeg": "jpg",
@@ -27,17 +24,19 @@ export function documentObjectKey(
   return `applications/${applicationId}/traveller-${travellerIndex}/${docType}.${fileExtension}`;
 }
 
-function assertValidDocRequest(
+async function assertValidDocRequest(
+  context: AppContext,
   countryCode: string,
+  productCode: string,
   travellerCount: number,
   docType: DocType,
   travellerIndex: number,
-): void {
+): Promise<void> {
   if (travellerIndex < 0 || travellerIndex >= travellerCount) {
     throw badRequest(`travellerIndex ${travellerIndex} is out of range`);
   }
-  const requiredDocTypes = getDocsChecklist(countryCode);
-  if (!requiredDocTypes.includes(docType)) {
+  const countryProduct = await resolveCountryProduct(context, countryCode, productCode);
+  if (!countryProduct.docsRequired.includes(docType)) {
     throw badRequest(`${docType} is not part of the ${countryCode} document checklist`);
   }
 }
@@ -51,8 +50,10 @@ export async function presignDocumentUpload(
   contentType: string,
 ): Promise<{ uploadUrl: string; objectKey: string }> {
   const application = await getOwnedApplication(context, userId, applicationId);
-  assertValidDocRequest(
+  await assertValidDocRequest(
+    context,
     application.countryCode,
+    application.productCode,
     application.travellers.length,
     docType,
     travellerIndex,
@@ -82,8 +83,10 @@ export async function recordDocumentUpload(
   objectKey: string,
 ): Promise<ApplicationDocument> {
   const application = await getOwnedApplication(context, userId, applicationId);
-  assertValidDocRequest(
+  await assertValidDocRequest(
+    context,
     application.countryCode,
+    application.productCode,
     application.travellers.length,
     docType,
     travellerIndex,
