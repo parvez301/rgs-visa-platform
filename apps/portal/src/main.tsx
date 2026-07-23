@@ -5,6 +5,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { AuthPage } from "./pages/AuthPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { WizardPage } from "./pages/wizard/WizardPage";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -36,6 +37,14 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   <DashboardPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/apply/:applicationId"
+              element={
+                <RequireAuth>
+                  <WizardPage />
                 </RequireAuth>
               }
             />
