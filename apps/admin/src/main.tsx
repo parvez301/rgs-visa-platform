@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from "./lib/auth";
 import { ActivityPage } from "./pages/ActivityPage";
 import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
 import { AuthPage } from "./pages/AuthPage";
+import { ConfigPage } from "./pages/ConfigPage";
 import { LeadsPage } from "./pages/LeadsPage";
 import { QueuePage } from "./pages/QueuePage";
 import { UserActivityPage } from "./pages/UserActivityPage";
@@ -64,6 +65,14 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   <LeadsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/config"
+              element={
+                <RequireAuth>
+                  <ConfigPage />
                 </RequireAuth>
               }
             />
