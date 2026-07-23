@@ -16,6 +16,13 @@ const STEP_LABELS: Record<WizardStep, string> = {
   review: "Review",
 };
 
+const STEP_SUBLABELS: Record<WizardStep, string> = {
+  travellers: "Passport details",
+  docs: "Upload documents",
+  essentials: "Travel details",
+  review: "Check & submit",
+};
+
 function stepIndex(step: WizardStep): number {
   return WIZARD_STEPS.indexOf(step);
 }
@@ -159,9 +166,14 @@ export function WizardPage() {
                             : "border border-line text-ink-soft"
                       }`}
                     >
-                      {wizardStepIndex + 1}
+                      {wizardStepIndex < reachedStepIndex ? "✓" : wizardStepIndex + 1}
                     </span>
-                    {STEP_LABELS[wizardStep]}
+                    <span>
+                      {STEP_LABELS[wizardStep]}
+                      <span className="block text-[11px] font-normal text-ink-soft">
+                        {STEP_SUBLABELS[wizardStep]}
+                      </span>
+                    </span>
                   </button>
                 </li>
               );
@@ -171,7 +183,7 @@ export function WizardPage() {
       </aside>
 
       <main className="flex-1 px-4 py-8 sm:px-8 lg:px-12">
-        <div className="mx-auto max-w-2xl">
+        <div key={activeStep} className="step-enter mx-auto max-w-2xl">
           {activeStep === "travellers" && !isReuploadMode && (
             <TravellersStep
               application={application}

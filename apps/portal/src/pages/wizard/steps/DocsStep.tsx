@@ -8,6 +8,7 @@ import type {
 import { portalApi, uploadFileToPresignedUrl } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
 import { DOC_TYPE_LABELS } from "../../../lib/docLabels";
+import { DOC_GUIDANCE, checkFileBeforeUpload } from "../../../lib/uploadChecks";
 
 export interface DocsStepProps {
   application: Application;
@@ -54,6 +55,7 @@ export function DocsStep({
   const { idToken } = useAuth();
   const [uploadingKeys, setUploadingKeys] = useState<Set<string>>(new Set());
   const [slotErrors, setSlotErrors] = useState<Record<string, string>>({});
+  const [slotWarnings, setSlotWarnings] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [reuploadDoneMessage, setReuploadDoneMessage] = useState<string | null>(null);
@@ -114,6 +116,22 @@ export function DocsStep({
       }));
       return;
     }
+
+    // Cheap quality gate: block unusable files, warn on risky ones
+    const checkResult = await checkFileBeforeUpload(docType, file);
+    if (checkResult.blockers.length > 0) {
+      setSlotErrors((previous) => ({ ...previous, [key]: checkResult.blockers[0]! }));
+      return;
+    }
+    setSlotWarnings((previous) => {
+      const next = { ...previous };
+      if (checkResult.warnings.length > 0) {
+        next[key] = checkResult.warnings[0]!;
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
 
     setUploadingKeys((previous) => new Set(previous).add(key));
     try {
@@ -230,6 +248,22 @@ export function DocsStep({
                     }`}
                   >
                     <p className="text-sm font-medium">{DOC_TYPE_LABELS[docType]}</p>
+                    <ul className="mt-1.5 space-y-0.5">
+                      {DOC_GUIDANCE[docType].map((guidanceTip) => (
+                        <li
+                          key={guidanceTip}
+                          className="flex items-start gap-1.5 text-xs text-ink-soft"
+                        >
+                          <span className="mt-0.5 h-1 w-1 shrink-0 rounded-full bg-rgs-red/60" aria-hidden="true" />
+                          {guidanceTip}
+                        </li>
+                      ))}
+                    </ul>
+                    {slotWarnings[key] && state === "uploaded" && (
+                      <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+                        ⚠ {slotWarnings[key]}
+                      </p>
+                    )}
 
                     {state === "uploading" && (
                       <p className="mt-3 text-sm text-ink-soft animate-pulse">Uploading…</p>

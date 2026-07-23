@@ -85,7 +85,17 @@ export function ReviewStep({ application, documents }: ReviewStepProps) {
         : mainlineStatuses.indexOf(submittedApplication.status);
 
     return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-mist text-center px-4">
+      <div className="speedlines fixed inset-0 z-50 flex flex-col items-center justify-center bg-mist text-center px-4">
+        <div
+          className="stamp mb-6 rounded-lg border-[3px] border-rgs-red bg-paper/90 px-6 py-3"
+          aria-hidden="true"
+        >
+          <p className="mrz text-lg font-semibold text-rgs-red leading-tight">
+            Submitted
+            <br />
+            <span className="text-[10px]">RGS · Visas on time</span>
+          </p>
+        </div>
         <p className="mrz text-xs text-rgs-red mb-3">Application submitted</p>
         <h2 className="text-3xl font-bold mb-2">We've got it</h2>
         <p className="text-ink-soft mb-6 max-w-md">
