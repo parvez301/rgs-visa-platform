@@ -41,9 +41,9 @@ h3 {
   background-image: repeating-linear-gradient(
     115deg,
     transparent 0px,
-    transparent 22px,
-    rgb(239 50 80 / 0.06) 22px,
-    rgb(239 50 80 / 0.06) 34px
+    transparent 34px,
+    rgb(239 50 80 / 0.03) 34px,
+    rgb(239 50 80 / 0.03) 42px
   );
 }
 

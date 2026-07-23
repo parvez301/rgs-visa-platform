@@ -50,8 +50,18 @@ export function SiteFooter() {
             </Link>
           </p>
           <p>
-            <Link href="/#services" className="hover:text-white">
+            <Link href="/services/" className="hover:text-white">
               Services
+            </Link>
+          </p>
+          <p>
+            <Link href="/about/" className="hover:text-white">
+              About us
+            </Link>
+          </p>
+          <p>
+            <Link href="/contact/" className="hover:text-white">
+              Contact
             </Link>
           </p>
           <p>

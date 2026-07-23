@@ -37,13 +37,13 @@ export function SiteHeader() {
           <Link href="/#destinations" className="hover:text-ink">
             Destinations
           </Link>
-          <Link href="/#how-it-works" className="hover:text-ink">
-            How it works
-          </Link>
-          <Link href="/#services" className="hover:text-ink">
+          <Link href="/services/" className="hover:text-ink">
             Services
           </Link>
-          <Link href="/#contact" className="hover:text-ink">
+          <Link href="/about/" className="hover:text-ink">
+            About
+          </Link>
+          <Link href="/contact/" className="hover:text-ink">
             Contact
           </Link>
         </nav>

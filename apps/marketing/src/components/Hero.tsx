@@ -1,14 +1,21 @@
+import Image from "next/image";
 import Link from "next/link";
 import { listActiveProducts } from "@rgs/shared";
 import { COUNTRY_CONTENT } from "@/lib/countryContent";
 import { YEARS_IN_BUSINESS, applyUrl } from "@/lib/site";
 
+const HERO_CARD_COUNTRIES = [
+  { countryCode: "AE", label: "Dubai in 4 days", rotation: "-rotate-6", offset: "top-10 left-0" },
+  { countryCode: "NZ", label: "New Zealand", rotation: "rotate-3", offset: "top-0 left-36" },
+  { countryCode: "TZ", label: "Tanzania", rotation: "rotate-[9deg]", offset: "top-24 left-64" },
+];
+
 export function Hero() {
   const popularProducts = listActiveProducts().slice(0, 4);
 
   return (
-    <section className="speedlines border-b border-line">
-      <div className="mx-auto max-w-6xl px-4 py-16 md:py-24 grid md:grid-cols-[1.2fr_1fr] gap-12 items-center">
+    <section className="speedlines border-b border-line overflow-hidden">
+      <div className="mx-auto max-w-6xl px-4 py-16 md:py-24 grid md:grid-cols-[1.15fr_1fr] gap-12 items-center">
         <div>
           <p className="mrz text-xs text-rgs-red mb-4">
             Visa specialists · New Delhi · Since {new Date().getFullYear() - YEARS_IN_BUSINESS}
@@ -54,26 +61,37 @@ export function Hero() {
           </div>
         </div>
 
-        {/* Passport-page composition with rubber stamp */}
-        <div className="relative hidden md:block" aria-hidden="true">
-          <div className="rounded-2xl border border-line bg-paper p-6 shadow-[0_20px_60px_rgb(23_25_31/0.08)] rotate-1">
-            <p className="mrz text-[10px] text-ink-soft mb-3">
-              Republic of India · Passport
-            </p>
-            <div className="space-y-2.5">
-              <div className="h-3 w-3/4 rounded bg-mist" />
-              <div className="h-3 w-1/2 rounded bg-mist" />
-              <div className="h-3 w-2/3 rounded bg-mist" />
-            </div>
-            <div className="mt-6 border-t border-dashed border-line pt-3">
-              <p className="mrz text-[11px] leading-relaxed text-ink-soft break-all">
-                P&lt;IND&lt;&lt;RAYS&lt;GLOBAL&lt;SERVICES&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
-                <br />
-                VISAS&lt;ON&lt;TIME&lt;&lt;DELHI&lt;&lt;{YEARS_IN_BUSINESS}&lt;YEARS&lt;&lt;&lt;&lt;&lt;&lt;&lt;
-              </p>
-            </div>
-          </div>
-          <div className="stamp absolute -top-6 right-2 rounded-lg border-[3px] border-rgs-red px-5 py-3 text-center">
+        {/* Tilted travel-photo collage with approval stamp */}
+        <div className="relative hidden md:block h-[420px]" aria-hidden="true">
+          {HERO_CARD_COUNTRIES.map((heroCard) => {
+            const content = COUNTRY_CONTENT[heroCard.countryCode];
+            if (!content) return null;
+            return (
+              <div
+                key={heroCard.countryCode}
+                className={`absolute ${heroCard.offset} ${heroCard.rotation} w-52 overflow-hidden rounded-2xl border-4 border-paper bg-paper shadow-[0_24px_60px_rgb(23_25_31/0.22)]`}
+              >
+                <div className="relative aspect-[3/4]">
+                  <Image
+                    src={`/countries/${heroCard.countryCode.toLowerCase()}.jpg`}
+                    alt=""
+                    fill
+                    sizes="220px"
+                    priority
+                    className="object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-ink/70 via-transparent to-transparent" />
+                  <p className="absolute bottom-2.5 left-3 right-3 text-white text-sm font-semibold">
+                    {content.flagEmoji} {heroCard.label}
+                  </p>
+                </div>
+                <p className="mrz px-3 py-2 text-[9px] text-ink-soft/70 truncate">
+                  {heroCard.countryCode}&lt;&lt;VISA&lt;APPROVED&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
+                </p>
+              </div>
+            );
+          })}
+          <div className="stamp absolute bottom-8 right-2 z-10 rounded-lg border-[3px] border-rgs-red bg-paper/85 backdrop-blur-sm px-5 py-3 text-center">
             <p className="mrz text-sm font-semibold text-rgs-red leading-tight">
               Visas on time
               <br />
