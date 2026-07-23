@@ -98,6 +98,17 @@ export const adminApi = {
       idToken,
     }),
 
+  presignDocumentDownload: (
+    idToken: string,
+    applicationId: string,
+    docType: string,
+    travellerIndex: number,
+  ) =>
+    apiFetch<{ downloadUrl: string }>(
+      `/api/v1/admin/applications/${applicationId}/documents/download?docType=${docType}&travellerIndex=${travellerIndex}`,
+      { idToken },
+    ),
+
   reviewDocument: (idToken: string, input: ReviewDocumentInput) =>
     apiFetch<ApplicationDocument>("/api/v1/admin/documents/review", {
       method: "POST",

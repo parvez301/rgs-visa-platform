@@ -7,3 +7,4 @@ out/
 cdk.out/
 coverage/
 .DS_Store
+.worktrees/

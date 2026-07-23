@@ -193,9 +193,16 @@ export function ApplicationDetailPage() {
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  disabled
-                  title="download in review build"
-                  className="rounded-full border border-line px-3 py-1 text-xs font-medium text-ink-soft cursor-not-allowed"
+                  onClick={async () => {
+                    const { downloadUrl } = await adminApi.presignDocumentDownload(
+                      idToken!,
+                      application.applicationId,
+                      document.docType,
+                      document.travellerIndex,
+                    );
+                    window.open(downloadUrl, "_blank", "noopener");
+                  }}
+                  className="rounded-full border border-line px-3 py-1 text-xs font-medium hover:border-rgs-red hover:text-rgs-red transition-colors"
                 >
                   View
                 </button>

@@ -7,6 +7,7 @@ import {
   addInternalNote,
   getApplicationDetailForAdmin,
   listApplicationsByStatus,
+  presignDocumentDownloadForAdmin,
   reviewDocument,
   setPaymentStatus,
   transitionApplication,
@@ -89,6 +90,22 @@ export function buildAdminRouter(context: AppContext): Router {
           input.toPaymentStatus,
           input.userEmail,
         );
+      },
+    )
+    .add(
+      "GET",
+      "/api/v1/admin/applications/{applicationId}/documents/download",
+      async (requestContext) => {
+        requireAdmin(requestContext);
+        const docType = z.enum(DOC_TYPES).parse(requestContext.queryParams["docType"] ?? "");
+        const travellerIndex = Number(requestContext.queryParams["travellerIndex"] ?? "0");
+        const downloadUrl = await presignDocumentDownloadForAdmin(
+          context,
+          requestContext.pathParams["applicationId"]!,
+          docType,
+          travellerIndex,
+        );
+        return { downloadUrl };
       },
     )
     .add("POST", "/api/v1/admin/documents/review", async (requestContext) => {

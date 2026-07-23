@@ -5,6 +5,7 @@ import {
   addInternalNote,
   getApplicationDetailForAdmin,
   listApplicationsByStatus,
+  presignDocumentDownloadForAdmin,
   reviewDocument,
   setPaymentStatus,
   transitionApplication,
@@ -144,6 +145,26 @@ describe("setPaymentStatus", () => {
       "asha@example.com",
     );
     expect(paid.paymentStatus).toBe("PAID_OFFLINE");
+  });
+});
+
+describe("presignDocumentDownloadForAdmin", () => {
+  it("returns a download URL for any application's document", async () => {
+    const { context, applicationId } = await submittedApplication();
+    const downloadUrl = await presignDocumentDownloadForAdmin(
+      context,
+      applicationId,
+      "PHOTO",
+      0,
+    );
+    expect(downloadUrl).toContain("download");
+  });
+
+  it("404s for a missing document slot", async () => {
+    const { context, applicationId } = await submittedApplication();
+    await expect(
+      presignDocumentDownloadForAdmin(context, applicationId, "BANK_STATEMENT", 0),
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 });
 

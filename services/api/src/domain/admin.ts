@@ -204,6 +204,21 @@ export async function reviewDocument(
   return reviewedDocument;
 }
 
+export async function presignDocumentDownloadForAdmin(
+  context: AppContext,
+  applicationId: string,
+  docType: DocType,
+  travellerIndex: number,
+): Promise<string> {
+  await getApplicationById(context, applicationId);
+  const documentItem = await context.table.get(
+    `APP#${applicationId}`,
+    `DOC#${docType}#${travellerIndex}`,
+  );
+  if (!documentItem) throw notFound("Document");
+  return context.documents.presignDownload(String(documentItem.s3Key));
+}
+
 export async function addInternalNote(
   context: AppContext,
   adminId: string,

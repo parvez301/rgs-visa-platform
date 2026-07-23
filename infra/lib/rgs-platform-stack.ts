@@ -268,7 +268,7 @@ function handler(event) {
       removalPolicy,
       autoDeleteObjects: !isProduction,
       idPrefix: "Portal",
-      bucketName: `rgs-portal-${stage}`,
+      bucketName: `rgs-portal-${stage}-${this.account}`,
       distRelativePath: "../../apps/portal/dist",
       comment: `RGS portal (${stage})`,
     });
@@ -278,7 +278,7 @@ function handler(event) {
       removalPolicy,
       autoDeleteObjects: !isProduction,
       idPrefix: "Admin",
-      bucketName: `rgs-admin-${stage}`,
+      bucketName: `rgs-admin-${stage}-${this.account}`,
       distRelativePath: "../../apps/admin/dist",
       comment: `RGS admin (${stage})`,
     });
