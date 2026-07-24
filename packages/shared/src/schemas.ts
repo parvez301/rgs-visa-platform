@@ -5,6 +5,9 @@ import {
   APPLICATION_STATUSES,
   DOC_REVIEW_STATUSES,
   DOC_TYPES,
+  NOTICE_CATEGORIES,
+  NOTICE_SEVERITIES,
+  NOTICE_STATUSES,
   PAYMENT_STATUSES,
   WIZARD_STEPS,
 } from "./statuses";
@@ -127,3 +130,32 @@ export const ActivityEventSchema = z.object({
   actorRole: z.enum(ACTIVITY_ACTOR_ROLES).optional(),
 });
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
+
+export const NoticeSchema = z.object({
+  noticeId: z.string().min(1),
+  title: z.string().trim().min(3).max(140),
+  body: z.string().min(1).max(8000),
+  category: z.enum(NOTICE_CATEGORIES),
+  severity: z.enum(NOTICE_SEVERITIES),
+  countryCode: z.string().regex(/^[A-Z]{2}$/).optional(),
+  pinned: z.boolean().default(false),
+  status: z.enum(NOTICE_STATUSES).default("DRAFT"),
+  publishedAt: isoDateTime.optional(),
+  expiresAt: isoDate.optional(),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime,
+  createdByEmail: z.string().email().optional(),
+});
+export type Notice = z.infer<typeof NoticeSchema>;
+
+export const NoticeInputSchema = NoticeSchema.pick({
+  title: true,
+  body: true,
+  category: true,
+  severity: true,
+  countryCode: true,
+  pinned: true,
+  status: true,
+  expiresAt: true,
+}).extend({ noticeId: z.string().optional() });
+export type NoticeInput = z.infer<typeof NoticeInputSchema>;

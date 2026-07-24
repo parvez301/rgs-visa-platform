@@ -3,6 +3,7 @@ import {
   ApplicationSchema,
   ApplicationDocumentSchema,
   ActivityEventSchema,
+  NoticeSchema,
   TravellerSchema,
   UserSchema,
 } from "../src/schemas";
@@ -223,5 +224,35 @@ describe("ActivityEventSchema", () => {
       meta: {},
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("NoticeSchema", () => {
+  const validNotice = {
+    noticeId: "ntc_01J3ZTEST0000000000000000",
+    title: "UAE fee update",
+    body: "Government fee increases from 1 August.",
+    category: "FEE_UPDATE",
+    severity: "IMPORTANT",
+    createdAt: "2026-07-23T10:00:00.000Z",
+    updatedAt: "2026-07-23T10:00:00.000Z",
+  };
+
+  it("accepts a valid notice and applies pinned/status defaults", () => {
+    const parsed = NoticeSchema.parse(validNotice);
+    expect(parsed.pinned).toBe(false);
+    expect(parsed.status).toBe("DRAFT");
+  });
+
+  it("rejects a title shorter than 3 characters", () => {
+    expect(
+      NoticeSchema.safeParse({ ...validNotice, title: "Hi" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a bad countryCode", () => {
+    expect(
+      NoticeSchema.safeParse({ ...validNotice, countryCode: "uae" }).success,
+    ).toBe(false);
   });
 });
