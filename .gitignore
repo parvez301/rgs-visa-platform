@@ -12,3 +12,6 @@ coverage/
 # auto-generated claude-mem context files (swept into HANDOFF-3 by mistake)
 apps/marketing/src/lib/CLAUDE.md
 packages/shared/src/CLAUDE.md
+
+# operational infra details — kept local, provided to maintainers out-of-band
+docs/staging-environment.md

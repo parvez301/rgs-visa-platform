@@ -60,8 +60,9 @@ pnpm install
 
 Each front-end reads its config from a **local, git-ignored `.env.local`** file.
 These are **not** committed. Create them from the values for the target
-environment (staging values are recorded in `docs/staging-environment.md`, which
-you get from the project owner):
+environment — the environment details (API URL, pool IDs, etc.) are **provided
+by the project owner out-of-band** (they are intentionally not stored in this
+repository):
 
 ```bash
 # apps/marketing/.env.local   (build/dev time)
@@ -145,7 +146,8 @@ API URL / pool IDs. **Never seed test data into production.**
 
 The stack outputs the CloudFront URLs, API endpoint, table name, and pool IDs on
 every deploy. Current environment details (URLs, pool IDs, first-admin setup,
-production cutover runbook) are in **`docs/staging-environment.md`**.
+production cutover runbook) are kept out of the repo and **provided by the
+project owner** to maintainers.
 
 ### Runtime configuration (set by CDK, not by you)
 
@@ -177,7 +179,7 @@ CDK wires up.
 | Topic | File |
 |---|---|
 | Product/technical design spec | `docs/superpowers/specs/2026-07-23-rgs-visa-platform-design.md` |
-| Environments, pool IDs, prod cutover runbook | `docs/staging-environment.md` |
+| Environments, pool IDs, prod cutover runbook | provided by the owner (not in repo) |
 | Feature implementation notes | `docs/CURSOR-HANDOFF-*.md` + `docs/CURSOR-STATUS-*.md` |
 | Country document research | `docs/research/` |
 | Manual E2E checklist | `scripts/e2e-staging.md` |
