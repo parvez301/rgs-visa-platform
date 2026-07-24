@@ -16,6 +16,65 @@ user and admin pools); files are in **S3**; everything is fronted by
 **CloudFront** and provisioned with **AWS CDK**. Payments are handled offline in
 v1 — the status machine is API-ready for automation later.
 
+## Architecture at a glance
+
+```text
+┌───────────────────────────── Browsers ─────────────────────────────┐
+│   Travellers (India-origin)                    RGS operations       │
+└──────┬────────────────────┬────────────────────────────┬───────────┘
+       │                    │                             │
+┌──────▼───────┐    ┌───────▼──────┐              ┌───────▼──────┐
+│  Marketing   │    │    Portal    │              │    Admin     │
+│  Next.js 15  │    │  React SPA   │              │  React SPA   │
+│ static site  │    │ (travellers) │              │ (ops console)│
+└──────┬───────┘    └───────┬──────┘              └───────┬──────┘
+       │      S3 bucket + CloudFront (one distribution each)
+       │                    │                             │
+       │ public GET         │ Cognito JWT                 │ Cognito JWT
+       │ /notices /config   │ (users pool)                │ (admins pool)
+       └─────────┬──────────┴──────────────┬──────────────┘
+                 │                          │
+                 ▼                          ▼
+        ┌──────────────────────────────────────────┐
+        │      Amazon API Gateway (HTTP API)        │
+        │   JWT authorizers · explicit routes       │
+        └────────────────────┬──────────────────────┘
+                             ▼
+              ┌──────────────┴───────────────┐
+              ▼                              ▼
+     ┌────────────────┐             ┌────────────────┐
+     │ UserApiFunction│             │ AdminApiFunc.  │
+     │  Lambda (TS)   │             │  Lambda (TS)   │
+     └───────┬────────┘             └───────┬────────┘
+             └──────────────┬───────────────┘
+                            │  domain logic · @rgs/shared (schemas + status machine)
+        ┌───────────────────┼────────────────────┐
+        ▼                   ▼                     ▼
+┌───────────────┐   ┌───────────────┐    ┌───────────────┐
+│   DynamoDB    │   │  S3 documents │    │      SES       │
+│ single table  │   │  (presigned   │    │  transactional │
+│ USER# CONFIG# │   │  up/download) │    │  email         │
+│ NOTICE EVENT# │   │               │    │                │
+└───────────────┘   └───────────────┘    └───────────────┘
+
+Provisioned by AWS CDK (infra/) → one stack per env: RgsPlatform-{staging|prod}, ap-south-1
+```
+
+**How it flows:**
+
+- The three front-ends are **static bundles on S3 behind CloudFront** (one
+  distribution each). They ship no server — all dynamic data is fetched from the
+  API at runtime.
+- **Marketing** calls only public endpoints (`/api/v1/notices`,
+  `/api/v1/config/countries`) — no auth.
+- **Portal** and **Admin** authenticate against **separate Cognito pools**; API
+  Gateway verifies the JWT before the request reaches a Lambda.
+- One Lambda per audience (**user** vs **admin**) shares the same domain layer and
+  `@rgs/shared` contracts, and talks to a **single DynamoDB table**, an **S3**
+  bucket for documents (via presigned URLs), and **SES** for notifications.
+- Adding a new top-level API path is a CDK change — routes are declared
+  explicitly (see [Deploying](#deploying)).
+
 ---
 
 ## Repository layout
