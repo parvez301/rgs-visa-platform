@@ -5,7 +5,10 @@ import type {
   ApplicationStatus,
   CountryProduct,
   DocType,
+  Notice,
+  NoticeInput,
   PaymentStatus,
+  User,
 } from "@rgs/shared";
 
 const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? "";
@@ -135,6 +138,23 @@ export const adminApi = {
   },
 
   listLeads: (idToken: string) => apiFetch<Lead[]>("/api/v1/admin/leads", { idToken }),
+
+  listUsers: (idToken: string) => apiFetch<User[]>("/api/v1/admin/users", { idToken }),
+
+  listNotices: (idToken: string) => apiFetch<Notice[]>("/api/v1/admin/notices", { idToken }),
+
+  upsertNotice: (idToken: string, noticeInput: NoticeInput) =>
+    apiFetch<Notice>("/api/v1/admin/notices", {
+      method: "PUT",
+      body: noticeInput,
+      idToken,
+    }),
+
+  deleteNotice: (idToken: string, noticeId: string) =>
+    apiFetch<{ deleted: boolean }>(`/api/v1/admin/notices/${noticeId}`, {
+      method: "DELETE",
+      idToken,
+    }),
 
   listCountries: (idToken: string) =>
     apiFetch<CountryProduct[]>("/api/v1/admin/config/countries", { idToken }),
