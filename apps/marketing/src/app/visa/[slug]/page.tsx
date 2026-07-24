@@ -12,6 +12,7 @@ import {
   LiveFeeCard,
   LiveProcessingBadge,
 } from "@/components/LiveCountryHydration";
+import { CountryNoticeBanner } from "@/components/CountryNoticeBanner";
 
 export async function generateStaticParams() {
   const buildCatalog = await fetchBuildCatalog();
@@ -95,6 +96,7 @@ export default async function CountryVisaPage({
 
         <div className="mx-auto max-w-6xl px-4 py-12 grid lg:grid-cols-[1fr_360px] gap-10 items-start">
           <div className="space-y-12">
+            <CountryNoticeBanner countryCode={countryCode} />
             <section>
               <p className="text-lg text-ink-soft leading-relaxed">{content.intro}</p>
               <dl className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">

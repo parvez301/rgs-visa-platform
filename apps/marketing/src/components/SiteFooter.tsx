@@ -60,6 +60,11 @@ export function SiteFooter() {
             </Link>
           </p>
           <p>
+            <Link href="/notices/" className="hover:text-white">
+              Notices
+            </Link>
+          </p>
+          <p>
             <Link href="/contact/" className="hover:text-white">
               Contact
             </Link>

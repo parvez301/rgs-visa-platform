@@ -43,6 +43,9 @@ export function SiteHeader() {
           <Link href="/about/" className="hover:text-ink">
             About
           </Link>
+          <Link href="/notices/" className="hover:text-ink">
+            Notices
+          </Link>
           <Link href="/contact/" className="hover:text-ink">
             Contact
           </Link>
