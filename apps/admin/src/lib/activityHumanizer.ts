@@ -1,6 +1,7 @@
 import type {
   ActivityEvent,
   ActivityEventType,
+  Application,
   DocType,
   User,
 } from "@rgs/shared";
@@ -9,6 +10,34 @@ import { DOC_LABELS, STATUS_LABELS } from "./labels";
 export interface HumanizerContext {
   countryNameByCode: Map<string, string>;
   userNameById: Map<string, User>;
+  applicationById: Map<string, Application>;
+}
+
+/** The applicant a document belongs to, resolved from the application's travellers. */
+function resolveTravellerName(
+  activityEvent: ActivityEvent,
+  humanizerContext: HumanizerContext,
+): string | null {
+  const travellerIndex = activityEvent.meta["travellerIndex"];
+  if (typeof travellerIndex !== "number" || !activityEvent.applicationId) return null;
+  const application = humanizerContext.applicationById.get(activityEvent.applicationId);
+  const travellerName = application?.travellers[travellerIndex]?.fullName?.trim();
+  if (travellerName && travellerName.length > 0 && travellerName !== "PENDING") {
+    return travellerName;
+  }
+  return null;
+}
+
+function travellerSuffix(
+  activityEvent: ActivityEvent,
+  humanizerContext: HumanizerContext,
+): string {
+  const travellerName = resolveTravellerName(activityEvent, humanizerContext);
+  if (travellerName) return `for ${travellerName}`;
+  const travellerIndex = activityEvent.meta["travellerIndex"];
+  return typeof travellerIndex === "number"
+    ? `(traveller ${travellerIndex + 1})`
+    : "";
 }
 
 export interface HumanizedEvent {
@@ -84,19 +113,11 @@ export function eventToSentence(
       text = `completed the ${String(meta["step"] ?? "wizard")} step`;
       break;
     case "DOC_UPLOADED": {
-      const travellerNumber =
-        typeof meta["travellerIndex"] === "number"
-          ? meta["travellerIndex"] + 1
-          : "?";
-      text = `uploaded ${docLabel(meta["docType"])} (traveller ${travellerNumber})`;
+      text = `uploaded ${docLabel(meta["docType"])} ${travellerSuffix(activityEvent, humanizerContext)}`.trim();
       break;
     }
     case "DOC_REVIEWED": {
-      const travellerNumber =
-        typeof meta["travellerIndex"] === "number"
-          ? meta["travellerIndex"] + 1
-          : "?";
-      text = `admin ${String(meta["decision"] ?? "reviewed").toLowerCase()} ${docLabel(meta["docType"])} (traveller ${travellerNumber})`;
+      text = `admin ${String(meta["decision"] ?? "reviewed").toLowerCase()} ${docLabel(meta["docType"])} ${travellerSuffix(activityEvent, humanizerContext)}`.trim();
       break;
     }
     case "SUBMITTED":

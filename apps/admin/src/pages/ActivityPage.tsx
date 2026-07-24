@@ -12,7 +12,7 @@ import {
   type User,
 } from "@rgs/shared";
 import { AdminShell } from "../components/AdminShell";
-import { eventToSentence } from "../lib/activityHumanizer";
+import { eventToSentence, type HumanizerContext } from "../lib/activityHumanizer";
 import { adminApi } from "../lib/adminApi";
 import { useAuth } from "../lib/auth";
 import { PAYMENT_LABELS, STATUS_LABELS } from "../lib/labels";
@@ -107,8 +107,8 @@ export function ActivityPage() {
   }, [countriesQuery.data]);
 
   const humanizerContext = useMemo(
-    () => ({ countryNameByCode, userNameById }),
-    [countryNameByCode, userNameById],
+    () => ({ countryNameByCode, userNameById, applicationById }),
+    [countryNameByCode, userNameById, applicationById],
   );
 
   const filteredEvents = useMemo(() => {
@@ -345,10 +345,7 @@ function ApplicationTimelineCard({
   events: ActivityEvent[];
   countryNameByCode: Map<string, string>;
   userNameById: Map<string, User>;
-  humanizerContext: {
-    countryNameByCode: Map<string, string>;
-    userNameById: Map<string, User>;
-  };
+  humanizerContext: HumanizerContext;
 }) {
   const ownerProfile = application
     ? userNameById.get(application.userId)
@@ -359,14 +356,33 @@ function ApplicationTimelineCard({
   const status = (application?.status ?? "DRAFT") as ApplicationStatus;
   const paymentStatus = application?.paymentStatus ?? "UNPAID";
 
+  // The applicants are the travellers on the application (not the account holder,
+  // who may be booking on someone else's behalf). Drafts may carry blank/placeholder
+  // names, so filter those out and fall back to the account identity.
+  const travellerNames = (application?.travellers ?? [])
+    .map((traveller) => traveller.fullName.trim())
+    .filter((name) => name.length > 0 && name !== "PENDING");
+  const accountIdentity =
+    ownerProfile?.fullName ??
+    ownerProfile?.email ??
+    shortId(application?.userId ?? "unknown");
+  const applicantLabel =
+    travellerNames.length === 0
+      ? accountIdentity
+      : travellerNames.length <= 2
+        ? travellerNames.join(", ")
+        : `${travellerNames[0]} +${travellerNames.length - 1} more`;
+
   return (
     <article className="rounded-2xl border border-line bg-paper overflow-hidden">
       <header className="border-b border-line bg-mist/50 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
         <div>
-          <p className="font-bold">{countryName}</p>
+          <p className="font-bold">
+            {countryName} · {applicantLabel}
+          </p>
           <p className="text-xs text-ink-soft">
-            {ownerProfile?.fullName ?? shortId(application?.userId ?? "unknown")}
-            {ownerProfile?.email ? ` · ${ownerProfile.email}` : ""}
+            booked by {ownerProfile?.email ?? accountIdentity}
+            {travellerNames.length > 1 ? ` · ${travellerNames.length} travellers` : ""}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">

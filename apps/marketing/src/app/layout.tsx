@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Figtree, Spline_Sans_Mono } from "next/font/google";
+import { AnnouncementRibbon } from "@/components/AnnouncementRibbon";
 import "./globals.css";
 
 const bricolage = Bricolage_Grotesque({
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className={`${bricolage.variable} ${figtree.variable} ${splineMono.variable}`}>
+        <AnnouncementRibbon />
         {children}
       </body>
     </html>

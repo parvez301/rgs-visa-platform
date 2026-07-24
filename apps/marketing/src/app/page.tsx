@@ -17,10 +17,10 @@ export default function HomePage() {
         <Hero />
         <HomeLeadForm />
         <CountryGrid />
+        <HomeNoticesStrip />
         <HowItWorks />
         <Services />
         <Testimonials />
-        <HomeNoticesStrip />
         <CtaBand />
       </main>
       <SiteFooter />

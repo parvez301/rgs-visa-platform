@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { Link, useParams } from "react-router";
+import type { Application } from "@rgs/shared";
 import { AdminShell } from "../components/AdminShell";
 import { eventToSentence } from "../lib/activityHumanizer";
 import { adminApi } from "../lib/adminApi";
@@ -56,7 +57,9 @@ export function UserActivityPage() {
   }, [countriesQuery.data]);
 
   const humanizerContext = useMemo(
-    () => ({ countryNameByCode, userNameById }),
+    // This page does not load applications, so traveller names can't be
+    // resolved here — doc events fall back to "(traveller N)".
+    () => ({ countryNameByCode, userNameById, applicationById: new Map<string, Application>() }),
     [countryNameByCode, userNameById],
   );
 

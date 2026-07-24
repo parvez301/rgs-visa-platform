@@ -21,68 +21,45 @@ function apiBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_URL ?? "";
 }
 
-function cacheKeyForScope(countryCode?: string): string {
-  return countryCode ? `rgs.notices.${countryCode}` : "rgs.notices.all";
+function scopeKey(countryCode?: string): string {
+  return countryCode ?? "all";
 }
 
-function readCachedNotices(countryCode?: string): PublicNotice[] | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const rawJson = sessionStorage.getItem(cacheKeyForScope(countryCode));
-    if (!rawJson) return null;
-    return JSON.parse(rawJson) as PublicNotice[];
-  } catch {
-    return null;
-  }
-}
-
-function writeCachedNotices(notices: PublicNotice[], countryCode?: string): void {
-  try {
-    sessionStorage.setItem(cacheKeyForScope(countryCode), JSON.stringify(notices));
-  } catch {
-    // ignore quota / private mode
-  }
-}
-
+// Notices are small and change whenever an admin publishes — we deliberately do
+// NOT cache them in sessionStorage (unlike the country catalog), so a freshly
+// published or edited notice appears on the next page view. The in-flight map
+// only dedupes concurrent fetches for the same scope within one page render
+// (e.g. the top ribbon and the home strip both requesting the "all" feed).
 const inFlightFetches = new Map<string, Promise<PublicNotice[]>>();
 
 async function fetchNotices(countryCode?: string): Promise<PublicNotice[]> {
-  const scopeKey = cacheKeyForScope(countryCode);
-  const cached = readCachedNotices(countryCode);
-  if (cached) return cached;
-
-  const existingInFlight = inFlightFetches.get(scopeKey);
+  const key = scopeKey(countryCode);
+  const existingInFlight = inFlightFetches.get(key);
   if (existingInFlight) return existingInFlight;
 
   const baseUrl = apiBaseUrl();
   if (!baseUrl) return [];
 
   const querySuffix =
-    countryCode !== undefined
-      ? `?countryCode=${encodeURIComponent(countryCode)}`
-      : "";
+    countryCode !== undefined ? `?countryCode=${encodeURIComponent(countryCode)}` : "";
 
   const fetchPromise = fetch(`${baseUrl}/api/v1/notices${querySuffix}`)
     .then(async (response) => {
       if (!response.ok) return [] as PublicNotice[];
-      const notices = (await response.json()) as PublicNotice[];
-      writeCachedNotices(notices, countryCode);
-      return notices;
+      return (await response.json()) as PublicNotice[];
     })
     .catch(() => [] as PublicNotice[])
     .finally(() => {
-      inFlightFetches.delete(scopeKey);
+      inFlightFetches.delete(key);
     });
 
-  inFlightFetches.set(scopeKey, fetchPromise);
+  inFlightFetches.set(key, fetchPromise);
   return fetchPromise;
 }
 
-/** Fetches published notices (sessionStorage-cached per country scope). */
+/** Fetches published notices fresh on every mount (no cross-session cache). */
 export function useNotices(countryCode?: string): PublicNotice[] | null {
-  const [liveNotices, setLiveNotices] = useState<PublicNotice[] | null>(() =>
-    readCachedNotices(countryCode),
-  );
+  const [liveNotices, setLiveNotices] = useState<PublicNotice[] | null>(null);
 
   useEffect(() => {
     let isMounted = true;
