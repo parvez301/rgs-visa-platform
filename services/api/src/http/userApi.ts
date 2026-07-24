@@ -19,6 +19,7 @@ import {
 import { CreateLeadSchema, createLead } from "../domain/leads";
 import { listActiveCountryConfig } from "../domain/config";
 import { ensureUserProfile, getUserProfile } from "../domain/users";
+import { listPublicNotices } from "../domain/notices";
 import { Router, parseBody, type RequestContext } from "./router";
 
 const CreateDraftSchema = z.object({ countryCode: z.string().regex(/^[A-Z]{2}$/) });
@@ -149,5 +150,16 @@ export function buildUserRouter(context: AppContext): Router {
     // Public: live catalog for marketing site + portal (no auth)
     .add("GET", "/api/v1/config/countries", async () => {
       return listActiveCountryConfig(context);
+    })
+    .add("GET", "/api/v1/notices", async (requestContext) => {
+      const countryCode = requestContext.queryParams["countryCode"];
+      if (countryCode !== undefined) {
+        const parsedCountryCode = z
+          .string()
+          .regex(/^[A-Z]{2}$/)
+          .parse(countryCode);
+        return listPublicNotices(context, { countryCode: parsedCountryCode });
+      }
+      return listPublicNotices(context);
     });
 }

@@ -19,6 +19,11 @@ import {
   upsertCountryProduct,
 } from "../domain/config";
 import { listUserProfiles } from "../domain/users";
+import {
+  deleteNotice,
+  listNotices,
+  upsertNotice,
+} from "../domain/notices";
 import { Router, parseBody, type RequestContext } from "./router";
 
 const TransitionSchema = z.object({
@@ -153,6 +158,19 @@ export function buildAdminRouter(context: AppContext): Router {
     .add("GET", "/api/v1/admin/users", async (requestContext) => {
       requireAdmin(requestContext);
       return listUserProfiles(context);
+    })
+    .add("GET", "/api/v1/admin/notices", async (requestContext) => {
+      requireAdmin(requestContext);
+      return listNotices(context);
+    })
+    .add("PUT", "/api/v1/admin/notices", async (requestContext) => {
+      const { adminEmail } = requireAdmin(requestContext);
+      return upsertNotice(context, adminEmail, requestContext.body);
+    })
+    .add("DELETE", "/api/v1/admin/notices/{noticeId}", async (requestContext) => {
+      requireAdmin(requestContext);
+      await deleteNotice(context, requestContext.pathParams["noticeId"]!);
+      return { deleted: true };
     })
     // Country config management: docs, fees, timelines — admin-editable
     .add("GET", "/api/v1/admin/config/countries", async (requestContext) => {
