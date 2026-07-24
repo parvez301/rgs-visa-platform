@@ -32,23 +32,26 @@ export const PAYMENT_LABELS: Record<PaymentStatus, string> = {
   PAID_OFFLINE: "Paid",
 };
 
+/** Who owes the next step — remappable in one place (handoff D5). */
 export const STATUS_BUCKETS = [
   {
     key: "NEEDS_ACTION",
     label: "Needs your action",
     accent: "attention",
-    statuses: ["SUBMITTED", "DOCS_VERIFIED", "APPROVED"],
+    statuses: ["SUBMITTED", "DOCS_VERIFIED", "APPROVED"] as const,
   },
   {
     key: "IN_PROGRESS",
     label: "In progress",
     accent: "neutral",
-    statuses: ["DRAFT", "SENT_TO_IMMIGRATION"],
+    statuses: ["DRAFT", "SENT_TO_IMMIGRATION"] as const,
   },
   {
     key: "DONE",
     label: "Done",
     accent: "positive",
-    statuses: ["DELIVERED", "REJECTED"],
+    statuses: ["DELIVERED", "REJECTED"] as const,
   },
 ] as const;
+
+export type StatusBucket = (typeof STATUS_BUCKETS)[number];
