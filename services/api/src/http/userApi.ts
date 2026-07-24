@@ -18,9 +18,16 @@ import {
 } from "../domain/documents";
 import { CreateLeadSchema, createLead } from "../domain/leads";
 import { listActiveCountryConfig } from "../domain/config";
+import { ensureUserProfile, getUserProfile } from "../domain/users";
+import { listPublicNotices } from "../domain/notices";
 import { Router, parseBody, type RequestContext } from "./router";
 
 const CreateDraftSchema = z.object({ countryCode: z.string().regex(/^[A-Z]{2}$/) });
+
+const EnsureMeSchema = z.object({
+  fullName: z.string().min(1).optional(),
+  phone: z.string().optional(),
+});
 
 const PresignSchema = z.object({
   docType: z.enum(DOC_TYPES),
@@ -39,10 +46,21 @@ function requireUser(requestContext: RequestContext): { userId: string; email: s
 
 export function buildUserRouter(context: AppContext): Router {
   return new Router()
+    .add("POST", "/api/v1/me", async (requestContext) => {
+      const { userId, email } = requireUser(requestContext);
+      const body = parseBody(EnsureMeSchema, requestContext.body ?? {});
+      return ensureUserProfile(context, userId, email, body);
+    })
+    .add("GET", "/api/v1/me", async (requestContext) => {
+      const { userId, email } = requireUser(requestContext);
+      const existingProfile = await getUserProfile(context, userId);
+      if (existingProfile) return existingProfile;
+      return ensureUserProfile(context, userId, email);
+    })
     .add("POST", "/api/v1/applications", async (requestContext) => {
-      const { userId } = requireUser(requestContext);
+      const { userId, email } = requireUser(requestContext);
       const input = parseBody(CreateDraftSchema, requestContext.body);
-      return createDraft(context, userId, input.countryCode);
+      return createDraft(context, userId, input.countryCode, email);
     })
     .add("GET", "/api/v1/applications", async (requestContext) => {
       const { userId } = requireUser(requestContext);
@@ -59,9 +77,15 @@ export function buildUserRouter(context: AppContext): Router {
       return { application, documents };
     })
     .add("PATCH", "/api/v1/applications/{applicationId}", async (requestContext) => {
-      const { userId } = requireUser(requestContext);
+      const { userId, email } = requireUser(requestContext);
       const patch = parseBody(PatchDraftSchema, requestContext.body);
-      return patchDraft(context, userId, requestContext.pathParams["applicationId"]!, patch);
+      return patchDraft(
+        context,
+        userId,
+        requestContext.pathParams["applicationId"]!,
+        patch,
+        email,
+      );
     })
     .add("POST", "/api/v1/applications/{applicationId}/submit", async (requestContext) => {
       const { userId, email } = requireUser(requestContext);
@@ -89,7 +113,7 @@ export function buildUserRouter(context: AppContext): Router {
       },
     )
     .add("POST", "/api/v1/applications/{applicationId}/documents", async (requestContext) => {
-      const { userId } = requireUser(requestContext);
+      const { userId, email } = requireUser(requestContext);
       const input = parseBody(RecordUploadSchema, requestContext.body);
       return recordDocumentUpload(
         context,
@@ -98,6 +122,7 @@ export function buildUserRouter(context: AppContext): Router {
         input.docType,
         input.travellerIndex,
         input.objectKey,
+        email,
       );
     })
     .add(
@@ -125,5 +150,16 @@ export function buildUserRouter(context: AppContext): Router {
     // Public: live catalog for marketing site + portal (no auth)
     .add("GET", "/api/v1/config/countries", async () => {
       return listActiveCountryConfig(context);
+    })
+    .add("GET", "/api/v1/notices", async (requestContext) => {
+      const countryCode = requestContext.queryParams["countryCode"];
+      if (countryCode !== undefined) {
+        const parsedCountryCode = z
+          .string()
+          .regex(/^[A-Z]{2}$/)
+          .parse(countryCode);
+        return listPublicNotices(context, { countryCode: parsedCountryCode });
+      }
+      return listPublicNotices(context);
     });
 }

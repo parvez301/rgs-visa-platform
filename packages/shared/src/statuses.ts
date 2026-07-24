@@ -43,5 +43,18 @@ export const ACTIVITY_EVENT_TYPES = [
   "PAYMENT_MARKED_PAID",
   "LEAD_CREATED",
   "CONFIG_CHANGED",
+  "NOTICE_PUBLISHED",
 ] as const;
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
+
+export const ACTIVITY_ACTOR_ROLES = ["user", "admin", "system"] as const;
+export type ActivityActorRole = (typeof ACTIVITY_ACTOR_ROLES)[number];
+
+export const NOTICE_CATEGORIES = ["RULE_CHANGE", "FEE_UPDATE", "GENERAL", "ALERT"] as const;
+export type NoticeCategory = (typeof NOTICE_CATEGORIES)[number];
+
+export const NOTICE_SEVERITIES = ["INFO", "IMPORTANT", "URGENT"] as const;
+export type NoticeSeverity = (typeof NOTICE_SEVERITIES)[number];
+
+export const NOTICE_STATUSES = ["DRAFT", "PUBLISHED", "ARCHIVED"] as const;
+export type NoticeStatus = (typeof NOTICE_STATUSES)[number];

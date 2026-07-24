@@ -5,6 +5,7 @@ import { CountryGrid } from "@/components/CountryGrid";
 import { HowItWorks } from "@/components/HowItWorks";
 import { Services } from "@/components/Services";
 import { Testimonials } from "@/components/Testimonials";
+import { HomeNoticesStrip } from "@/components/HomeNoticesStrip";
 import { CtaBand } from "@/components/CtaBand";
 import { SiteFooter } from "@/components/SiteFooter";
 
@@ -19,6 +20,7 @@ export default function HomePage() {
         <HowItWorks />
         <Services />
         <Testimonials />
+        <HomeNoticesStrip />
         <CtaBand />
       </main>
       <SiteFooter />

@@ -8,3 +8,7 @@ cdk.out/
 coverage/
 .DS_Store
 .worktrees/
+*.tsbuildinfo
+# auto-generated claude-mem context files (swept into HANDOFF-3 by mistake)
+apps/marketing/src/lib/CLAUDE.md
+packages/shared/src/CLAUDE.md

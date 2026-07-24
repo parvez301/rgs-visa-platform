@@ -10,6 +10,12 @@ import {
 import { AdminShell } from "../components/AdminShell";
 import { adminApi } from "../lib/adminApi";
 import { useAuth } from "../lib/auth";
+import {
+  PAYMENT_LABELS,
+  STATUS_BUCKETS,
+  STATUS_LABELS,
+  type StatusBucket,
+} from "../lib/labels";
 
 const PAYMENT_CHIP_CLASSES: Record<PaymentStatus, string> = {
   UNPAID: "bg-amber-100 text-amber-900",
@@ -93,6 +99,18 @@ export function QueuePage() {
     return ageMs > 24 * 60 * 60 * 1000;
   }).length;
 
+  const paymentCounts = useMemo(() => {
+    const counts: Record<PaymentStatus, number> = {
+      UNPAID: 0,
+      REQUESTED: 0,
+      PAID_OFFLINE: 0,
+    };
+    for (const application of allApplications) {
+      counts[application.paymentStatus] += 1;
+    }
+    return counts;
+  }, [allApplications]);
+
   const signupsThisWeek = (activityWeekQuery.data ?? []).filter(
     (activityEvent) => activityEvent.eventType === "SIGNED_UP",
   ).length;
@@ -115,17 +133,30 @@ export function QueuePage() {
         <p className="mt-1 text-ink-soft">Review submissions and advance each case.</p>
       </div>
 
-      <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricTile label="Signups this week" value={String(signupsThisWeek)} />
-        <MetricTile
-          label="Applications by status"
-          value={APPLICATION_STATUSES.map(
-            (status) => `${status.slice(0, 3)} ${countsByStatus[status] ?? 0}`,
-          ).join(" · ")}
-          compact
+      <div className="mb-8 grid gap-3 lg:grid-cols-3">
+        {STATUS_BUCKETS.map((statusBucket) => (
+          <StatusBucketCard
+            key={statusBucket.key}
+            statusBucket={statusBucket}
+            countsByStatus={countsByStatus}
+            abandonedDraftCount={abandonedDraftCount}
+            selectedStatus={selectedStatus}
+            onSelectStatus={setSelectedStatus}
+          />
+        ))}
+      </div>
+
+      <div className="mb-8 grid gap-3 sm:grid-cols-3">
+        <SecondaryTile
+          label="Payment"
+          value={[
+            `${PAYMENT_LABELS.UNPAID} ${paymentCounts.UNPAID}`,
+            `${PAYMENT_LABELS.REQUESTED} ${paymentCounts.REQUESTED}`,
+            `${PAYMENT_LABELS.PAID_OFFLINE} ${paymentCounts.PAID_OFFLINE}`,
+          ].join(" · ")}
         />
-        <MetricTile label="Abandoned drafts (>24h)" value={String(abandonedDraftCount)} />
-        <MetricTile label="New leads" value={String(newLeadsCount)} />
+        <SecondaryTile label="New leads" value={String(newLeadsCount)} />
+        <SecondaryTile label="Signups this week" value={String(signupsThisWeek)} />
       </div>
 
       <div className="mb-6 flex flex-wrap gap-2">
@@ -183,10 +214,10 @@ export function QueuePage() {
                     <span
                       className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${PAYMENT_CHIP_CLASSES[application.paymentStatus]}`}
                     >
-                      {application.paymentStatus}
+                      {PAYMENT_LABELS[application.paymentStatus]}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-xs font-medium">{application.status}</td>
+                      {STATUS_LABELS[application.status]}
                 </tr>
               ))}
               {filteredApplications.length === 0 && (
@@ -231,21 +262,75 @@ function StatusTab({
   );
 }
 
-function MetricTile({
-  label,
-  value,
-  compact = false,
+const BUCKET_ACCENT_CLASSES: Record<StatusBucket["accent"], string> = {
+  attention: "border-l-rgs-red",
+  neutral: "border-l-ink/40",
+  positive: "border-l-emerald-500",
+};
+
+function StatusBucketCard({
+  statusBucket,
+  countsByStatus,
+  abandonedDraftCount,
+  selectedStatus,
+  onSelectStatus,
 }: {
-  label: string;
-  value: string;
-  compact?: boolean;
+  statusBucket: StatusBucket;
+  countsByStatus: Partial<Record<ApplicationStatus, number>>;
+  abandonedDraftCount: number;
+  selectedStatus: ApplicationStatus | "ALL";
+  onSelectStatus: (status: ApplicationStatus) => void;
 }) {
+  const bucketTotal = statusBucket.statuses.reduce(
+    (runningTotal, status) => runningTotal + (countsByStatus[status] ?? 0),
+    0,
+  );
+
+  return (
+    <div
+      className={`rounded-2xl border border-line border-l-4 bg-paper p-4 ${BUCKET_ACCENT_CLASSES[statusBucket.accent]}`}
+    >
+      <p className="mrz text-[10px] text-ink-soft mb-1">{statusBucket.label}</p>
+      <p className="text-3xl font-bold mb-3">{bucketTotal}</p>
+      <ul className="space-y-1">
+        {statusBucket.statuses.map((status) => {
+          const statusCount = countsByStatus[status] ?? 0;
+          const isActive = selectedStatus === status;
+          return (
+            <li key={status}>
+              <button
+                type="button"
+                onClick={() => onSelectStatus(status)}
+                className={`w-full rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
+                  isActive ? "bg-ink text-paper" : "hover:bg-mist text-ink"
+                }`}
+              >
+                <span className="font-medium">{STATUS_LABELS[status]}</span>
+                <span className={isActive ? "text-paper/80" : "text-ink-soft"}>
+                  {" "}
+                  — {statusCount}
+                </span>
+                {status === "DRAFT" && abandonedDraftCount > 0 ? (
+                  <span
+                    className={`ml-1 text-xs ${isActive ? "text-paper/70" : "text-ink-soft"}`}
+                  >
+                    · {abandonedDraftCount} idle &gt;24h
+                  </span>
+                ) : null}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function SecondaryTile({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-line bg-paper p-4">
       <p className="mrz text-[10px] text-ink-soft mb-2">{label}</p>
-      <p className={compact ? "text-xs font-semibold leading-relaxed" : "text-3xl font-bold"}>
-        {value}
-      </p>
+      <p className="text-sm font-semibold leading-relaxed">{value}</p>
     </div>
   );
 }

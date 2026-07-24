@@ -10,7 +10,7 @@ import { buildTestContext } from "./helpers";
 describe("presignDocumentUpload", () => {
   it("issues a scoped upload URL for a checklist document", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     const presignResult = await presignDocumentUpload(
       context,
       "user_1",
@@ -27,7 +27,7 @@ describe("presignDocumentUpload", () => {
 
   it("rejects documents not on the country checklist", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await expect(
       presignDocumentUpload(
         context,
@@ -42,7 +42,7 @@ describe("presignDocumentUpload", () => {
 
   it("rejects out-of-range traveller index and bad content types", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await expect(
       presignDocumentUpload(context, "user_1", draft.applicationId, "PHOTO", 5, "image/jpeg"),
     ).rejects.toMatchObject({ statusCode: 400 });
@@ -60,7 +60,7 @@ describe("presignDocumentUpload", () => {
 
   it("refuses presigning for someone else's application", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await expect(
       presignDocumentUpload(
         context,
@@ -77,7 +77,7 @@ describe("presignDocumentUpload", () => {
 describe("recordDocumentUpload", () => {
   it("stores a PENDING document and logs activity", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     const recordedDocument = await recordDocumentUpload(
       context,
       "user_1",
@@ -85,13 +85,14 @@ describe("recordDocumentUpload", () => {
       "PHOTO",
       0,
       `applications/${draft.applicationId}/traveller-0/PHOTO.png`,
+      "user_1@example.com",
     );
     expect(recordedDocument.reviewStatus).toBe("PENDING");
   });
 
   it("rejects object keys outside the presigned location", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await expect(
       recordDocumentUpload(
         context,
@@ -100,6 +101,7 @@ describe("recordDocumentUpload", () => {
         "PHOTO",
         0,
         "applications/some-other-app/traveller-0/PHOTO.png",
+        "user_1@example.com",
       ),
     ).rejects.toThrow(/does not match the presigned location/);
   });
@@ -108,7 +110,7 @@ describe("recordDocumentUpload", () => {
 describe("presignOwnedDocumentDownload", () => {
   it("returns a download URL for the owner and 404 for others", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await recordDocumentUpload(
       context,
       "user_1",
@@ -116,6 +118,7 @@ describe("presignOwnedDocumentDownload", () => {
       "PHOTO",
       0,
       `applications/${draft.applicationId}/traveller-0/PHOTO.png`,
+      "user_1@example.com",
     );
     const downloadUrl = await presignOwnedDocumentDownload(
       context,

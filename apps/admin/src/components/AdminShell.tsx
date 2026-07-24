@@ -6,6 +6,7 @@ const NAV_LINKS = [
   { label: "Queue", to: "/" },
   { label: "Activity", to: "/activity" },
   { label: "Leads", to: "/leads" },
+  { label: "Notices", to: "/notices" },
   { label: "Config", to: "/config" },
 ] as const;
 

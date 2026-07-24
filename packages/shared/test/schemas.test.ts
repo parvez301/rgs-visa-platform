@@ -3,6 +3,7 @@ import {
   ApplicationSchema,
   ApplicationDocumentSchema,
   ActivityEventSchema,
+  NoticeSchema,
   TravellerSchema,
   UserSchema,
 } from "../src/schemas";
@@ -40,6 +41,16 @@ describe("UserSchema", () => {
       createdAt: "2026-07-23T10:00:00.000Z",
     });
     expect(parsed.email).toBe("asha@example.com");
+  });
+
+  it("accepts a user without phone (email-only signup)", () => {
+    const parsed = UserSchema.parse({
+      userId: "user_01J3ZTEST000000000000000",
+      email: "asha@example.com",
+      fullName: "asha",
+      createdAt: "2026-07-23T10:00:00.000Z",
+    });
+    expect(parsed.phone).toBeUndefined();
   });
 
   it("rejects an invalid email", () => {
@@ -165,6 +176,45 @@ describe("ActivityEventSchema", () => {
     expect(parsed.eventType).toBe("SIGNED_UP");
   });
 
+  it("accepts legacy events without actorEmail or actorRole", () => {
+    const parsed = ActivityEventSchema.parse({
+      eventId: "evt_01J3ZTEST0000000000000000",
+      eventType: "SUBMITTED",
+      userId: "user_01J3ZTEST000000000000000",
+      applicationId: "app_01J3ZTEST0000000000000000",
+      createdAt: "2026-07-23T10:00:00.000Z",
+      meta: { countryCode: "AE" },
+    });
+    expect(parsed.actorEmail).toBeUndefined();
+    expect(parsed.actorRole).toBeUndefined();
+  });
+
+  it("accepts events stamped with actor identity", () => {
+    const parsed = ActivityEventSchema.parse({
+      eventId: "evt_01J3ZTEST0000000000000000",
+      eventType: "NOTICE_PUBLISHED",
+      userId: "admin@example.com",
+      createdAt: "2026-07-23T10:00:00.000Z",
+      meta: { noticeId: "ntc_1", title: "UAE fee change" },
+      actorEmail: "admin@example.com",
+      actorRole: "admin",
+    });
+    expect(parsed.actorEmail).toBe("admin@example.com");
+    expect(parsed.actorRole).toBe("admin");
+  });
+
+  it("rejects an unknown actorRole", () => {
+    const result = ActivityEventSchema.safeParse({
+      eventId: "evt_1",
+      eventType: "SIGNED_UP",
+      userId: "user_1",
+      createdAt: "2026-07-23T10:00:00.000Z",
+      meta: {},
+      actorRole: "owner",
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects an unknown event type", () => {
     const result = ActivityEventSchema.safeParse({
       eventId: "evt_1",
@@ -174,5 +224,35 @@ describe("ActivityEventSchema", () => {
       meta: {},
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("NoticeSchema", () => {
+  const validNotice = {
+    noticeId: "ntc_01J3ZTEST0000000000000000",
+    title: "UAE fee update",
+    body: "Government fee increases from 1 August.",
+    category: "FEE_UPDATE",
+    severity: "IMPORTANT",
+    createdAt: "2026-07-23T10:00:00.000Z",
+    updatedAt: "2026-07-23T10:00:00.000Z",
+  };
+
+  it("accepts a valid notice and applies pinned/status defaults", () => {
+    const parsed = NoticeSchema.parse(validNotice);
+    expect(parsed.pinned).toBe(false);
+    expect(parsed.status).toBe("DRAFT");
+  });
+
+  it("rejects a title shorter than 3 characters", () => {
+    expect(
+      NoticeSchema.safeParse({ ...validNotice, title: "Hi" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a bad countryCode", () => {
+    expect(
+      NoticeSchema.safeParse({ ...validNotice, countryCode: "uae" }).success,
+    ).toBe(false);
   });
 });

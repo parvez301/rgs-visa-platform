@@ -130,6 +130,34 @@ describe("admin API routing", () => {
     expect(Array.isArray(result.payload)).toBe(true);
   });
 
+  it("lists user profiles for activity name resolution", async () => {
+    const context = buildTestContext();
+    const userRouter = buildUserRouter(context);
+    await userRouter.dispatch(
+      makeEvent("POST", "/api/v1/me", {
+        body: { fullName: "Priya Sharma" },
+        sub: "user_1",
+        email: "priya@example.com",
+      }),
+    );
+    const adminRouter = buildAdminRouter(context);
+    const result = parseResult(
+      await adminRouter.dispatch(
+        makeEvent("GET", "/api/v1/admin/users", {
+          sub: "admin_1",
+          email: "admin@example.com",
+        }),
+      ),
+    );
+    expect(result.statusCode).toBe(200);
+    const profiles = result.payload as Array<{ userId: string; fullName: string }>;
+    expect(profiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ userId: "user_1", fullName: "Priya Sharma" }),
+      ]),
+    );
+  });
+
   it("rejects unauthenticated admin calls", async () => {
     const context = buildTestContext();
     const adminRouter = buildAdminRouter(context);

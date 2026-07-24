@@ -61,6 +61,7 @@ const PAYMENT_TRANSITIONS: Record<PaymentStatus, readonly PaymentStatus[]> = {
 export async function setPaymentStatus(
   context: AppContext,
   adminId: string,
+  adminEmail: string,
   applicationId: string,
   toPaymentStatus: PaymentStatus,
   userEmail: string,
@@ -79,10 +80,16 @@ export async function setPaymentStatus(
   await context.table.put(applicationToItem(updatedApplication));
   const eventType =
     toPaymentStatus === "REQUESTED" ? "PAYMENT_REQUESTED" : "PAYMENT_MARKED_PAID";
-  await logActivity(context, eventType, application.userId, applicationId, {
-    actor: adminId,
-  });
-  if (toPaymentStatus === "REQUESTED") {
+  await logActivity(
+    context,
+    eventType,
+    application.userId,
+    applicationId,
+    {
+      actor: adminId,
+    },
+    { actorEmail: adminEmail, actorRole: "admin" },
+  );  if (toPaymentStatus === "REQUESTED") {
     const totalAmountInr =
       application.amounts.governmentFeeInr + application.amounts.serviceFeeInr;
     await context.email.send({
@@ -101,6 +108,7 @@ export async function setPaymentStatus(
 export async function transitionApplication(
   context: AppContext,
   adminId: string,
+  adminEmail: string,
   applicationId: string,
   toStatus: ApplicationStatus,
   userEmail: string,
@@ -125,13 +133,19 @@ export async function transitionApplication(
     updatedAt: context.now().toISOString(),
   };
   await context.table.put(applicationToItem(updatedApplication));
-  await logActivity(context, "STATUS_CHANGED", application.userId, applicationId, {
-    ...meta,
-    actor: adminId,
-    fromStatus: application.status,
-    toStatus,
-  });
-
+  await logActivity(
+    context,
+    "STATUS_CHANGED",
+    application.userId,
+    applicationId,
+    {
+      ...meta,
+      actor: adminId,
+      fromStatus: application.status,
+      toStatus,
+    },
+    { actorEmail: adminEmail, actorRole: "admin" },
+  );
   const statusMessages: Partial<Record<ApplicationStatus, string>> = {
     DOCS_VERIFIED: "Your documents have been verified by our team.",
     SENT_TO_IMMIGRATION: "Your application has been submitted to immigration.",
@@ -154,6 +168,7 @@ export async function transitionApplication(
 export async function reviewDocument(
   context: AppContext,
   adminId: string,
+  adminEmail: string,
   applicationId: string,
   docType: DocType,
   travellerIndex: number,
@@ -184,13 +199,19 @@ export async function reviewDocument(
     SK: `DOC#${docType}#${travellerIndex}`,
     ...reviewedDocument,
   });
-  await logActivity(context, "DOC_REVIEWED", application.userId, applicationId, {
-    actor: adminId,
-    docType,
-    travellerIndex,
-    decision,
-  });
-  if (decision === "REJECTED") {
+  await logActivity(
+    context,
+    "DOC_REVIEWED",
+    application.userId,
+    applicationId,
+    {
+      actor: adminId,
+      docType,
+      travellerIndex,
+      decision,
+    },
+    { actorEmail: adminEmail, actorRole: "admin" },
+  );  if (decision === "REJECTED") {
     await context.email.send({
       toAddress: userEmail,
       subject: `Action needed — re-upload a document (${application.countryCode} visa)`,

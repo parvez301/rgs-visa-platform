@@ -48,12 +48,19 @@ export async function createSubmittableUaeDraft(
   context: TestContext,
   userId = "user_1",
 ): Promise<string> {
-  const draft = await createDraft(context, userId, "AE");
-  await patchDraft(context, userId, draft.applicationId, {
-    travellers: [completeTraveller],
-    essentials: completeEssentials,
-    stepReached: "review",
-  });
+  const userEmail = `${userId}@example.com`;
+  const draft = await createDraft(context, userId, "AE", userEmail);
+  await patchDraft(
+    context,
+    userId,
+    draft.applicationId,
+    {
+      travellers: [completeTraveller],
+      essentials: completeEssentials,
+      stepReached: "review",
+    },
+    userEmail,
+  );
   for (const docType of ["PASSPORT_BIO", "PHOTO"] as const) {
     await recordDocumentUpload(
       context,
@@ -62,6 +69,7 @@ export async function createSubmittableUaeDraft(
       docType,
       0,
       `applications/${draft.applicationId}/traveller-0/${docType}.jpg`,
+      userEmail,
     );
   }
   return draft.applicationId;

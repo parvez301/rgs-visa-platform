@@ -1,4 +1,4 @@
-import type { ActivityEvent, ActivityEventType } from "@rgs/shared";
+import type { ActivityEvent, ActivityEventType, ActivityActorRole } from "@rgs/shared";
 import type { TableClient } from "./db";
 import type { DocumentStore } from "./documentStore";
 import type { EmailSender } from "./email";
@@ -19,6 +19,7 @@ export async function logActivity(
   userId: string,
   applicationId: string | undefined,
   meta: Record<string, string | number | boolean> = {},
+  actor?: { actorEmail?: string; actorRole?: ActivityActorRole },
 ): Promise<ActivityEvent> {
   const createdAtDate = context.now();
   const createdAt = createdAtDate.toISOString();
@@ -31,6 +32,8 @@ export async function logActivity(
     ...(applicationId !== undefined ? { applicationId } : {}),
     meta,
     createdAt,
+    ...(actor?.actorEmail !== undefined ? { actorEmail: actor.actorEmail } : {}),
+    ...(actor?.actorRole !== undefined ? { actorRole: actor.actorRole } : {}),
   };
   await context.table.put({
     PK: `EVENT#${dayBucket}`,

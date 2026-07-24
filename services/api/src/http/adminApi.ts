@@ -18,6 +18,12 @@ import {
   seedCountryConfig,
   upsertCountryProduct,
 } from "../domain/config";
+import { listUserProfiles } from "../domain/users";
+import {
+  deleteNotice,
+  listNotices,
+  upsertNotice,
+} from "../domain/notices";
 import { Router, parseBody, type RequestContext } from "./router";
 
 const TransitionSchema = z.object({
@@ -41,9 +47,12 @@ const ReviewDocumentSchema = z.object({
 
 const NoteSchema = z.object({ noteText: z.string().min(1).max(2000) });
 
-function requireAdmin(requestContext: RequestContext): string {
+function requireAdmin(requestContext: RequestContext): {
+  adminId: string;
+  adminEmail: string;
+} {
   if (!requestContext.callerId) throw forbidden("Admin sign in required");
-  return requestContext.callerId;
+  return { adminId: requestContext.callerId, adminEmail: requestContext.callerEmail };
 }
 
 export function buildAdminRouter(context: AppContext): Router {
@@ -66,11 +75,12 @@ export function buildAdminRouter(context: AppContext): Router {
       "POST",
       "/api/v1/admin/applications/{applicationId}/transition",
       async (requestContext) => {
-        const adminId = requireAdmin(requestContext);
+        const { adminId, adminEmail } = requireAdmin(requestContext);
         const input = parseBody(TransitionSchema, requestContext.body);
         return transitionApplication(
           context,
           adminId,
+          adminEmail,
           requestContext.pathParams["applicationId"]!,
           input.toStatus,
           input.userEmail,
@@ -81,11 +91,12 @@ export function buildAdminRouter(context: AppContext): Router {
       "POST",
       "/api/v1/admin/applications/{applicationId}/payment",
       async (requestContext) => {
-        const adminId = requireAdmin(requestContext);
+        const { adminId, adminEmail } = requireAdmin(requestContext);
         const input = parseBody(PaymentSchema, requestContext.body);
         return setPaymentStatus(
           context,
           adminId,
+          adminEmail,
           requestContext.pathParams["applicationId"]!,
           input.toPaymentStatus,
           input.userEmail,
@@ -109,11 +120,12 @@ export function buildAdminRouter(context: AppContext): Router {
       },
     )
     .add("POST", "/api/v1/admin/documents/review", async (requestContext) => {
-      const adminId = requireAdmin(requestContext);
+      const { adminId, adminEmail } = requireAdmin(requestContext);
       const input = parseBody(ReviewDocumentSchema, requestContext.body);
       return reviewDocument(
         context,
         adminId,
+        adminEmail,
         input.applicationId,
         input.docType,
         input.travellerIndex,
@@ -123,7 +135,7 @@ export function buildAdminRouter(context: AppContext): Router {
       );
     })
     .add("POST", "/api/v1/admin/applications/{applicationId}/notes", async (requestContext) => {
-      const adminId = requireAdmin(requestContext);
+      const { adminId } = requireAdmin(requestContext);
       const input = parseBody(NoteSchema, requestContext.body);
       return addInternalNote(
         context,
@@ -143,14 +155,31 @@ export function buildAdminRouter(context: AppContext): Router {
       requireAdmin(requestContext);
       return listNewLeads(context);
     })
+    .add("GET", "/api/v1/admin/users", async (requestContext) => {
+      requireAdmin(requestContext);
+      return listUserProfiles(context);
+    })
+    .add("GET", "/api/v1/admin/notices", async (requestContext) => {
+      requireAdmin(requestContext);
+      return listNotices(context);
+    })
+    .add("PUT", "/api/v1/admin/notices", async (requestContext) => {
+      const { adminEmail } = requireAdmin(requestContext);
+      return upsertNotice(context, adminEmail, requestContext.body);
+    })
+    .add("DELETE", "/api/v1/admin/notices/{noticeId}", async (requestContext) => {
+      requireAdmin(requestContext);
+      await deleteNotice(context, requestContext.pathParams["noticeId"]!);
+      return { deleted: true };
+    })
     // Country config management: docs, fees, timelines — admin-editable
     .add("GET", "/api/v1/admin/config/countries", async (requestContext) => {
       requireAdmin(requestContext);
       return listCountryConfig(context);
     })
     .add("PUT", "/api/v1/admin/config/countries", async (requestContext) => {
-      const adminId = requireAdmin(requestContext);
-      return upsertCountryProduct(context, adminId, requestContext.body);
+      const { adminId, adminEmail } = requireAdmin(requestContext);
+      return upsertCountryProduct(context, adminId, adminEmail, requestContext.body);
     })
     .add("POST", "/api/v1/admin/config/seed", async (requestContext) => {
       requireAdmin(requestContext);

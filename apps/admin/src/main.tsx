@@ -8,6 +8,7 @@ import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
 import { AuthPage } from "./pages/AuthPage";
 import { ConfigPage } from "./pages/ConfigPage";
 import { LeadsPage } from "./pages/LeadsPage";
+import { NoticesPage } from "./pages/NoticesPage";
 import { QueuePage } from "./pages/QueuePage";
 import { UserActivityPage } from "./pages/UserActivityPage";
 import "./styles.css";
@@ -73,6 +74,14 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   <ConfigPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/notices"
+              element={
+                <RequireAuth>
+                  <NoticesPage />
                 </RequireAuth>
               }
             />
