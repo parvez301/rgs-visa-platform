@@ -114,7 +114,7 @@ describe("config drives pricing and document rules", () => {
       governmentFeeInr: 9999,
       serviceFeeInr: 2001,
     });
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     expect(draft.amounts.governmentFeeInr).toBe(9999);
     expect(draft.amounts.serviceFeeInr).toBe(2001);
   });
@@ -125,7 +125,7 @@ describe("config drives pricing and document rules", () => {
       ...uaeSeed,
       docsRequired: ["PASSPORT_BIO", "PHOTO", "HOTEL_BOOKING"],
     });
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     const presignResult = await presignDocumentUpload(
       context,
       "user_1",

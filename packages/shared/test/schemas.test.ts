@@ -42,6 +42,16 @@ describe("UserSchema", () => {
     expect(parsed.email).toBe("asha@example.com");
   });
 
+  it("accepts a user without phone (email-only signup)", () => {
+    const parsed = UserSchema.parse({
+      userId: "user_01J3ZTEST000000000000000",
+      email: "asha@example.com",
+      fullName: "asha",
+      createdAt: "2026-07-23T10:00:00.000Z",
+    });
+    expect(parsed.phone).toBeUndefined();
+  });
+
   it("rejects an invalid email", () => {
     const result = UserSchema.safeParse({
       userId: "user_1",

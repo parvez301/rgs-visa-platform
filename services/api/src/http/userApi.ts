@@ -18,9 +18,15 @@ import {
 } from "../domain/documents";
 import { CreateLeadSchema, createLead } from "../domain/leads";
 import { listActiveCountryConfig } from "../domain/config";
+import { ensureUserProfile, getUserProfile } from "../domain/users";
 import { Router, parseBody, type RequestContext } from "./router";
 
 const CreateDraftSchema = z.object({ countryCode: z.string().regex(/^[A-Z]{2}$/) });
+
+const EnsureMeSchema = z.object({
+  fullName: z.string().min(1).optional(),
+  phone: z.string().optional(),
+});
 
 const PresignSchema = z.object({
   docType: z.enum(DOC_TYPES),
@@ -39,10 +45,21 @@ function requireUser(requestContext: RequestContext): { userId: string; email: s
 
 export function buildUserRouter(context: AppContext): Router {
   return new Router()
+    .add("POST", "/api/v1/me", async (requestContext) => {
+      const { userId, email } = requireUser(requestContext);
+      const body = parseBody(EnsureMeSchema, requestContext.body ?? {});
+      return ensureUserProfile(context, userId, email, body);
+    })
+    .add("GET", "/api/v1/me", async (requestContext) => {
+      const { userId, email } = requireUser(requestContext);
+      const existingProfile = await getUserProfile(context, userId);
+      if (existingProfile) return existingProfile;
+      return ensureUserProfile(context, userId, email);
+    })
     .add("POST", "/api/v1/applications", async (requestContext) => {
-      const { userId } = requireUser(requestContext);
+      const { userId, email } = requireUser(requestContext);
       const input = parseBody(CreateDraftSchema, requestContext.body);
-      return createDraft(context, userId, input.countryCode);
+      return createDraft(context, userId, input.countryCode, email);
     })
     .add("GET", "/api/v1/applications", async (requestContext) => {
       const { userId } = requireUser(requestContext);

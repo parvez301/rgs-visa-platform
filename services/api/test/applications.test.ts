@@ -16,7 +16,7 @@ import {
 describe("createDraft", () => {
   it("prices the draft from the country catalog and logs activity", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     expect(draft.status).toBe("DRAFT");
     expect(draft.amounts).toEqual({
       governmentFeeInr: 6500,
@@ -31,14 +31,14 @@ describe("createDraft", () => {
 
   it("rejects unknown countries", async () => {
     const context = buildTestContext();
-    await expect(createDraft(context, "user_1", "XX")).rejects.toThrow(
+    await expect(createDraft(context, "user_1", "XX", "user_1@example.com")).rejects.toThrow(
       "No visa product configured for country XX",
     );
   });
 
   it("rejects info-only / inactive countries with a helpful message", async () => {
     const context = buildTestContext();
-    await expect(createDraft(context, "user_1", "TH")).rejects.toThrow(
+    await expect(createDraft(context, "user_1", "TH", "user_1@example.com")).rejects.toThrow(
       /aren't available online yet/,
     );
   });
@@ -47,7 +47,7 @@ describe("createDraft", () => {
 describe("patchDraft", () => {
   it("updates travellers and logs step completion once per step change", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     const patched = await patchDraft(context, "user_1", draft.applicationId, {
       travellers: [completeTraveller],
       stepReached: "docs",
@@ -58,7 +58,7 @@ describe("patchDraft", () => {
 
   it("refuses edits to another user's application", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await expect(
       patchDraft(context, "user_2", draft.applicationId, { stepReached: "docs" }),
     ).rejects.toMatchObject({ statusCode: 404 });
@@ -92,7 +92,7 @@ describe("submitApplication", () => {
 
   it("blocks submission without essentials", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await patchDraft(context, "user_1", draft.applicationId, {
       travellers: [completeTraveller],
     });
@@ -103,7 +103,7 @@ describe("submitApplication", () => {
 
   it("blocks submission with placeholder traveller details", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await patchDraft(context, "user_1", draft.applicationId, {
       essentials: completeEssentials,
     });
@@ -114,7 +114,7 @@ describe("submitApplication", () => {
 
   it("blocks submission listing each missing document", async () => {
     const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE");
+    const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await patchDraft(context, "user_1", draft.applicationId, {
       travellers: [completeTraveller],
       essentials: completeEssentials,
@@ -133,11 +133,11 @@ describe("submitApplication", () => {
 describe("listMyApplications", () => {
   it("returns only the caller's applications", async () => {
     const context = buildTestContext();
-    await createDraft(context, "user_1", "AE");
+    await createDraft(context, "user_1", "AE", "user_1@example.com");
     context.advanceClock(1000);
-    await createDraft(context, "user_1", "TZ");
+    await createDraft(context, "user_1", "TZ", "user_1@example.com");
     context.advanceClock(1000);
-    await createDraft(context, "user_2", "ZM");
+    await createDraft(context, "user_2", "ZM", "user_2@example.com");
     const userOneApplications = await listMyApplications(context, "user_1");
     expect(userOneApplications).toHaveLength(2);
     expect(

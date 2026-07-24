@@ -15,6 +15,7 @@ import type { TableItem } from "../lib/db";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { newId } from "../lib/ids";
 import { resolveCountryProduct } from "./config";
+import { ensureUserProfile } from "./users";
 
 export function applicationToItem(application: Application): TableItem {
   return {
@@ -36,7 +37,9 @@ export async function createDraft(
   context: AppContext,
   userId: string,
   countryCode: string,
+  email: string,
 ): Promise<Application> {
+  await ensureUserProfile(context, userId, email);
   const countryProduct = await resolveCountryProduct(context, countryCode);
   if (!countryProduct.active || countryProduct.tier !== "FULFILLED") {
     throw badRequest(

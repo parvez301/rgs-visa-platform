@@ -48,7 +48,7 @@ export async function createSubmittableUaeDraft(
   context: TestContext,
   userId = "user_1",
 ): Promise<string> {
-  const draft = await createDraft(context, userId, "AE");
+  const draft = await createDraft(context, userId, "AE", `${userId}@example.com`);
   await patchDraft(context, userId, draft.applicationId, {
     travellers: [completeTraveller],
     essentials: completeEssentials,
