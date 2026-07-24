@@ -180,9 +180,22 @@ export class RgsPlatformStack extends cdk.Stack {
       methods: [apigwv2.HttpMethod.GET],
       integration: userIntegration,
     });
+    // Public notice board (marketing site reads this)
+    httpApi.addRoutes({
+      path: "/api/v1/notices",
+      methods: [apigwv2.HttpMethod.GET],
+      integration: userIntegration,
+    });
     // Authenticated user routes
     httpApi.addRoutes({
       path: "/api/v1/applications",
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration: userIntegration,
+      authorizer: usersAuthorizer,
+    });
+    // User profile bootstrap (persisted USER#…/PROFILE)
+    httpApi.addRoutes({
+      path: "/api/v1/me",
       methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
       integration: userIntegration,
       authorizer: usersAuthorizer,
@@ -204,6 +217,7 @@ export class RgsPlatformStack extends cdk.Stack {
         apigwv2.HttpMethod.GET,
         apigwv2.HttpMethod.POST,
         apigwv2.HttpMethod.PUT,
+        apigwv2.HttpMethod.DELETE,
       ],
       integration: adminIntegration,
       authorizer: adminsAuthorizer,
