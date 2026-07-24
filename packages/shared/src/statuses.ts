@@ -43,5 +43,9 @@ export const ACTIVITY_EVENT_TYPES = [
   "PAYMENT_MARKED_PAID",
   "LEAD_CREATED",
   "CONFIG_CHANGED",
+  "NOTICE_PUBLISHED",
 ] as const;
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
+
+export const ACTIVITY_ACTOR_ROLES = ["user", "admin", "system"] as const;
+export type ActivityActorRole = (typeof ACTIVITY_ACTOR_ROLES)[number];

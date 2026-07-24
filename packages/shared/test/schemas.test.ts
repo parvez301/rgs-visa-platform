@@ -165,6 +165,45 @@ describe("ActivityEventSchema", () => {
     expect(parsed.eventType).toBe("SIGNED_UP");
   });
 
+  it("accepts legacy events without actorEmail or actorRole", () => {
+    const parsed = ActivityEventSchema.parse({
+      eventId: "evt_01J3ZTEST0000000000000000",
+      eventType: "SUBMITTED",
+      userId: "user_01J3ZTEST000000000000000",
+      applicationId: "app_01J3ZTEST0000000000000000",
+      createdAt: "2026-07-23T10:00:00.000Z",
+      meta: { countryCode: "AE" },
+    });
+    expect(parsed.actorEmail).toBeUndefined();
+    expect(parsed.actorRole).toBeUndefined();
+  });
+
+  it("accepts events stamped with actor identity", () => {
+    const parsed = ActivityEventSchema.parse({
+      eventId: "evt_01J3ZTEST0000000000000000",
+      eventType: "NOTICE_PUBLISHED",
+      userId: "admin@example.com",
+      createdAt: "2026-07-23T10:00:00.000Z",
+      meta: { noticeId: "ntc_1", title: "UAE fee change" },
+      actorEmail: "admin@example.com",
+      actorRole: "admin",
+    });
+    expect(parsed.actorEmail).toBe("admin@example.com");
+    expect(parsed.actorRole).toBe("admin");
+  });
+
+  it("rejects an unknown actorRole", () => {
+    const result = ActivityEventSchema.safeParse({
+      eventId: "evt_1",
+      eventType: "SIGNED_UP",
+      userId: "user_1",
+      createdAt: "2026-07-23T10:00:00.000Z",
+      meta: {},
+      actorRole: "owner",
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects an unknown event type", () => {
     const result = ActivityEventSchema.safeParse({
       eventId: "evt_1",

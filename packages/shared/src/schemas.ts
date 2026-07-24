@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ACTIVITY_ACTOR_ROLES,
   ACTIVITY_EVENT_TYPES,
   APPLICATION_STATUSES,
   DOC_REVIEW_STATUSES,
@@ -122,5 +123,7 @@ export const ActivityEventSchema = z.object({
   applicationId: z.string().optional(),
   meta: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
   createdAt: isoDateTime,
+  actorEmail: z.string().email().optional(),
+  actorRole: z.enum(ACTIVITY_ACTOR_ROLES).optional(),
 });
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
