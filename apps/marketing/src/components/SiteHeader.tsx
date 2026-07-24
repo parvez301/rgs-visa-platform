@@ -6,10 +6,12 @@ import {
   CONTACT_PHONE_HREF,
   applyUrl,
 } from "@/lib/site";
+import { AnnouncementRibbon } from "@/components/AnnouncementRibbon";
 
 export function SiteHeader() {
   return (
     <header className="sticky top-0 z-40 bg-paper/95 backdrop-blur border-b border-line">
+      <AnnouncementRibbon />
       <div className="bg-ink text-white text-xs">
         <div className="mx-auto max-w-6xl px-4 py-1.5 flex items-center justify-between gap-4">
           <p className="mrz truncate">Bhikaji Cama Place · New Delhi</p>

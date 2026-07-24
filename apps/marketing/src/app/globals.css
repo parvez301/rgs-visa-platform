@@ -87,6 +87,30 @@ h3 {
   }
 }
 
+/* Notice ticker marquee (track holds the list twice, so -50% loops seamlessly) */
+@keyframes rgs-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.rgs-marquee {
+  animation: rgs-marquee 30s linear infinite;
+}
+
+.rgs-marquee:hover {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rgs-marquee {
+    animation: none;
+  }
+}
+
 :focus-visible {
   outline: 2px solid var(--color-rgs-red);
   outline-offset: 2px;

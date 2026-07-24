@@ -128,11 +128,16 @@ export function ActivityPage() {
       const countryName = application
         ? (countryNameByCode.get(application.countryCode) ?? application.countryCode)
         : "";
+      const travellerNames = (application?.travellers ?? [])
+        .map((traveller) => traveller.fullName)
+        .join(" ");
       const haystack = [
         userProfile?.fullName ?? "",
         userProfile?.email ?? "",
         activityEvent.actorEmail ?? "",
         activityEvent.userId,
+        activityEvent.applicationId ?? "",
+        travellerNames,
         countryName,
         activityEvent.eventType,
       ]
@@ -217,7 +222,7 @@ export function ActivityPage() {
       <div className="mb-4 flex flex-col gap-3">
         <input
           type="search"
-          placeholder="Search by user name, email, or country…"
+          placeholder="Search by applicant, email, country, or application ID…"
           value={searchQuery}
           onChange={(changeEvent) => setSearchQuery(changeEvent.target.value)}
           className="w-full max-w-md rounded-xl border border-line bg-paper px-4 py-2.5 text-sm focus:border-ink/30"

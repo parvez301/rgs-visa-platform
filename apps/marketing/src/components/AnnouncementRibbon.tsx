@@ -1,91 +1,78 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useNotices, type PublicNotice } from "@/lib/useNotices";
 
-const DISMISSED_STORAGE_KEY = "rgs.dismissedNotices";
+const SEVERITY_DOT: Record<PublicNotice["severity"], string> = {
+  URGENT: "bg-white",
+  IMPORTANT: "bg-amber-300",
+  INFO: "bg-white/70",
+};
 
-/** A notice earns the top ribbon only if it is pinned or high-severity. */
-function isRibbonWorthy(notice: PublicNotice): boolean {
-  return notice.pinned || notice.severity === "URGENT" || notice.severity === "IMPORTANT";
+function sortForTicker(notices: PublicNotice[]): PublicNotice[] {
+  const severityRank = (notice: PublicNotice) =>
+    notice.severity === "URGENT" ? 0 : notice.severity === "IMPORTANT" ? 1 : 2;
+  return [...notices].sort((leftNotice, rightNotice) => {
+    if (leftNotice.pinned !== rightNotice.pinned) return leftNotice.pinned ? -1 : 1;
+    const bySeverity = severityRank(leftNotice) - severityRank(rightNotice);
+    if (bySeverity !== 0) return bySeverity;
+    const leftDate = leftNotice.publishedAt ?? leftNotice.createdAt;
+    const rightDate = rightNotice.publishedAt ?? rightNotice.createdAt;
+    return rightDate.localeCompare(leftDate);
+  });
 }
 
-function severityOrder(notice: PublicNotice): number {
-  if (notice.severity === "URGENT") return 0;
-  if (notice.severity === "IMPORTANT") return 1;
-  return 2;
+function TickerItem({ notice }: { notice: PublicNotice }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span
+        aria-hidden="true"
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${SEVERITY_DOT[notice.severity]}`}
+      />
+      {notice.title}
+    </span>
+  );
 }
 
-function readDismissed(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    return JSON.parse(window.localStorage.getItem(DISMISSED_STORAGE_KEY) ?? "[]");
-  } catch {
-    return [];
-  }
-}
-
+/**
+ * Sticky top ticker (rendered inside the sticky SiteHeader) that marquees every
+ * published notice. The track holds the list twice and translates -50% so the
+ * loop is seamless; speed scales with the number of notices so per-item pace is
+ * steady. The "See all" link sits outside the marquee so it stays clickable.
+ */
 export function AnnouncementRibbon() {
   const notices = useNotices();
-  const [dismissedIds, setDismissedIds] = useState<string[]>([]);
+  if (notices === null || notices.length === 0) return null;
 
-  // Read dismissals after mount to avoid a hydration mismatch.
-  useEffect(() => setDismissedIds(readDismissed()), []);
-
-  if (notices === null) return null;
-
-  const topNotice = [...notices]
-    .filter(isRibbonWorthy)
-    .filter((notice) => !dismissedIds.includes(notice.noticeId))
-    .sort((leftNotice, rightNotice) => {
-      if (leftNotice.pinned !== rightNotice.pinned) return leftNotice.pinned ? -1 : 1;
-      const bySeverity = severityOrder(leftNotice) - severityOrder(rightNotice);
-      if (bySeverity !== 0) return bySeverity;
-      const leftDate = leftNotice.publishedAt ?? leftNotice.createdAt;
-      const rightDate = rightNotice.publishedAt ?? rightNotice.createdAt;
-      return rightDate.localeCompare(leftDate);
-    })[0];
-
-  if (!topNotice) return null;
-  const activeNotice = topNotice;
-
-  const isUrgent = activeNotice.severity === "URGENT";
-  const barClasses = isUrgent
-    ? "bg-rgs-red text-white"
-    : "bg-ink text-paper";
-
-  const dismiss = () => {
-    const nextDismissed = [...dismissedIds, activeNotice.noticeId];
-    setDismissedIds(nextDismissed);
-    try {
-      window.localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify(nextDismissed));
-    } catch {
-      // ignore private-mode / quota
-    }
-  };
+  const tickerNotices = sortForTicker(notices);
+  const animationDuration = `${Math.max(24, tickerNotices.length * 9)}s`;
 
   return (
-    <div className={barClasses}>
-      <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2 text-sm">
-        <span aria-hidden="true">📢</span>
+    <div className="bg-rgs-red text-white">
+      <div className="mx-auto flex max-w-6xl items-center gap-4 px-4">
+        <span aria-hidden="true" className="shrink-0 py-2 text-sm">
+          📢
+        </span>
+        <div className="relative flex-1 overflow-hidden py-2">
+          <div
+            className="rgs-marquee flex w-max gap-10 whitespace-nowrap text-sm font-medium"
+            style={{ animationDuration }}
+          >
+            {tickerNotices.map((notice) => (
+              <TickerItem key={notice.noticeId} notice={notice} />
+            ))}
+            {/* duplicate for a seamless loop */}
+            {tickerNotices.map((notice) => (
+              <TickerItem key={`${notice.noticeId}-loop`} notice={notice} />
+            ))}
+          </div>
+        </div>
         <Link
           href="/notices/"
-          className="min-w-0 flex-1 truncate font-medium hover:underline"
+          className="shrink-0 border-l border-white/30 py-2 pl-4 text-xs font-semibold underline decoration-white/60 underline-offset-2 hover:decoration-white"
         >
-          {activeNotice.title}
+          See all →
         </Link>
-        <Link href="/notices/" className="hidden shrink-0 font-semibold underline sm:inline">
-          See all
-        </Link>
-        <button
-          type="button"
-          onClick={dismiss}
-          aria-label="Dismiss announcement"
-          className="shrink-0 rounded-full px-1.5 leading-none opacity-80 hover:opacity-100"
-        >
-          ✕
-        </button>
       </div>
     </div>
   );
