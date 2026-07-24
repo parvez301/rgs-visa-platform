@@ -52,6 +52,18 @@ export function QueuePage() {
     })),
   });
 
+  const activityWeekQuery = useQuery({
+    queryKey: ["admin-activity", 7],
+    queryFn: () => adminApi.listActivity(idToken!, { daysBack: 7 }),
+    enabled: idToken !== null,
+  });
+
+  const leadsQuery = useQuery({
+    queryKey: ["admin-leads"],
+    queryFn: () => adminApi.listLeads(idToken!),
+    enabled: idToken !== null,
+  });
+
   const countriesQuery = useQuery({
     queryKey: ["admin-countries"],
     queryFn: () => adminApi.listCountries(idToken!),
@@ -87,6 +99,23 @@ export function QueuePage() {
     return ageMs > 24 * 60 * 60 * 1000;
   }).length;
 
+  const paymentCounts = useMemo(() => {
+    const counts: Record<PaymentStatus, number> = {
+      UNPAID: 0,
+      REQUESTED: 0,
+      PAID_OFFLINE: 0,
+    };
+    for (const application of allApplications) {
+      counts[application.paymentStatus] += 1;
+    }
+    return counts;
+  }, [allApplications]);
+
+  const signupsThisWeek = (activityWeekQuery.data ?? []).filter(
+    (activityEvent) => activityEvent.eventType === "SIGNED_UP",
+  ).length;
+  const newLeadsCount = leadsQuery.data?.length ?? 0;
+
   const filteredApplications =
     selectedStatus === "ALL"
       ? [...allApplications].sort(
@@ -115,6 +144,19 @@ export function QueuePage() {
             onSelectStatus={setSelectedStatus}
           />
         ))}
+      </div>
+
+      <div className="mb-8 grid gap-3 sm:grid-cols-3">
+        <SecondaryTile
+          label="Payment"
+          value={[
+            `${PAYMENT_LABELS.UNPAID} ${paymentCounts.UNPAID}`,
+            `${PAYMENT_LABELS.REQUESTED} ${paymentCounts.REQUESTED}`,
+            `${PAYMENT_LABELS.PAID_OFFLINE} ${paymentCounts.PAID_OFFLINE}`,
+          ].join(" · ")}
+        />
+        <SecondaryTile label="New leads" value={String(newLeadsCount)} />
+        <SecondaryTile label="Signups this week" value={String(signupsThisWeek)} />
       </div>
 
       <div className="mb-6 flex flex-wrap gap-2">
@@ -172,10 +214,10 @@ export function QueuePage() {
                     <span
                       className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${PAYMENT_CHIP_CLASSES[application.paymentStatus]}`}
                     >
-                      {application.paymentStatus}
+                      {PAYMENT_LABELS[application.paymentStatus]}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-xs font-medium">{application.status}</td>
+                      {STATUS_LABELS[application.status]}
                 </tr>
               ))}
               {filteredApplications.length === 0 && (
@@ -280,6 +322,15 @@ function StatusBucketCard({
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+function SecondaryTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-line bg-paper p-4">
+      <p className="mrz text-[10px] text-ink-soft mb-2">{label}</p>
+      <p className="text-sm font-semibold leading-relaxed">{value}</p>
     </div>
   );
 }
