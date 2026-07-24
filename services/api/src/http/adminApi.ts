@@ -18,6 +18,7 @@ import {
   seedCountryConfig,
   upsertCountryProduct,
 } from "../domain/config";
+import { listUserProfiles } from "../domain/users";
 import { Router, parseBody, type RequestContext } from "./router";
 
 const TransitionSchema = z.object({
@@ -148,6 +149,10 @@ export function buildAdminRouter(context: AppContext): Router {
     .add("GET", "/api/v1/admin/leads", async (requestContext) => {
       requireAdmin(requestContext);
       return listNewLeads(context);
+    })
+    .add("GET", "/api/v1/admin/users", async (requestContext) => {
+      requireAdmin(requestContext);
+      return listUserProfiles(context);
     })
     // Country config management: docs, fees, timelines — admin-editable
     .add("GET", "/api/v1/admin/config/countries", async (requestContext) => {
