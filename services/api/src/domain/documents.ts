@@ -81,6 +81,7 @@ export async function recordDocumentUpload(
   docType: DocType,
   travellerIndex: number,
   objectKey: string,
+  email: string,
 ): Promise<ApplicationDocument> {
   const application = await getOwnedApplication(context, userId, applicationId);
   await assertValidDocRequest(
@@ -108,10 +109,17 @@ export async function recordDocumentUpload(
     SK: `DOC#${docType}#${travellerIndex}`,
     ...applicationDocument,
   });
-  await logActivity(context, "DOC_UPLOADED", userId, applicationId, {
-    docType,
-    travellerIndex,
-  });
+  await logActivity(
+    context,
+    "DOC_UPLOADED",
+    userId,
+    applicationId,
+    {
+      docType,
+      travellerIndex,
+    },
+    { actorEmail: email, actorRole: "user" },
+  );
   return applicationDocument;
 }
 

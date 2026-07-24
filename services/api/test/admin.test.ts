@@ -27,6 +27,7 @@ async function approveAllDocuments(
     await reviewDocument(
       context,
       "admin_1",
+      "admin@example.com",
       applicationId,
       docType,
       0,
@@ -60,6 +61,7 @@ describe("transitionApplication", () => {
       await transitionApplication(
         context,
         "admin_1",
+        "admin@example.com",
         applicationId,
         nextStatus,
         "asha@example.com",
@@ -74,14 +76,14 @@ describe("transitionApplication", () => {
   it("refuses illegal jumps", async () => {
     const { context, applicationId } = await submittedApplication();
     await expect(
-      transitionApplication(context, "admin_1", applicationId, "DELIVERED", "a@b.com"),
+      transitionApplication(context, "admin_1", "admin@example.com", applicationId, "DELIVERED", "a@b.com"),
     ).rejects.toBeInstanceOf(IllegalStatusTransitionError);
   });
 
   it("refuses DOCS_VERIFIED while any document is unapproved", async () => {
     const { context, applicationId } = await submittedApplication();
     await expect(
-      transitionApplication(context, "admin_1", applicationId, "DOCS_VERIFIED", "a@b.com"),
+      transitionApplication(context, "admin_1", "admin@example.com", applicationId, "DOCS_VERIFIED", "a@b.com"),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 });
@@ -93,6 +95,7 @@ describe("reviewDocument", () => {
       reviewDocument(
         context,
         "admin_1",
+        "admin@example.com",
         applicationId,
         "PHOTO",
         0,
@@ -104,6 +107,7 @@ describe("reviewDocument", () => {
     const rejectedDocument = await reviewDocument(
       context,
       "admin_1",
+      "admin@example.com",
       applicationId,
       "PHOTO",
       0,
@@ -122,12 +126,13 @@ describe("setPaymentStatus", () => {
   it("walks UNPAID -> REQUESTED -> PAID_OFFLINE and blocks skips", async () => {
     const { context, applicationId } = await submittedApplication();
     await expect(
-      setPaymentStatus(context, "admin_1", applicationId, "PAID_OFFLINE", "a@b.com"),
+      setPaymentStatus(context, "admin_1", "admin@example.com", applicationId, "PAID_OFFLINE", "a@b.com"),
     ).rejects.toMatchObject({ statusCode: 409 });
 
     const requested = await setPaymentStatus(
       context,
       "admin_1",
+      "admin@example.com",
       applicationId,
       "REQUESTED",
       "asha@example.com",
@@ -140,6 +145,7 @@ describe("setPaymentStatus", () => {
     const paid = await setPaymentStatus(
       context,
       "admin_1",
+      "admin@example.com",
       applicationId,
       "PAID_OFFLINE",
       "asha@example.com",
@@ -193,5 +199,35 @@ describe("notes and activity", () => {
     expect(
       recentFeed.some((activityEvent) => activityEvent.applicationId === applicationId),
     ).toBe(true);
+  });
+
+  it("stamps user actor identity on SUBMITTED and admin actor on STATUS_CHANGED", async () => {
+    const { context, applicationId } = await submittedApplication();
+    const userTrail = await listUserActivity(context, "user_1");
+    const submittedEvent = userTrail.find(
+      (activityEvent) => activityEvent.eventType === "SUBMITTED",
+    );
+    expect(submittedEvent?.actorRole).toBe("user");
+    expect(submittedEvent?.actorEmail).toBe("asha@example.com");
+    expect(submittedEvent?.userId).toBe("user_1");
+
+    await approveAllDocuments(context, applicationId);
+    await transitionApplication(
+      context,
+      "admin_1",
+      "admin@example.com",
+      applicationId,
+      "DOCS_VERIFIED",
+      "asha@example.com",
+    );
+    const updatedTrail = await listUserActivity(context, "user_1");
+    const statusChangedEvent = updatedTrail.find(
+      (activityEvent) => activityEvent.eventType === "STATUS_CHANGED",
+    );
+    expect(statusChangedEvent?.actorRole).toBe("admin");
+    expect(statusChangedEvent?.actorEmail).toBe("admin@example.com");
+    expect(statusChangedEvent?.userId).toBe("user_1");
+    expect(statusChangedEvent?.meta["fromStatus"]).toBe("SUBMITTED");
+    expect(statusChangedEvent?.meta["toStatus"]).toBe("DOCS_VERIFIED");
   });
 });

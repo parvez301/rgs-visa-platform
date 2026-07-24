@@ -76,9 +76,15 @@ export function buildUserRouter(context: AppContext): Router {
       return { application, documents };
     })
     .add("PATCH", "/api/v1/applications/{applicationId}", async (requestContext) => {
-      const { userId } = requireUser(requestContext);
+      const { userId, email } = requireUser(requestContext);
       const patch = parseBody(PatchDraftSchema, requestContext.body);
-      return patchDraft(context, userId, requestContext.pathParams["applicationId"]!, patch);
+      return patchDraft(
+        context,
+        userId,
+        requestContext.pathParams["applicationId"]!,
+        patch,
+        email,
+      );
     })
     .add("POST", "/api/v1/applications/{applicationId}/submit", async (requestContext) => {
       const { userId, email } = requireUser(requestContext);
@@ -106,7 +112,7 @@ export function buildUserRouter(context: AppContext): Router {
       },
     )
     .add("POST", "/api/v1/applications/{applicationId}/documents", async (requestContext) => {
-      const { userId } = requireUser(requestContext);
+      const { userId, email } = requireUser(requestContext);
       const input = parseBody(RecordUploadSchema, requestContext.body);
       return recordDocumentUpload(
         context,
@@ -115,6 +121,7 @@ export function buildUserRouter(context: AppContext): Router {
         input.docType,
         input.travellerIndex,
         input.objectKey,
+        email,
       );
     })
     .add(

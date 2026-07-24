@@ -22,7 +22,7 @@ describe("listCountryConfig", () => {
 
   it("returns DB rows once config exists", async () => {
     const context = buildTestContext();
-    await upsertCountryProduct(context, "admin_1", {
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       docsRequired: [...uaeSeed.docsRequired],
       governmentFeeInr: 7200,
@@ -36,7 +36,7 @@ describe("listCountryConfig", () => {
 describe("upsertCountryProduct", () => {
   it("seeds the full catalog on first write so nothing vanishes", async () => {
     const context = buildTestContext();
-    await upsertCountryProduct(context, "admin_1", {
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       docsRequired: [...uaeSeed.docsRequired],
       serviceFeeInr: 1800,
@@ -48,14 +48,14 @@ describe("upsertCountryProduct", () => {
   it("rejects invalid config (negative fee, unknown doc type)", async () => {
     const context = buildTestContext();
     await expect(
-      upsertCountryProduct(context, "admin_1", {
+      upsertCountryProduct(context, "admin_1", "admin@example.com", {
         ...uaeSeed,
         docsRequired: [...uaeSeed.docsRequired],
         governmentFeeInr: -5,
       }),
     ).rejects.toMatchObject({ statusCode: 400 });
     await expect(
-      upsertCountryProduct(context, "admin_1", {
+      upsertCountryProduct(context, "admin_1", "admin@example.com", {
         ...uaeSeed,
         docsRequired: ["AADHAAR_CARD"],
       }),
@@ -64,7 +64,7 @@ describe("upsertCountryProduct", () => {
 
   it("logs a CONFIG_CHANGED activity event", async () => {
     const context = buildTestContext();
-    await upsertCountryProduct(context, "admin_1", {
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       docsRequired: [...uaeSeed.docsRequired],
       processingDays: 2,
@@ -108,7 +108,7 @@ describe("schema evolution", () => {
 describe("config drives pricing and document rules", () => {
   it("createDraft prices from the admin-edited config, not the code seed", async () => {
     const context = buildTestContext();
-    await upsertCountryProduct(context, "admin_1", {
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       docsRequired: [...uaeSeed.docsRequired],
       governmentFeeInr: 9999,
@@ -121,7 +121,7 @@ describe("config drives pricing and document rules", () => {
 
   it("document checklist enforcement follows the admin-edited config", async () => {
     const context = buildTestContext();
-    await upsertCountryProduct(context, "admin_1", {
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       docsRequired: ["PASSPORT_BIO", "PHOTO", "HOTEL_BOOKING"],
     });

@@ -30,11 +30,17 @@ export async function createLead(context: AppContext, input: CreateLeadInput): P
     GSI1SK: createdAt,
     ...lead,
   });
-  await logActivity(context, "LEAD_CREATED", "anonymous", undefined, {
-    leadId: lead.leadId,
-    topic: input.topic,
-  });
-  await context.email.send({
+  await logActivity(
+    context,
+    "LEAD_CREATED",
+    "anonymous",
+    undefined,
+    {
+      leadId: lead.leadId,
+      topic: input.topic,
+    },
+    { actorRole: "system" },
+  );  await context.email.send({
     toAddress: context.adminNotificationAddress,
     subject: `New website enquiry — ${input.topic}`,
     bodyText: [

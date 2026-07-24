@@ -75,9 +75,14 @@ export async function createDraft(
     updatedAt: createdAt,
   };
   await context.table.put(applicationToItem(application));
-  await logActivity(context, "APPLICATION_STARTED", userId, application.applicationId, {
-    countryCode: countryProduct.countryCode,
-  });
+  await logActivity(
+    context,
+    "APPLICATION_STARTED",
+    userId,
+    application.applicationId,
+    { countryCode: countryProduct.countryCode },
+    { actorEmail: email, actorRole: "user" },
+  );
   return application;
 }
 
@@ -103,6 +108,7 @@ export async function patchDraft(
   userId: string,
   applicationId: string,
   patch: PatchDraftInput,
+  email: string,
 ): Promise<Application> {
   const application = await getOwnedApplication(context, userId, applicationId);
   if (application.status !== "DRAFT") {
@@ -118,10 +124,17 @@ export async function patchDraft(
   };
   await context.table.put(applicationToItem(updatedApplication));
   if (patch.stepReached && patch.stepReached !== previousStep) {
-    await logActivity(context, "STEP_COMPLETED", userId, applicationId, {
-      step: previousStep,
-      nextStep: patch.stepReached,
-    });
+    await logActivity(
+      context,
+      "STEP_COMPLETED",
+      userId,
+      applicationId,
+      {
+        step: previousStep,
+        nextStep: patch.stepReached,
+      },
+      { actorEmail: email, actorRole: "user" },
+    );
   }
   return updatedApplication;
 }
@@ -208,11 +221,17 @@ export async function submitApplication(
     updatedAt: context.now().toISOString(),
   };
   await context.table.put(applicationToItem(submittedApplication));
-  await logActivity(context, "SUBMITTED", userId, applicationId, {
-    countryCode: application.countryCode,
-    travellerCount: application.travellers.length,
-  });
-  await context.email.send({
+  await logActivity(
+    context,
+    "SUBMITTED",
+    userId,
+    applicationId,
+    {
+      countryCode: application.countryCode,
+      travellerCount: application.travellers.length,
+    },
+    { actorEmail: userEmail, actorRole: "user" },
+  );  await context.email.send({
     toAddress: userEmail,
     subject: `Application received — ${application.countryCode} visa`,
     bodyText: [

@@ -85,6 +85,7 @@ describe("recordDocumentUpload", () => {
       "PHOTO",
       0,
       `applications/${draft.applicationId}/traveller-0/PHOTO.png`,
+      "user_1@example.com",
     );
     expect(recordedDocument.reviewStatus).toBe("PENDING");
   });
@@ -100,6 +101,7 @@ describe("recordDocumentUpload", () => {
         "PHOTO",
         0,
         "applications/some-other-app/traveller-0/PHOTO.png",
+        "user_1@example.com",
       ),
     ).rejects.toThrow(/does not match the presigned location/);
   });
@@ -116,6 +118,7 @@ describe("presignOwnedDocumentDownload", () => {
       "PHOTO",
       0,
       `applications/${draft.applicationId}/traveller-0/PHOTO.png`,
+      "user_1@example.com",
     );
     const downloadUrl = await presignOwnedDocumentDownload(
       context,

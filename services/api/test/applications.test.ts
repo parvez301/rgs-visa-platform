@@ -51,7 +51,7 @@ describe("patchDraft", () => {
     const patched = await patchDraft(context, "user_1", draft.applicationId, {
       travellers: [completeTraveller],
       stepReached: "docs",
-    });
+    }, "user_1@example.com");
     expect(patched.travellers[0]!.fullName).toBe("Asha Verma");
     expect(patched.stepReached).toBe("docs");
   });
@@ -60,7 +60,7 @@ describe("patchDraft", () => {
     const context = buildTestContext();
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await expect(
-      patchDraft(context, "user_2", draft.applicationId, { stepReached: "docs" }),
+      patchDraft(context, "user_2", draft.applicationId, { stepReached: "docs" }, "user_2@example.com"),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 
@@ -69,7 +69,7 @@ describe("patchDraft", () => {
     const applicationId = await createSubmittableUaeDraft(context);
     await submitApplication(context, "user_1", applicationId, "asha@example.com");
     await expect(
-      patchDraft(context, "user_1", applicationId, { stepReached: "docs" }),
+      patchDraft(context, "user_1", applicationId, { stepReached: "docs" }, "user_1@example.com"),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 });
@@ -95,7 +95,7 @@ describe("submitApplication", () => {
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await patchDraft(context, "user_1", draft.applicationId, {
       travellers: [completeTraveller],
-    });
+    }, "user_1@example.com");
     await expect(
       submitApplication(context, "user_1", draft.applicationId, "asha@example.com"),
     ).rejects.toMatchObject({ statusCode: 400 });
@@ -106,7 +106,7 @@ describe("submitApplication", () => {
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await patchDraft(context, "user_1", draft.applicationId, {
       essentials: completeEssentials,
-    });
+    }, "user_1@example.com");
     await expect(
       submitApplication(context, "user_1", draft.applicationId, "asha@example.com"),
     ).rejects.toThrow(/complete passport details/);
@@ -118,7 +118,7 @@ describe("submitApplication", () => {
     await patchDraft(context, "user_1", draft.applicationId, {
       travellers: [completeTraveller],
       essentials: completeEssentials,
-    });
+    }, "user_1@example.com");
     try {
       await submitApplication(context, "user_1", draft.applicationId, "asha@example.com");
       expect.unreachable("should have thrown");

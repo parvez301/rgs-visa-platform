@@ -68,6 +68,7 @@ export async function resolveCountryProduct(
 export async function upsertCountryProduct(
   context: AppContext,
   adminId: string,
+  adminEmail: string,
   productInput: unknown,
 ): Promise<CountryProduct> {
   const parseResult = CountryProductSchema.safeParse(productInput);
@@ -93,14 +94,21 @@ export async function upsertCountryProduct(
     SK: configSortKey(countryProduct.countryCode, countryProduct.productCode),
     ...countryProduct,
   });
-  await logActivity(context, "CONFIG_CHANGED", adminId, undefined, {
-    countryCode: countryProduct.countryCode,
-    productCode: countryProduct.productCode,
-    governmentFeeInr: countryProduct.governmentFeeInr,
-    serviceFeeInr: countryProduct.serviceFeeInr,
-    processingDays: countryProduct.processingDays,
-    active: countryProduct.active,
-  });
+  await logActivity(
+    context,
+    "CONFIG_CHANGED",
+    adminId,
+    undefined,
+    {
+      countryCode: countryProduct.countryCode,
+      productCode: countryProduct.productCode,
+      governmentFeeInr: countryProduct.governmentFeeInr,
+      serviceFeeInr: countryProduct.serviceFeeInr,
+      processingDays: countryProduct.processingDays,
+      active: countryProduct.active,
+    },
+    { actorEmail: adminEmail, actorRole: "admin" },
+  );
   return countryProduct;
 }
 
