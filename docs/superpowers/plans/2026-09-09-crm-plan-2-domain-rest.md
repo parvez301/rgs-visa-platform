@@ -157,7 +157,7 @@ git commit -m "feat(crm): add the three missing country mappings and record the 
   - `APPLICANT_SORT_KEY_PREFIX: "APPLICANT#"`
   - `partnerPartitionKey(tenantId: string, partnerId: string): string`
   - `travellerPartitionKey(tenantId: string, travellerId: string): string`
-  - `PARTNER_LIST_GSI1PK(tenantId: string): string`
+  - `partnerListGsi1Pk(tenantId: string): string`
   - `caseStatusGsi1Pk(tenantId: string, caseStatus: string): string`
   - `partnerCasesGsi2Pk(tenantId: string, partnerId: string): string`
   - `passportGsi3Pk(tenantId: string, passportNumber: string): string`
@@ -1706,6 +1706,10 @@ Routes to add:
 | GET | `/api/v1/admin/crm/cases/{caseId}/events` | `listCaseEvents` |
 | GET | `/api/v1/admin/crm/partners` | `listPartners` |
 | POST | `/api/v1/admin/crm/partners` | `createPartner` |
+| POST | `/api/v1/admin/crm/travellers` | `upsertTraveller` |
+| GET | `/api/v1/admin/crm/travellers/by-passport/{passportNumber}` | `findTravellerByPassport` |
+
+Without the two traveller routes, Task 6 is unreachable through the API: `createCase` demands a `travellerId` and nothing else would ever mint one. Repeat-traveller recognition is one of the CRM's headline advantages over the spreadsheet, so it needs a way in.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1897,6 +1901,35 @@ describe("crm admin routes", () => {
     expect(events.payload.events[0].eventType).toBe("CASE_CREATED");
   });
 
+  it("creates a traveller and finds the same one again by passport", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const created = await call(router, "POST", "/api/v1/admin/crm/travellers", {
+      fullName: "Umesh Kumar Yadav",
+      passportNumber: "Z6931368",
+    });
+    expect(created.statusCode).toBe(200);
+
+    const found = await call(
+      router,
+      "GET",
+      "/api/v1/admin/crm/travellers/by-passport/Z6931368",
+    );
+    expect(found.statusCode).toBe(200);
+    expect(found.payload.travellerId).toBe(created.payload.travellerId);
+  });
+
+  it("returns 404 looking up a passport with no traveller", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const missing = await call(
+      router,
+      "GET",
+      "/api/v1/admin/crm/travellers/by-passport/NOPE12345",
+    );
+    expect(missing.statusCode).toBe(404);
+  });
+
   it("moves applicant custody through PUT", async () => {
     const context = buildTestContext();
     const router = buildRouter(context);
@@ -1937,7 +1970,7 @@ Expected: FAIL — cannot resolve `../../src/http/crmApi`.
 import { crm } from "@rgs/shared";
 import { z } from "zod";
 import type { AppContext } from "../lib/context";
-import { badRequest } from "../lib/errors";
+import { badRequest, notFound } from "../lib/errors";
 import {
   changeApplicantCustody,
   changeBillingStatus,
@@ -1949,6 +1982,7 @@ import {
 import { listCaseEvents } from "../domain/crm/crmEvents";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
 import { createPartner, listPartners } from "../domain/crm/partners";
+import { findTravellerByPassport, upsertTraveller } from "../domain/crm/travellers";
 import { Router, parseBody } from "./router";
 import { requireAdmin } from "./adminApi";
 
@@ -1979,6 +2013,13 @@ const CreateCaseBody = z.object({
     .min(1),
 });
 
+const UpsertTravellerBody = z.object({
+  fullName: z.string().min(1),
+  passportNumber: z.string().optional(),
+  dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  phone: z.string().optional(),
+});
+
 const CaseStatusBody = z.object({ toStatus: z.enum(crm.CASE_STATUSES) });
 const BillingStatusBody = z.object({ toBillingStatus: z.enum(crm.BILLING_STATUSES) });
 const CustodyBody = z.object({ toCustody: z.enum(crm.CUSTODY_STATUSES) });
@@ -2001,6 +2042,25 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       const body = parseBody(CreatePartnerBody, requestContext.body);
       return createPartner(context, tenantId, body, requestContext.callerEmail);
     })
+    .add("POST", "/api/v1/admin/crm/travellers", async (requestContext) => {
+      requireAdmin(requestContext);
+      const body = parseBody(UpsertTravellerBody, requestContext.body);
+      return upsertTraveller(context, tenantId, body);
+    })
+    .add(
+      "GET",
+      "/api/v1/admin/crm/travellers/by-passport/{passportNumber}",
+      async (requestContext) => {
+        requireAdmin(requestContext);
+        const traveller = await findTravellerByPassport(
+          context,
+          tenantId,
+          requestContext.pathParams["passportNumber"]!,
+        );
+        if (!traveller) throw notFound("Traveller");
+        return traveller;
+      },
+    )
     .add("GET", "/api/v1/admin/crm/cases", async (requestContext) => {
       requireAdmin(requestContext);
       const requestedStatus = requestContext.queryParams["status"] ?? "NEW";
