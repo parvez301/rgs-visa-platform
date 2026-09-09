@@ -8,3 +8,4 @@ export * from "./normalize/status";
 export * from "./normalize/visaType";
 export * from "./normalize/partner";
 export * from "./normalize/date";
+export * from "./normalize/lookupKey";
