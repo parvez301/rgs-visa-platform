@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Load the 7,161-row RGS Excel workbook into the CRM built by Plans 1-2, deterministically where the mapping tables allow and into a human review queue where they do not.
+**Goal:** Load the 7,157-importable-row RGS Excel workbook into the CRM built by Plans 1-2, deterministically where the mapping tables allow and into a human review queue where they do not.
 
 **Architecture:** A new `services/migration` workspace package reads the workbook by column *position* (headers are unreliable), converts Excel serial dates at the reader boundary, and maps each row through the Plan 1 normalizers. Rows that map cleanly are written through the Plan 2 domain functions; rows that do not become `ReviewItem` rows the admin API exposes for human resolution. The importer is idempotent on `caseRef` (the Excel REF NO), so it can be re-run against staging until the review queue is boring. Pass 2 of spec §9 — LLM resolution of the residue — is a **named seam** in this plan (`ResidueResolver`, with a deterministic no-op implementation) that Plan 4's agent layer fills in without restructuring anything.
 
@@ -34,11 +34,14 @@ These were measured against the real workbook. Do not re-derive them; do not con
 | Fact | Value | Why it matters |
 |---|---|---|
 | Workbook sheets | `Mini CRM`, `REQURIED INFORMATION`, `2025 YEAR`, `CHECKLIST` | Only `Mini CRM` and `2025 YEAR` are imported |
-| `Mini CRM` size | 7,553 rows incl. header (7,161 data rows) | The primary ledger |
-| `2025 YEAR` size | 6,549 rows incl. header | Supplies `Phone` and `TRACKING NO.`, which `Mini CRM` lacks |
+| `Mini CRM` size | `rowCount` 7,553 · `actualRowCount` 7,162 · **7,157 rows carry a REF NO** | The primary ledger. The three numbers differ and the difference is explained in the two rows below — do not "fix" the reader to make them agree. |
+| `2025 YEAR` size | `rowCount` 6,549 · `actualRowCount` 6,547 · **6,546 rows carry a REF NO** | Supplies `Phone` and `TRACKING NO.`, which `Mini CRM` lacks |
+| 391 blank rows sit inside `Mini CRM`'s used range | `rowCount` runs to 7,553 but only 7,162 rows hold anything | `eachRow` without `{includeEmpty:true}` skips them. Never iterate `1..rowCount` — you would map 391 empty rows into 391 junk cases. |
+| 4 `Mini CRM` rows are non-blank but have **no REF NO** | Rows 5984, 6308, 6615, 6900 hold only a date in column C (`APPLICANTS NAME`): Jun/Jul/Aug/Sep 2026 | They are **month divider rows** someone typed into the name column, not data. The reader's `if (caseRef === "") return;` drops them, which is correct — they must NOT become cases and must NOT raise review items. This is also why the sheet yields 7,157 and not 7,161. |
 | `Mini CRM` columns | A=`C`(received date) B=`REF NO.` C=`APPLICANTS NAME` D=`No.` E=`REFRENCE`(partner) F=`Country` G=`DOB` H=`Sub Date` I=`Collection` J=`Passport No.` K=`Entries` L=`Visa Type` M=`Status` N=`Additional Items` | Read by position |
 | `2025 YEAR` columns | A=`DATE` B=`REF NO.` C=`APPLICANTS NAME` D=`REFRENCE` E=**header literally says `China`** F=`DOB` G=`No.` H=`Sub Date` I=`Collection` J=`Phone` K=`TRACKING NO.` L=`Passport No.` M=`Visa Type` N=`Entries` | Column E's header is a country someone typed into the header cell. **Never key on header text for this sheet — use position.** |
-| Date encoding differs per sheet | `Mini CRM` dates are **text**; `2025 YEAR` dates are **numeric Excel serials** | Feeding serials to `normalizeExcelDate` sends all 6,549 rows to review — it explicitly refuses serials |
+| Date encoding differs per sheet | `Mini CRM` dates are **text**; `2025 YEAR` dates are **numeric Excel serials** | Feeding serials to `normalizeExcelDate` sends all 6,546 rows to review — it explicitly refuses serials |
+| The workbook is **live**, not a frozen export | Its last month-divider row reads September 2026 — the current month | RGS is still typing into this sheet daily. The import will be run more than once and must pick up rows added since the last run: this is the evidence behind Task 9's idempotency requirement, not a hypothetical. |
 | Excel epoch | **1900 system, base `1899-12-30`** | Determined empirically, not guessed: REF NO 31376 has `Sub Date` serial `45657` on `2025 YEAR` and text `12/31/2024` on `Mini CRM`; `1899-12-30 + 45657 days = 2024-12-31`. The 1904 system yields 2029-01-01 and is wrong. |
 | `Sub Date` convention | **Day-first.** Unambiguous rows split 3,261 day-first vs 15 month-first (99.5%) | Separator does NOT predict convention — both appear with `/`. Parse day-first; the ~11 ambiguous rows that are truly month-first are accepted losses, and land in review only if the day-first reading is not a real calendar date. |
 | `Sub Date` blanks | 1,552 (21.7%) | Blank = not recorded. Not a review item. |
@@ -738,7 +741,7 @@ git commit -m "feat(crm): expose the migration review queue on the admin API"
 
 **Context for the implementer:** This package exists so `exceljs` never enters the Lambda bundle. Nothing in `services/api` may import it; the dependency arrow points one way only.
 
-The epoch is **not a guess** and must not be changed. It was determined empirically: REF NO 31376 carries `Sub Date` as the serial `45657` on the `2025 YEAR` sheet and as the text `12/31/2024` on `Mini CRM`. `1899-12-30 + 45657 days = 2024-12-31`, which matches; the 1904 system yields 2029-01-01, which does not. Getting this wrong silently shifts every date on a 6,549-row sheet by five years, and nothing downstream would notice.
+The epoch is **not a guess** and must not be changed. It was determined empirically: REF NO 31376 carries `Sub Date` as the serial `45657` on the `2025 YEAR` sheet and as the text `12/31/2024` on `Mini CRM`. `1899-12-30 + 45657 days = 2024-12-31`, which matches; the 1904 system yields 2029-01-01, which does not. Getting this wrong silently shifts every date on a 6,546-row sheet by five years, and nothing downstream would notice.
 
 `excelSerialToIsoDate` returns `null` rather than throwing for values outside the plausible window, so the caller can route them to the review queue with the rest of the unparseable dates. The window matches `normalizeExcelDate`'s: 2020-2027 inclusive.
 
@@ -895,7 +898,7 @@ git commit -m "feat(migration): add the migration package and the Excel serial c
 **Context for the implementer:** Three traps live in this file, and every one of them is silent if you get it wrong.
 
 1. **Read by column position, never by header text.** On `2025 YEAR`, the header of column E literally reads `China` — somebody typed a country into the header cell. Keying on header names would drop or misroute that column.
-2. **Convert serials here, at the reader boundary.** `Mini CRM` stores dates as text; `2025 YEAR` stores them as numeric serials. `normalizeExcelDate` in `@rgs/shared` explicitly refuses serials and routes them to review — so feeding it raw serials would send all 6,549 `2025 YEAR` rows to the queue. When a cell is a serial candidate, convert it with `excelSerialToIsoDate` and emit the ISO string; otherwise pass the text through untouched.
+2. **Convert serials here, at the reader boundary.** `Mini CRM` stores dates as text; `2025 YEAR` stores them as numeric serials. `normalizeExcelDate` in `@rgs/shared` explicitly refuses serials and routes them to review — so feeding it raw serials would send all 6,546 `2025 YEAR` rows to the queue. When a cell is a serial candidate, convert it with `excelSerialToIsoDate` and emit the ISO string; otherwise pass the text through untouched.
 3. **`REF NO.` and `No.` arrive as floats** — `31376.0`, `3.0`. `normaliseRefNo` must yield `"31376"`. Case identity is keyed on this string, so `"31376"` and `"31376.0"` being different would break idempotency and re-import every row on the second run.
 
 `sourceRow` is the 1-based worksheet row number, so row 2 is the first data row. It is stored on every record for provenance (spec §9) and must be the real sheet row, not an array index.
@@ -1167,7 +1170,7 @@ git commit -m "feat(migration): read the workbook by column position with serial
   - `interface PendingReviewItem { reason: crm.ReviewReason; fieldName: string; rawValue: string; proposedValue?: string; detail?: string }`
   - `mapRow(rawRow: RawMiniCrmRow): MappedRow`
 
-**Context for the implementer:** This is spec §9's pass 1 and it is a **pure function** — no I/O, no database, no clock. That is what makes it testable against all 7,161 rows in a second.
+**Context for the implementer:** This is spec §9's pass 1 and it is a **pure function** — no I/O, no database, no clock. That is what makes it testable against all 7,157 importable rows in a second.
 
 The rules that decide review vs. accept:
 
@@ -1841,7 +1844,7 @@ describe("runImport", () => {
 
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     // Spec §5: migrated rows carry no billing evidence, and UNKNOWN is what
-    // the billing_overdue watchdog excludes. UNBILLED would nag on 7,161 cases.
+    // the billing_overdue watchdog excludes. UNBILLED would nag on all 7,157 imported cases.
     expect(importedCase!.billingStatus).toBe("UNKNOWN");
   });
 
@@ -1979,7 +1982,7 @@ git commit -m "feat(migration): add the idempotent import run"
 
 **Context for the implementer:** The CLI is the operator's entry point. It must default to `--dry-run` — an import that writes to a real table on a mistyped command is exactly the accident this guard prevents. Writing requires an explicit `--commit`.
 
-The full-workbook test is the one that matters: it runs all 7,161 rows through `readWorkbook` + `mapRow` and asserts the review-queue rate is in the expected band. It **skips** rather than fails when the workbook is absent, because the file lives outside the repo (`/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx`) and CI will not have it.
+The full-workbook test is the one that matters: it runs all 7,157 importable rows through `readWorkbook` + `mapRow` and asserts the review-queue rate is in the expected band. It **skips** rather than fails when the workbook is absent, because the file lives outside the repo (`/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx`) and CI will not have it.
 
 - [ ] **Step 1: Write the CLI**
 
@@ -2041,7 +2044,12 @@ const describeIfWorkbook = existsSync(WORKBOOK_PATH) ? describe : describe.skip;
 describeIfWorkbook("the real workbook", () => {
   it("maps every row without throwing, and queues a plausible fraction", async () => {
     const extract = await readWorkbook(WORKBOOK_PATH);
-    expect(extract.miniCrmRows.length).toBeGreaterThan(7000);
+    // Exact, measured against the real file. A loose band would hide the two
+    // regressions most likely here: dropping the `caseRef === ""` guard admits
+    // the 4 month-divider rows (7,161), and iterating `1..rowCount` instead of
+    // `eachRow` admits the 391 blank rows (7,552).
+    expect(extract.miniCrmRows.length).toBe(7157);
+    expect(extract.yearRows.length).toBe(6546);
 
     const mappedRows = extract.miniCrmRows.map(mapRow);
     const rowsWithReview = mappedRows.filter((mappedRow) => mappedRow.reviewItems.length > 0);
@@ -2051,6 +2059,14 @@ describeIfWorkbook("the real workbook", () => {
     // not the 64.9% that treating blanks as review items would produce.
     expect(reviewRate).toBeLessThan(0.30);
     expect(reviewRate).toBeGreaterThan(0.02);
+  });
+
+  it("drops the month-divider rows instead of turning them into cases", async () => {
+    const extract = await readWorkbook(WORKBOOK_PATH);
+    const dividerRowNumbers = [5984, 6308, 6615, 6900];
+    for (const dividerRowNumber of dividerRowNumbers) {
+      expect(extract.miniCrmRows.some((row) => row.sourceRow === dividerRowNumber)).toBe(false);
+    }
   });
 
   it("never emits a review item for a blank source cell", async () => {
