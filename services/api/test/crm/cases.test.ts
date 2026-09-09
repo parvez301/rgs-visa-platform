@@ -1,5 +1,5 @@
 import { crm } from "@rgs/shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildTestContext, type TestContext } from "../helpers";
 import { writeCase } from "../../src/domain/crm/caseStore";
 import { createPartner } from "../../src/domain/crm/partners";
@@ -224,6 +224,51 @@ describe("crm cases", () => {
     await seedCase(context, partnerId, "31377");
     await seedCase(context, partnerId, "31378");
     expect(await listCasesByPartner(context, "rgs", partnerId)).toHaveLength(2);
+  });
+
+  it("keeps listing the healthy cases when one partition lost its applicants", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const healthyCase = await seedCase(context, partnerId, "31377");
+    const corruptedCase = await seedCase(context, partnerId, "31378");
+    // Half-written partition: META survived, the applicant items did not.
+    await writeCase(context, { ...corruptedCase, applicants: [] });
+
+    const listedCases = await listCasesByStatus(context, "rgs", "NEW");
+    expect(listedCases.map((listedCase) => listedCase.caseId)).toEqual([healthyCase.caseId]);
+    expect(listedCases[0]!.caseRef).toBe("31377");
+    expect(listedCases[0]!.applicants).toHaveLength(1);
+  });
+
+  it("warns with the caseId of a case it had to skip", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    const corruptedCase = await seedCase(context, partnerId, "31378");
+    await writeCase(context, { ...corruptedCase, applicants: [] });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let warnedText = "";
+    try {
+      await listCasesByStatus(context, "rgs", "NEW");
+      // Read the calls before restoring: mockRestore also clears them.
+      warnedText = warnSpy.mock.calls.map((warnArguments) => warnArguments.join(" ")).join("\n");
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(warnedText).toContain(corruptedCase.caseId);
+  });
+
+  it("still surfaces a corrupt case as a typed error on the single-case read", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const corruptedCase = await seedCase(context, partnerId, "31378");
+    await writeCase(context, { ...corruptedCase, applicants: [] });
+
+    await expect(getCase(context, "rgs", corruptedCase.caseId)).rejects.toMatchObject({
+      statusCode: 409,
+      code: "CORRUPT_RECORD",
+    });
   });
 
   it("keeps one tenant's cases out of another's queries", async () => {

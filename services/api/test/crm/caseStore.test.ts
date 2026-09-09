@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildTestContext } from "../helpers";
 import { readCase, readCaseOrThrow, writeCase } from "../../src/domain/crm/caseStore";
+import { CorruptRecordError } from "../../src/lib/errors";
 import { APPLICANT_SORT_KEY_PREFIX, casePartitionKey } from "../../src/domain/crm/keys";
 import type { crm } from "@rgs/shared";
 
@@ -116,6 +117,41 @@ describe("caseStore", () => {
     await expect(readCaseOrThrow(context, "rgs", "nope")).rejects.toMatchObject({
       statusCode: 404,
     });
+  });
+
+  it("reports a typed failure for a partition that holds META but no applicants", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+    // A Lambda timeout (or one throttled PutItem) between the META write and
+    // the applicant writes leaves exactly this half-written partition.
+    await writeCase(context, buildCase({ applicants: [] } as Partial<crm.CrmCase>));
+    const partitionKey = casePartitionKey("rgs", "case_1");
+    expect(await context.table.get(partitionKey, "META")).toBeDefined();
+    expect(
+      await context.table.query(partitionKey, { skPrefix: APPLICANT_SORT_KEY_PREFIX }),
+    ).toHaveLength(0);
+
+    // A raw ZodError here escapes the router's ApiError mapping as a 500.
+    await expect(readCase(context, "rgs", "case_1")).rejects.toBeInstanceOf(CorruptRecordError);
+    await expect(readCase(context, "rgs", "case_1")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "CORRUPT_RECORD",
+    });
+  });
+
+  it("names the unreadable case in the failure, so an operator can find it", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+    await writeCase(context, buildCase({ applicants: [] } as Partial<crm.CrmCase>));
+    await expect(readCase(context, "rgs", "case_1")).rejects.toThrow(/case_1/);
+  });
+
+  it("does not fabricate an empty applicant list for a half-written partition", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+    await writeCase(context, buildCase({ applicants: [] } as Partial<crm.CrmCase>));
+    // Returning a case with applicants: [] would present a corrupt case as healthy.
+    await expect(readCase(context, "rgs", "case_1")).rejects.toBeInstanceOf(CorruptRecordError);
   });
 
   it("preserves applicant order across the single/double-digit boundary", async () => {

@@ -3,6 +3,7 @@ import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { buildTestContext } from "../helpers";
 import { Router } from "../../src/http/router";
 import { registerCrmRoutes } from "../../src/http/crmApi";
+import { writeCase } from "../../src/domain/crm/caseStore";
 import type { AppContext } from "../../src/lib/context";
 
 function buildRouter(context: AppContext): Router {
@@ -376,6 +377,51 @@ describe("crm admin routes", () => {
       { toOutcome: "APPROVED" },
     );
     expect(missing.statusCode).toBe(404);
+  });
+
+  // --- One half-written case partition must not take the whole queue down. ---
+  it("still lists the healthy cases when one case partition lost its applicants", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const healthy = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+    const corrupted = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31378",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31378", travellerId: "trv_1" }],
+    });
+    await writeCase(context, { ...corrupted.payload, applicants: [] });
+
+    const listed = await call(router, "GET", "/api/v1/admin/crm/cases", undefined, {
+      status: "NEW",
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.payload.cases.map((listedCase: { caseId: string }) => listedCase.caseId)).toEqual([
+      healthy.payload.caseId,
+    ]);
+
+    // The broken case itself is still reported, and as a typed error rather than a 500.
+    const broken = await call(
+      router,
+      "GET",
+      `/api/v1/admin/crm/cases/${corrupted.payload.caseId}`,
+    );
+    expect(broken.statusCode).toBe(409);
+    expect(broken.payload.code).toBe("CORRUPT_RECORD");
   });
 
   // requireAdmin(requestContext) is the first statement in every CRM route,

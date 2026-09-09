@@ -1,7 +1,8 @@
 import { crm } from "@rgs/shared";
+import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import type { TableItem } from "../../lib/db";
-import { notFound } from "../../lib/errors";
+import { corruptRecord, notFound } from "../../lib/errors";
 import {
   APPLICANT_SORT_KEY_PREFIX,
   CASE_META_SORT_KEY,
@@ -61,10 +62,28 @@ export async function readCase(
     skPrefix: APPLICANT_SORT_KEY_PREFIX,
   });
 
-  return crm.CrmCaseSchema.parse({
-    ...stripStorageAttributes(metaItem),
-    applicants: applicantItems.map(stripStorageAttributes),
-  });
+  try {
+    return crm.CrmCaseSchema.parse({
+      ...stripStorageAttributes(metaItem),
+      applicants: applicantItems.map(stripStorageAttributes),
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      // A partition can hold META with no APPLICANT# items — writeCase is not
+      // transactional, so a timeout between the two writes leaves exactly that.
+      // Raw, a ZodError escapes the router's ApiError mapping as a 500; an
+      // empty applicants array would instead pass a corrupt case off as healthy.
+      throw corruptRecord("Case", caseId, describeFirstIssue(error));
+    }
+    throw error;
+  }
+}
+
+function describeFirstIssue(error: ZodError): string {
+  const firstIssue = error.issues[0];
+  return firstIssue
+    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
+    : "the stored item failed schema validation";
 }
 
 export async function readCaseOrThrow(

@@ -24,3 +24,32 @@ export function badRequest(message: string): ApiError {
 export function conflict(message: string): ApiError {
   return new ApiError(409, "CONFLICT", message);
 }
+
+/**
+ * A stored record that cannot be reassembled into a valid domain object — a
+ * half-written partition, not a bad request. Typed as its own class so a caller
+ * that can carry on (a list view skipping one unreadable row) catches exactly
+ * this and lets every other failure propagate.
+ */
+export class CorruptRecordError extends ApiError {
+  constructor(
+    public readonly entity: string,
+    public readonly recordId: string,
+    public readonly reason: string,
+  ) {
+    super(
+      409,
+      "CORRUPT_RECORD",
+      `${entity} ${recordId} is stored in an unreadable state: ${reason}`,
+    );
+    this.name = "CorruptRecordError";
+  }
+}
+
+export function corruptRecord(
+  entity: string,
+  recordId: string,
+  reason: string,
+): CorruptRecordError {
+  return new CorruptRecordError(entity, recordId, reason);
+}

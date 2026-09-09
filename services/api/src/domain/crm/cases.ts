@@ -1,7 +1,7 @@
 import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import { badRequest, conflict, notFound } from "../../lib/errors";
+import { CorruptRecordError, badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
@@ -308,6 +308,11 @@ export async function listCasesByPartner(
 /**
  * A GSI query returns only the META item; applicants live in sibling items, so
  * each case is reassembled through the store.
+ *
+ * One case that cannot be reassembled (a half-written partition) must not hide
+ * the healthy ones — a whole tenant's queue would go down with it — so the bad
+ * row is skipped and logged with its caseId. Only CorruptRecordError is
+ * swallowed; every other failure still propagates.
  */
 async function loadCasesFromMetaItems(
   context: AppContext,
@@ -317,8 +322,16 @@ async function loadCasesFromMetaItems(
   const loadedCases: crm.CrmCase[] = [];
   for (const metaItem of metaItems) {
     if (metaItem["SK"] !== CASE_META_SORT_KEY) continue;
-    const loadedCase = await readCase(context, tenantId, String(metaItem["caseId"]));
-    if (loadedCase) loadedCases.push(loadedCase);
+    const caseId = String(metaItem["caseId"]);
+    try {
+      const loadedCase = await readCase(context, tenantId, caseId);
+      if (loadedCase) loadedCases.push(loadedCase);
+    } catch (error) {
+      if (!(error instanceof CorruptRecordError)) throw error;
+      console.warn(
+        `Skipped unreadable CRM case ${caseId} in tenant ${tenantId}: ${error.message}`,
+      );
+    }
   }
   return loadedCases;
 }
