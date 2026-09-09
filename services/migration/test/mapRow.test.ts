@@ -121,7 +121,61 @@ describe("mapRow — pass 1", () => {
   });
 
   it("defaults a missing applicant count to 1 rather than 0", () => {
-    expect(mapRow(buildRawRow({ applicantCount: "" })).applicantCount).toBe(1);
+    const mapped = mapRow(buildRawRow({ applicantCount: "" }));
+    expect(mapped.applicantCount).toBe(1);
+    // A blank count means one applicant. It is not a defect and must not
+    // reach the queue, or 6,678 of the 7,156 rows become review items.
+    expect(mapped.reviewItems).toEqual([]);
+    expect(mapped.legacyRaw["No."]).toBeUndefined();
+  });
+
+  // --- Measured on the real workbook: 25 present cells in the `No.` column
+  // --- are not a usable count -- "Evisa" x20, "0" x3, "." x1, "2 DOC" x1 --
+  // --- and every one of them was silently coerced to a single applicant.
+  it("flags a no-digit applicant count as column-shift junk instead of coercing it to 1", () => {
+    const mapped = mapRow(buildRawRow({ applicantCount: "Evisa" }));
+    // The run still proceeds with one applicant; what changes is that a human
+    // is told, and the cell text survives.
+    expect(mapped.applicantCount).toBe(1);
+    expect(mapped.reviewItems).toEqual([
+      expect.objectContaining({
+        reason: "COLUMN_SHIFT_JUNK",
+        fieldName: "No.",
+        rawValue: "Evisa",
+        proposedValue: "1",
+      }),
+    ]);
+    expect(mapped.legacyRaw["No."]).toBe("Evisa");
+  });
+
+  it("flags a digit-bearing applicant count that is not a count as a fabricated field", () => {
+    // "2 DOC" is the sharp one: Number() gives NaN, the old code used 1, and
+    // that case really does have two applicants. One of them was dropped with
+    // nothing recorded anywhere.
+    const mapped = mapRow(buildRawRow({ applicantCount: "2 DOC" }));
+    expect(mapped.applicantCount).toBe(1);
+    expect(mapped.reviewItems).toEqual([
+      expect.objectContaining({
+        reason: "MISSING_REQUIRED_FIELD",
+        fieldName: "No.",
+        rawValue: "2 DOC",
+      }),
+    ]);
+    expect(mapped.legacyRaw["No."]).toBe("2 DOC");
+  });
+
+  it("flags an applicant count of 0, which no case can have", () => {
+    const mapped = mapRow(buildRawRow({ applicantCount: "0" }));
+    expect(mapped.applicantCount).toBe(1);
+    expect(mapped.reviewItems.map((reviewItem) => reviewItem.reason)).toEqual([
+      "MISSING_REQUIRED_FIELD",
+    ]);
+  });
+
+  it("keeps a real count out of the queue", () => {
+    const mapped = mapRow(buildRawRow({ applicantCount: "3" }));
+    expect(mapped.applicantCount).toBe(3);
+    expect(mapped.reviewItems).toEqual([]);
   });
 
   // --- Review round 1, Major 2: courierMode/note wiring from Status into

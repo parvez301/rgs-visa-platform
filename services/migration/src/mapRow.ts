@@ -107,6 +107,49 @@ function mapDateField(
 }
 
 /**
+ * The `No.` column, which used to be `Number(cell)` with a silent fall back
+ * to 1 for anything that did not come out a positive number.
+ *
+ * Measured on the real workbook: 7,156 rows, 6,678 blank (a blank count means
+ * one applicant and is not a defect), 453 usable, and 25 present cells that
+ * are not a usable count at all — "Evisa" ×20, "0" ×3, "." ×1, "2 DOC" ×1.
+ * Every one of those became a case with one applicant and no trace that the
+ * cell said anything else. "2 DOC" is the sharp end: that case has two
+ * applicants and the coercion silently dropped one.
+ *
+ * So the cell is now split the same way `mapDateField` splits a date cell:
+ * no digit at all is foreign content in the column (COLUMN_SHIFT_JUNK), a
+ * cell with a digit is a botched attempt at a real count, and the 1 the
+ * importer proceeds with is a fabricated value the schema has no "absent"
+ * representation for (MISSING_REQUIRED_FIELD). Either way the text survives
+ * verbatim in `legacyRaw`, and the run still proceeds with 1 — this raises
+ * the row for a human, it does not stop the import.
+ */
+function mapApplicantCount(
+  rawValue: string,
+  reviewItems: PendingReviewItem[],
+  legacyRaw: Record<string, string>,
+): number {
+  if (isBlank(rawValue)) {
+    return 1;
+  }
+  const parsedApplicantCount = Number(rawValue);
+  if (Number.isFinite(parsedApplicantCount) && parsedApplicantCount >= 1) {
+    return Math.trunc(parsedApplicantCount);
+  }
+  reviewItems.push({
+    reason: looksLikeColumnShiftJunk(rawValue) ? "COLUMN_SHIFT_JUNK" : "MISSING_REQUIRED_FIELD",
+    fieldName: "No.",
+    rawValue,
+    proposedValue: "1",
+    detail:
+      "The applicant-count column holds a value that is not a count of one or more, so the case was imported with a single applicant. If the cell meant more than one, the missing applicants are not in the CRM.",
+  });
+  legacyRaw["No."] = rawValue;
+  return 1;
+}
+
+/**
  * The sheet's "payment status" column, which the importer used to ignore
  * entirely — along with the claim, in a comment beside `billingStatus:
  * "UNKNOWN"`, that "migrated rows carry no billing evidence". 34 rows carry
@@ -216,11 +259,7 @@ export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
     });
   }
 
-  const parsedApplicantCount = Number(rawRow.applicantCount);
-  const applicantCount =
-    Number.isFinite(parsedApplicantCount) && parsedApplicantCount >= 1
-      ? Math.trunc(parsedApplicantCount)
-      : 1;
+  const applicantCount = mapApplicantCount(rawRow.applicantCount, reviewItems, legacyRaw);
 
   const caseDraft: MappedCaseDraft = {
     caseType,
