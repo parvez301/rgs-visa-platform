@@ -3,6 +3,7 @@ import {
   canTransitionBilling,
   canTransitionCaseStatus,
   canTransitionCustody,
+  canTransitionOutcome,
   deriveCaseStatusFromApplicants,
   isCaseClosable,
 } from "../../src/crm/stateMachines";
@@ -148,5 +149,45 @@ describe("isCaseClosable", () => {
 
   it("never auto-closes a migrated case whose billing is UNKNOWN", () => {
     expect(isCaseClosable(["RETURNED"], "UNKNOWN")).toBe(false);
+  });
+});
+
+describe("outcome machine", () => {
+  it("decides a pending applicant, whichever way it goes", () => {
+    expect(canTransitionOutcome("PENDING", "APPROVED")).toBe(true);
+    expect(canTransitionOutcome("PENDING", "REJECTED")).toBe(true);
+    expect(canTransitionOutcome("PENDING", "SENT_BACK")).toBe(true);
+  });
+
+  it("corrects one decided outcome into another, because staff mistype", () => {
+    expect(canTransitionOutcome("APPROVED", "REJECTED")).toBe(true);
+    expect(canTransitionOutcome("APPROVED", "SENT_BACK")).toBe(true);
+    expect(canTransitionOutcome("REJECTED", "APPROVED")).toBe(true);
+    expect(canTransitionOutcome("REJECTED", "SENT_BACK")).toBe(true);
+    expect(canTransitionOutcome("SENT_BACK", "APPROVED")).toBe(true);
+    expect(canTransitionOutcome("SENT_BACK", "REJECTED")).toBe(true);
+  });
+
+  it("refuses to un-decide an applicant, which is what breaks the DECIDED derivation", () => {
+    expect(canTransitionOutcome("APPROVED", "PENDING")).toBe(false);
+    expect(canTransitionOutcome("REJECTED", "PENDING")).toBe(false);
+    expect(canTransitionOutcome("SENT_BACK", "PENDING")).toBe(false);
+  });
+
+  it("refuses a no-op, the same as the custody and billing machines", () => {
+    expect(canTransitionOutcome("PENDING", "PENDING")).toBe(false);
+    expect(canTransitionOutcome("APPROVED", "APPROVED")).toBe(false);
+    // The two machines this one is modelled on, for comparison.
+    expect(canTransitionCustody("WITH_RGS", "WITH_RGS")).toBe(false);
+    expect(canTransitionBilling("BILL_SENT", "BILL_SENT")).toBe(false);
+  });
+
+  it("keeps every applicant a DECIDED case holds out of PENDING", () => {
+    // deriveCaseStatusFromApplicants short-circuits once a case is DECIDED, so
+    // an applicant slipping back to PENDING would leave a DECIDED case holding
+    // a pending applicant — the contradiction this machine exists to prevent.
+    for (const decidedOutcome of ["APPROVED", "REJECTED", "SENT_BACK"] as const) {
+      expect(canTransitionOutcome(decidedOutcome, "PENDING")).toBe(false);
+    }
   });
 });

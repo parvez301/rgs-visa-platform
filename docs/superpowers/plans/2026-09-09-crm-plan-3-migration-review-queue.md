@@ -721,3 +721,434 @@ git commit -m "feat(crm): expose the migration review queue on the admin API"
 ```
 
 ---
+
+### Task 5: The `services/migration` package and the Excel serial converter
+
+**Files:**
+- Create: `services/migration/package.json`, `services/migration/tsconfig.json`, `services/migration/vitest.config.ts`
+- Create: `services/migration/src/excelSerial.ts`
+- Test: `services/migration/test/excelSerial.test.ts`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces:
+  - `EXCEL_EPOCH_UTC: Date` — `1899-12-30T00:00:00.000Z`
+  - `excelSerialToIsoDate(serialValue: number): string | null`
+  - `isExcelSerialCandidate(rawValue: unknown): rawValue is number`
+
+**Context for the implementer:** This package exists so `exceljs` never enters the Lambda bundle. Nothing in `services/api` may import it; the dependency arrow points one way only.
+
+The epoch is **not a guess** and must not be changed. It was determined empirically: REF NO 31376 carries `Sub Date` as the serial `45657` on the `2025 YEAR` sheet and as the text `12/31/2024` on `Mini CRM`. `1899-12-30 + 45657 days = 2024-12-31`, which matches; the 1904 system yields 2029-01-01, which does not. Getting this wrong silently shifts every date on a 6,549-row sheet by five years, and nothing downstream would notice.
+
+`excelSerialToIsoDate` returns `null` rather than throwing for values outside the plausible window, so the caller can route them to the review queue with the rest of the unparseable dates. The window matches `normalizeExcelDate`'s: 2020-2027 inclusive.
+
+- [ ] **Step 1: Create the package scaffold**
+
+`services/migration/package.json`:
+
+```json
+{
+  "name": "@rgs/migration",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "import": "node --experimental-strip-types src/cli.ts"
+  },
+  "dependencies": {
+    "@rgs/shared": "workspace:*",
+    "@rgs/api": "workspace:*",
+    "exceljs": "^4.4.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
+```
+
+`services/migration/tsconfig.json` — copy `services/api/tsconfig.json` verbatim and adjust only the paths it contains. Do not invent new compiler options; the base config already sets `strict` and `noUncheckedIndexedAccess`.
+
+`services/migration/vitest.config.ts` — copy `services/api/vitest.config.ts` verbatim.
+
+Then run `pnpm install` from the repo root to link the workspace.
+
+- [ ] **Step 2: Write the failing test**
+
+```ts
+import { describe, expect, it } from "vitest";
+import { excelSerialToIsoDate, isExcelSerialCandidate } from "../src/excelSerial";
+
+describe("excelSerialToIsoDate", () => {
+  it("uses the 1900 epoch, proven against a row present on both sheets", () => {
+    // REF NO 31376: "2025 YEAR" Sub Date serial 45657, "Mini CRM" text "12/31/2024".
+    expect(excelSerialToIsoDate(45657)).toBe("2024-12-31");
+  });
+
+  it("converts a second known serial from the same row", () => {
+    expect(excelSerialToIsoDate(45931)).toBe("2025-10-01");
+  });
+
+  it("would NOT produce the right answer under the 1904 epoch", () => {
+    // Guards the epoch constant against a well-meaning edit.
+    expect(excelSerialToIsoDate(45657)).not.toBe("2029-01-01");
+  });
+
+  it("truncates a fractional serial to its date part", () => {
+    expect(excelSerialToIsoDate(45657.75)).toBe("2024-12-31");
+  });
+
+  it("returns null outside the plausible business window", () => {
+    expect(excelSerialToIsoDate(1)).toBeNull();       // 1899
+    expect(excelSerialToIsoDate(60000)).toBeNull();   // 2064
+  });
+
+  it("recognises only finite numbers as serial candidates", () => {
+    expect(isExcelSerialCandidate(45657)).toBe(true);
+    expect(isExcelSerialCandidate("45657")).toBe(false);
+    expect(isExcelSerialCandidate(Number.NaN)).toBe(false);
+    expect(isExcelSerialCandidate(null)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 3: Run the test and watch it fail**
+
+Run: `pnpm --filter @rgs/migration test`
+Expected: FAIL — `Failed to load url ../src/excelSerial`.
+
+- [ ] **Step 4: Write the implementation**
+
+```ts
+/**
+ * Excel's 1900 date system, expressed as the day-zero anchor: serial 1 is
+ * 1900-01-01, and the system's phantom 1900-02-29 makes 1899-12-30 the
+ * arithmetic base.
+ *
+ * DETERMINED EMPIRICALLY, NOT ASSUMED. REF NO 31376 appears on both sheets:
+ * "2025 YEAR" stores Sub Date as the serial 45657, "Mini CRM" stores it as
+ * the text "12/31/2024". 1899-12-30 + 45657 days = 2024-12-31, which agrees.
+ * The 1904 system gives 2029-01-01, which does not. Do not change this
+ * without re-running that cross-sheet check.
+ */
+export const EXCEL_EPOCH_UTC = new Date(Date.UTC(1899, 11, 30));
+
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+/** Matches normalizeExcelDate's window so both paths agree on what is plausible. */
+const EARLIEST_PLAUSIBLE_YEAR = 2020;
+const LATEST_PLAUSIBLE_YEAR = 2027;
+
+export function isExcelSerialCandidate(rawValue: unknown): rawValue is number {
+  return typeof rawValue === "number" && Number.isFinite(rawValue);
+}
+
+export function excelSerialToIsoDate(serialValue: number): string | null {
+  if (!Number.isFinite(serialValue)) {
+    return null;
+  }
+  const wholeDays = Math.trunc(serialValue);
+  const converted = new Date(EXCEL_EPOCH_UTC.getTime() + wholeDays * MILLISECONDS_PER_DAY);
+  const year = converted.getUTCFullYear();
+  if (year < EARLIEST_PLAUSIBLE_YEAR || year > LATEST_PLAUSIBLE_YEAR) {
+    return null;
+  }
+  const month = String(converted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(converted.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+```
+
+- [ ] **Step 5: Run the test and watch it pass**
+
+Run: `pnpm --filter @rgs/migration test` — PASS, 6 tests.
+Then `pnpm -r typecheck` — the new package must typecheck alongside the existing five.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add services/migration pnpm-lock.yaml
+git commit -m "feat(migration): add the migration package and the Excel serial converter"
+```
+
+---
+
+### Task 6: Workbook reader
+
+**Files:**
+- Create: `services/migration/src/readWorkbook.ts`
+- Test: `services/migration/test/readWorkbook.test.ts`
+- Test fixture: `services/migration/test/fixtures/buildFixtureWorkbook.ts`
+
+**Interfaces:**
+- Consumes: `excelSerialToIsoDate`, `isExcelSerialCandidate` from `./excelSerial`.
+- Produces:
+  - `interface RawMiniCrmRow { sourceRow: number; receivedDateRaw: string; caseRef: string; applicantsName: string; applicantCount: string; partnerName: string; country: string; dateOfBirthRaw: string; subDateRaw: string; collectionRaw: string; passportNumber: string; entries: string; visaType: string; status: string; additionalItems: string }`
+  - `interface RawYearRow { sourceRow: number; caseRef: string; phoneRaw: string; trackingNumber: string }`
+  - `interface WorkbookExtract { miniCrmRows: RawMiniCrmRow[]; yearRows: RawYearRow[] }`
+  - `readWorkbook(workbookPath: string): Promise<WorkbookExtract>`
+  - `normaliseCellText(rawCellValue: unknown): string`
+  - `normaliseRefNo(rawCellValue: unknown): string`
+
+**Context for the implementer:** Three traps live in this file, and every one of them is silent if you get it wrong.
+
+1. **Read by column position, never by header text.** On `2025 YEAR`, the header of column E literally reads `China` — somebody typed a country into the header cell. Keying on header names would drop or misroute that column.
+2. **Convert serials here, at the reader boundary.** `Mini CRM` stores dates as text; `2025 YEAR` stores them as numeric serials. `normalizeExcelDate` in `@rgs/shared` explicitly refuses serials and routes them to review — so feeding it raw serials would send all 6,549 `2025 YEAR` rows to the queue. When a cell is a serial candidate, convert it with `excelSerialToIsoDate` and emit the ISO string; otherwise pass the text through untouched.
+3. **`REF NO.` and `No.` arrive as floats** — `31376.0`, `3.0`. `normaliseRefNo` must yield `"31376"`. Case identity is keyed on this string, so `"31376"` and `"31376.0"` being different would break idempotency and re-import every row on the second run.
+
+`sourceRow` is the 1-based worksheet row number, so row 2 is the first data row. It is stored on every record for provenance (spec §9) and must be the real sheet row, not an array index.
+
+Build the fixture workbook programmatically with `exceljs` rather than committing a binary `.xlsx` — a generated fixture can encode exactly the traps above and stays reviewable in a diff.
+
+- [ ] **Step 1: Write the fixture builder**
+
+```ts
+import ExcelJS from "exceljs";
+
+/**
+ * Builds a workbook reproducing the real file's traps: text dates on
+ * "Mini CRM", serial dates and a mislabeled column-E header on "2025 YEAR",
+ * and float-formatted REF NO / No. values on both.
+ */
+export async function buildFixtureWorkbook(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+
+  const miniCrm = workbook.addWorksheet("Mini CRM");
+  miniCrm.addRow(["C","REF NO.","APPLICANTS NAME","No.","REFRENCE","Country","DOB","Sub Date","Collection","Passport No.","Entries","Visa Type","Status","Additional Items"]);
+  miniCrm.addRow(["30-12-2024", 31376, "AKSHAY JAIN", 3, "Sudiva Spinners Pvt Ltd", "Turkey", "", "12/31/2024", 45931, "V2404480", "Single", "Business", "Handover", "PHOTO, HOTEL"]);
+  miniCrm.addRow(["02-01-2025", 31377, "MEERA IYER", 1, "VWI Mumbai", "Vietnam", "", "05/01/2025", "", "M1234567", "Multiple 1 Yr", "Tourist", "Approved", ""]);
+  miniCrm.addRow(["03-01-2025", 31378, "RAVI NAIR", 1, "VWI BOM", "Czech Group", "", "aposttile", "", "", "Business", "Attestation", "DEU/DEL/190126/", ""]);
+
+  // Column E's header really is "China" in the source file.
+  const yearSheet = workbook.addWorksheet("2025 YEAR");
+  yearSheet.addRow(["DATE","REF NO.","APPLICANTS NAME","REFRENCE","China","DOB","No.","Sub Date","Collection","Phone","TRACKING NO.","Passport No.","Visa Type","Entries"]);
+  yearSheet.addRow(["30-12-2024", 31376, "AKSHAY JAIN", "Sudiva Spinners Pvt Ltd", "Turkey", "", 3, 45657, 45931, 723001238, "DTDC9911", "V2404480", "Business", "Single"]);
+  yearSheet.addRow(["02-01-2025", 31377, "MEERA IYER", "VWI Mumbai", "Vietnam", "", 1, 45658, "", 9812345670, "", "M1234567", "Tourist", "Multiple 1 Yr"]);
+
+  const arrayBuffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(arrayBuffer);
+}
+```
+
+- [ ] **Step 2: Write the failing test**
+
+```ts
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
+import { buildFixtureWorkbook } from "./fixtures/buildFixtureWorkbook";
+import { normaliseRefNo, readWorkbook, type WorkbookExtract } from "../src/readWorkbook";
+
+let extract: WorkbookExtract;
+
+beforeAll(async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rgs-migration-"));
+  const workbookPath = join(directory, "fixture.xlsx");
+  await writeFile(workbookPath, await buildFixtureWorkbook());
+  extract = await readWorkbook(workbookPath);
+});
+
+describe("readWorkbook", () => {
+  it("reads every Mini CRM data row and numbers them by sheet row", () => {
+    expect(extract.miniCrmRows).toHaveLength(3);
+    expect(extract.miniCrmRows[0]!.sourceRow).toBe(2);
+    expect(extract.miniCrmRows[2]!.sourceRow).toBe(4);
+  });
+
+  it("strips the float formatting from REF NO so case identity is stable", () => {
+    expect(extract.miniCrmRows[0]!.caseRef).toBe("31376");
+    expect(extract.miniCrmRows[0]!.applicantCount).toBe("3");
+    expect(normaliseRefNo(31376)).toBe("31376");
+    expect(normaliseRefNo("31376.0")).toBe("31376");
+  });
+
+  it("passes Mini CRM text dates through untouched", () => {
+    expect(extract.miniCrmRows[0]!.subDateRaw).toBe("12/31/2024");
+  });
+
+  it("converts 2025 YEAR serial dates at the reader boundary", () => {
+    // Without this the shared date normalizer refuses serials and every
+    // row on this sheet would land in the review queue.
+    expect(extract.yearRows).toHaveLength(2);
+    expect(extract.miniCrmRows[0]!.collectionRaw).toBe("2025-10-01");
+  });
+
+  it("reads 2025 YEAR by position despite the column-E header saying 'China'", () => {
+    expect(extract.yearRows[0]!.caseRef).toBe("31376");
+    expect(extract.yearRows[0]!.trackingNumber).toBe("DTDC9911");
+  });
+
+  it("expands a scientific-notation phone back to digits", () => {
+    expect(extract.yearRows[0]!.phoneRaw).toBe("723001238");
+    expect(extract.yearRows[1]!.phoneRaw).toBe("9812345670");
+  });
+
+  it("returns empty strings for blank cells rather than undefined", () => {
+    expect(extract.miniCrmRows[1]!.collectionRaw).toBe("");
+    expect(extract.miniCrmRows[1]!.additionalItems).toBe("");
+  });
+});
+```
+
+- [ ] **Step 3: Run the test and watch it fail**
+
+Run: `pnpm --filter @rgs/migration test readWorkbook`
+Expected: FAIL — `Failed to load url ../src/readWorkbook`.
+
+- [ ] **Step 4: Write the implementation**
+
+```ts
+import ExcelJS from "exceljs";
+import { excelSerialToIsoDate, isExcelSerialCandidate } from "./excelSerial";
+
+export interface RawMiniCrmRow {
+  sourceRow: number;
+  receivedDateRaw: string;
+  caseRef: string;
+  applicantsName: string;
+  applicantCount: string;
+  partnerName: string;
+  country: string;
+  dateOfBirthRaw: string;
+  subDateRaw: string;
+  collectionRaw: string;
+  passportNumber: string;
+  entries: string;
+  visaType: string;
+  status: string;
+  additionalItems: string;
+}
+
+export interface RawYearRow {
+  sourceRow: number;
+  caseRef: string;
+  phoneRaw: string;
+  trackingNumber: string;
+}
+
+export interface WorkbookExtract {
+  miniCrmRows: RawMiniCrmRow[];
+  yearRows: RawYearRow[];
+}
+
+export const MINI_CRM_SHEET_NAME = "Mini CRM";
+export const YEAR_SHEET_NAME = "2025 YEAR";
+
+/**
+ * Cells arrive as strings, numbers, Dates, or rich-text objects depending on
+ * how the value was entered. Everything becomes trimmed text; a numeric value
+ * that looks like a date serial is converted here, at the boundary, because
+ * the shared date normalizer deliberately refuses serials.
+ */
+export function normaliseCellText(rawCellValue: unknown): string {
+  if (rawCellValue === null || rawCellValue === undefined) {
+    return "";
+  }
+  if (rawCellValue instanceof Date) {
+    return rawCellValue.toISOString().slice(0, 10);
+  }
+  if (typeof rawCellValue === "object" && "text" in rawCellValue) {
+    return String((rawCellValue as { text: unknown }).text).trim();
+  }
+  if (typeof rawCellValue === "number") {
+    return Number.isInteger(rawCellValue) ? String(rawCellValue) : String(rawCellValue);
+  }
+  return String(rawCellValue).trim();
+}
+
+/** A date cell: convert a serial, otherwise keep the text for the shared normalizer. */
+function normaliseDateCell(rawCellValue: unknown): string {
+  if (isExcelSerialCandidate(rawCellValue)) {
+    return excelSerialToIsoDate(rawCellValue) ?? String(rawCellValue);
+  }
+  return normaliseCellText(rawCellValue);
+}
+
+/** `31376.0` and `"31376.0"` both become `"31376"`. Case identity depends on this. */
+export function normaliseRefNo(rawCellValue: unknown): string {
+  const text = normaliseCellText(rawCellValue);
+  if (text === "") {
+    return "";
+  }
+  const numericValue = Number(text);
+  return Number.isFinite(numericValue) ? String(Math.trunc(numericValue)) : text;
+}
+
+/** Phones arrive as floats in scientific notation: 7.23001238E8. */
+function normalisePhone(rawCellValue: unknown): string {
+  if (typeof rawCellValue === "number" && Number.isFinite(rawCellValue)) {
+    return String(Math.trunc(rawCellValue));
+  }
+  return normaliseCellText(rawCellValue);
+}
+
+export async function readWorkbook(workbookPath: string): Promise<WorkbookExtract> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(workbookPath);
+
+  const miniCrmSheet = workbook.getWorksheet(MINI_CRM_SHEET_NAME);
+  const yearSheet = workbook.getWorksheet(YEAR_SHEET_NAME);
+  if (miniCrmSheet === undefined) {
+    throw new Error(`Workbook has no "${MINI_CRM_SHEET_NAME}" sheet`);
+  }
+
+  const miniCrmRows: RawMiniCrmRow[] = [];
+  miniCrmSheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return; // header
+    // Columns are read by POSITION. The real file has unreliable headers.
+    const cellAt = (columnNumber: number): unknown => row.getCell(columnNumber).value;
+    const caseRef = normaliseRefNo(cellAt(2));
+    if (caseRef === "") return; // a row with no REF NO carries no identity
+    miniCrmRows.push({
+      sourceRow: rowNumber,
+      receivedDateRaw: normaliseDateCell(cellAt(1)),
+      caseRef,
+      applicantsName: normaliseCellText(cellAt(3)),
+      applicantCount: normaliseRefNo(cellAt(4)),
+      partnerName: normaliseCellText(cellAt(5)),
+      country: normaliseCellText(cellAt(6)),
+      dateOfBirthRaw: normaliseDateCell(cellAt(7)),
+      subDateRaw: normaliseDateCell(cellAt(8)),
+      collectionRaw: normaliseDateCell(cellAt(9)),
+      passportNumber: normaliseCellText(cellAt(10)),
+      entries: normaliseCellText(cellAt(11)),
+      visaType: normaliseCellText(cellAt(12)),
+      status: normaliseCellText(cellAt(13)),
+      additionalItems: normaliseCellText(cellAt(14)),
+    });
+  });
+
+  const yearRows: RawYearRow[] = [];
+  yearSheet?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const cellAt = (columnNumber: number): unknown => row.getCell(columnNumber).value;
+    const caseRef = normaliseRefNo(cellAt(2));
+    if (caseRef === "") return;
+    yearRows.push({
+      sourceRow: rowNumber,
+      caseRef,
+      phoneRaw: normalisePhone(cellAt(10)),
+      trackingNumber: normaliseCellText(cellAt(11)),
+    });
+  });
+
+  return { miniCrmRows, yearRows };
+}
+```
+
+- [ ] **Step 5: Run the test and watch it pass**
+
+Run: `pnpm --filter @rgs/migration test readWorkbook` — PASS, 7 tests.
+Then `pnpm -r typecheck`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add services/migration
+git commit -m "feat(migration): read the workbook by column position with serial-date conversion"
+```
+
+---

@@ -59,6 +59,28 @@ export function canTransitionCustody(
   return CUSTODY_TRANSITIONS[fromCustody].includes(toCustody);
 }
 
+/**
+ * PENDING decides in any direction. A decided outcome may be corrected into
+ * another decided outcome — staff mistype, and the event log records the
+ * change — but never back to PENDING: deriveCaseStatusFromApplicants
+ * short-circuits once a case is DECIDED, so un-deciding would leave a DECIDED
+ * case holding a pending applicant. A no-op is refused, as in the two machines
+ * above.
+ */
+const OUTCOME_TRANSITIONS: Record<ApplicantOutcome, readonly ApplicantOutcome[]> = {
+  PENDING: ["APPROVED", "REJECTED", "SENT_BACK"],
+  APPROVED: ["REJECTED", "SENT_BACK"],
+  REJECTED: ["APPROVED", "SENT_BACK"],
+  SENT_BACK: ["APPROVED", "REJECTED"],
+};
+
+export function canTransitionOutcome(
+  fromOutcome: ApplicantOutcome,
+  toOutcome: ApplicantOutcome,
+): boolean {
+  return OUTCOME_TRANSITIONS[fromOutcome].includes(toOutcome);
+}
+
 const BILLING_TRANSITIONS: Record<BillingStatus, readonly BillingStatus[]> = {
   UNKNOWN: ["UNBILLED", "BILL_SENT", "PAID", "PART_PAID", "WRITTEN_OFF"],
   UNBILLED: ["BILL_SENT", "WRITTEN_OFF"],

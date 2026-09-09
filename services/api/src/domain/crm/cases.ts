@@ -184,6 +184,9 @@ export async function changeApplicantOutcome(
   if (!crm.APPLICANT_OUTCOMES.includes(nextOutcome)) {
     throw badRequest(`Unknown applicant outcome ${nextOutcome}`);
   }
+  if (!crm.canTransitionOutcome(caseApplicant.outcome, nextOutcome)) {
+    throw conflict(`Cannot move outcome from ${caseApplicant.outcome} to ${nextOutcome}`);
+  }
 
   const nowIso = context.now().toISOString();
   const updatedApplicants = currentCase.applicants.map((applicant, index) =>

@@ -336,6 +336,69 @@ describe("crm cases", () => {
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 
+  it("corrects a decided outcome into another decided outcome and logs the change", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
+    await changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "APPROVED", "ops@rgs.test");
+
+    // A later timestamp, so the two events sort deterministically in the log.
+    context.advanceClock(60_000);
+    // Staff mistype; a correction between decided outcomes is legitimate.
+    const corrected = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      applicantRef,
+      "REJECTED",
+      "ops@rgs.test",
+    );
+    expect(corrected.applicants[0]!.outcome).toBe("REJECTED");
+
+    const events = await listCaseEvents(context, "rgs", created.caseId);
+    const outcomeEvents = events.filter((event) => event.eventType === "APPLICANT_OUTCOME_CHANGED");
+    expect(outcomeEvents).toHaveLength(2);
+    expect(outcomeEvents[1]!.meta["fromOutcome"]).toBe("APPROVED");
+    expect(outcomeEvents[1]!.meta["toOutcome"]).toBe("REJECTED");
+  });
+
+  it("refuses to un-decide an applicant with a 409, leaving the recorded outcome intact", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
+    const decided = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      applicantRef,
+      "APPROVED",
+      "ops@rgs.test",
+    );
+    expect(decided.caseStatus).toBe("DECIDED");
+
+    await expect(
+      changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "PENDING", "ops@rgs.test"),
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    // A DECIDED case must never hold a PENDING applicant: the derivation
+    // short-circuits once DECIDED, so nothing else would put this right.
+    const reloaded = await getCase(context, "rgs", created.caseId);
+    expect(reloaded.applicants[0]!.outcome).toBe("APPROVED");
+    expect(reloaded.caseStatus).toBe("DECIDED");
+  });
+
+  it("refuses a no-op outcome change with a 409", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
+    // PENDING -> PENDING, the same no-op the custody and billing gates refuse.
+    await expect(
+      changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "PENDING", "ops@rgs.test"),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    const events = await listCaseEvents(context, "rgs", created.caseId);
+    expect(events.filter((event) => event.eventType === "APPLICANT_OUTCOME_CHANGED")).toHaveLength(0);
+  });
+
   it("does not become DECIDED until every applicant is decided, then does", async () => {
     const context = buildTestContext();
     const created = await seedTwoApplicantCase(context, await seedPartner(context));
