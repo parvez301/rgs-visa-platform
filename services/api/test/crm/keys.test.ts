@@ -4,6 +4,7 @@ import {
   APPLICANT_SORT_KEY_PREFIX,
   META_SORT_KEY,
   DEFAULT_TENANT_ID,
+  REVIEW_ITEM_SORT_KEY,
   applicantSortKey,
   caseIdFromPartitionKey,
   casePartitionKey,
@@ -12,6 +13,8 @@ import {
   partnerCasesGsi2Pk,
   partnerPartitionKey,
   passportGsi3Pk,
+  reviewItemPartitionKey,
+  reviewQueueGsi1Pk,
   travellerPartitionKey,
 } from "../../src/domain/crm/keys";
 
@@ -61,6 +64,33 @@ describe("crm keys", () => {
 
   it("defaults to the rgs tenant", () => {
     expect(DEFAULT_TENANT_ID).toBe("rgs");
+  });
+
+  it("builds tenant-scoped review-item keys", () => {
+    expect(reviewItemPartitionKey("rgs", "rev_01")).toBe("TENANT#rgs#REVIEW#rev_01");
+  });
+
+  it("partitions the review queue by status so the screen loads OPEN in one query", () => {
+    expect(reviewQueueGsi1Pk("rgs", "OPEN")).toBe("TENANT#rgs#REVIEW_STATUS#OPEN");
+    expect(reviewQueueGsi1Pk("rgs", "APPLIED")).toBe("TENANT#rgs#REVIEW_STATUS#APPLIED");
+  });
+
+  it("keeps review items in a different keyspace from cases", () => {
+    expect(reviewItemPartitionKey("rgs", "x")).not.toBe(casePartitionKey("rgs", "x"));
+  });
+
+  it("scopes review keys per tenant", () => {
+    expect(reviewItemPartitionKey("rgs", "rev_01")).not.toBe(reviewItemPartitionKey("other", "rev_01"));
+    expect(reviewQueueGsi1Pk("rgs", "OPEN")).not.toBe(reviewQueueGsi1Pk("other", "OPEN"));
+  });
+
+  // The brief requires reviewItemPartitionKey and reviewQueueGsi1Pk plus a
+  // REVIEW_ITEM_SORT_KEY export. It must reuse the shared META_SORT_KEY
+  // constant rather than a second "META" literal, so a future rename of one
+  // cannot silently drift from the other.
+  it("reuses the shared META sort key for review items instead of a second literal", () => {
+    expect(REVIEW_ITEM_SORT_KEY).toBe("META");
+    expect(REVIEW_ITEM_SORT_KEY).toBe(META_SORT_KEY);
   });
 
   // The standing rule: keys.ts is the only file allowed to write a CRM

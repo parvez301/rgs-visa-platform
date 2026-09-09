@@ -74,3 +74,18 @@ export function travellerNameGsi2Pk(tenantId: string, normalizedName: string): s
 export function eventSortKey(createdAt: string, eventId: string): string {
   return `${createdAt}#${eventId}`;
 }
+
+/**
+ * The sort key for a review item's own "the record itself" item. Reuses
+ * META_SORT_KEY rather than a second "META" literal, so review items share
+ * the same storage decision as cases, partners and travellers.
+ */
+export const REVIEW_ITEM_SORT_KEY = META_SORT_KEY;
+
+export function reviewItemPartitionKey(tenantId: string, reviewItemId: string): string {
+  return `TENANT#${tenantId}#REVIEW#${reviewItemId}`;
+}
+
+export function reviewQueueGsi1Pk(tenantId: string, reviewStatus: string): string {
+  return `TENANT#${tenantId}#REVIEW_STATUS#${reviewStatus}`;
+}
