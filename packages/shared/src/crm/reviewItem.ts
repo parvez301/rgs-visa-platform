@@ -22,6 +22,14 @@ export const REVIEW_REASONS = [
    * actually held.
    */
   "MISSING_REQUIRED_FIELD",
+  /**
+   * A row could not be imported because the case already holding its ref is
+   * stored in a state nothing can read — or because a previous run reserved
+   * the ref and died before writing the case. Unlike every other reason here
+   * this one is not about the workbook at all: the spreadsheet cell is fine
+   * and the stored record is not, so it names a `caseId` rather than a value.
+   */
+  "UNREADABLE_STORED_CASE",
 ] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
 

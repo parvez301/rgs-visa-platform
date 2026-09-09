@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildTestContext } from "@rgs/api/test/helpers";
 import { readCase } from "@rgs/api/src/domain/crm/caseStore";
-import { listCasesByStatus } from "@rgs/api/src/domain/crm/cases";
+import { listCaseRefsByStatus, listCasesByStatus } from "@rgs/api/src/domain/crm/cases";
 import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
 import { listPartners } from "@rgs/api/src/domain/crm/partners";
 import { getTravellerOrThrow } from "@rgs/api/src/domain/crm/travellers";
@@ -10,7 +10,7 @@ import { runImport } from "../src/importRun";
 import { passthroughResidueResolver } from "../src/residueResolver";
 import type { ResidueResolution, ResidueResolver } from "../src/residueResolver";
 import type { MappedRow } from "../src/mapRow";
-import type { TableClient, QueryOptions } from "@rgs/api/src/lib/db";
+import type { TableClient, TableItem, QueryOptions } from "@rgs/api/src/lib/db";
 
 function buildMappedRow(overrides: Partial<MappedRow> = {}): MappedRow {
   return {
@@ -630,5 +630,199 @@ describe("runImport", () => {
 
     expect(secondSummary.casesCreated).toBe(0);
     expect(secondSummary.casesSkippedAlreadyImported).toBe(rowCount);
+  });
+
+  it("sweeps past the default page limit when deciding a group is unchanged", async () => {
+    const context = buildTestContext();
+    const rowCount = 55;
+    const rows = Array.from({ length: rowCount }, (_unused, rowIndex) =>
+      buildMappedRow({
+        caseRef: String(rowIndex + 1),
+        sourceRow: rowIndex + 2,
+        passportNumber: `PASS${String(rowIndex).padStart(4, "0")}`,
+      }),
+    );
+    // One group covering every ref, so the "has a member nobody imported yet"
+    // test has to see all 55 of them in the sweep to conclude "unchanged".
+    const proposedGroups = [
+      {
+        caseRefs: rows.map((row) => row.caseRef),
+        partnerName: "VWI Mumbai",
+        destinationCountry: "TR",
+        receivedDate: "2025-01-02",
+      },
+    ];
+
+    const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows, proposedGroups });
+    expect(firstSummary.groupsProposed).toBe(1);
+
+    const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows, proposedGroups });
+    // Capped at the domain default of 50 the sweep would miss 5 of the refs,
+    // call the group changed, and re-queue a proposal a human already has.
+    expect(secondSummary.groupsProposed).toBe(0);
+  });
+
+  // --- C1/C2: what a non-transactional writeCase and a lagging GSI leave -----
+  //
+  // Every test below needs a table that can fail the way a real one does.
+  // InMemoryTableClient.put is synchronous and cannot fail between two puts,
+  // and its GSIs are immediately consistent, which is exactly why the
+  // three-run rehearsal proved nothing about any of this.
+
+  /** Wraps a table so puts matching `shouldFail` reject, as a timeout would. */
+  function tableFailingPuts(
+    table: TableClient,
+    shouldFail: (item: TableItem) => boolean,
+  ): TableClient {
+    return {
+      get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
+      put: async (item) => {
+        if (shouldFail(item)) throw new Error(`simulated write timeout on ${item.PK} / ${item.SK}`);
+        return table.put(item);
+      },
+      delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
+      query: (partitionKey, options) => table.query(partitionKey, options),
+      queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    };
+  }
+
+  /** Wraps a table so a GSI1 read returns nothing, as a lagging index does. */
+  function tableWithLaggingGsi1(table: TableClient): TableClient {
+    return {
+      get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
+      put: (item) => table.put(item),
+      delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
+      query: (partitionKey, options) => table.query(partitionKey, options),
+      queryGsi: async (indexName, partitionKey, options) =>
+        indexName === "GSI1" && partitionKey.includes("#CASE_STATUS#")
+          ? []
+          : table.queryGsi(indexName, partitionKey, options),
+    };
+  }
+
+  async function storedCaseRefsInStatus(
+    context: ReturnType<typeof buildTestContext>,
+    caseStatus: "CLOSED",
+  ): Promise<string[]> {
+    const listing = await listCaseRefsByStatus(context, "rgs", caseStatus, 1000);
+    return listing.storedCaseRefs.map((storedCaseRef) => storedCaseRef.caseRef);
+  }
+
+  it("never re-imports the ref of a half-written case, and flags it instead", async () => {
+    const context = buildTestContext();
+    const rows = [buildMappedRow()];
+
+    // A timeout between writeCase's META put and its applicant put: the
+    // partition is left holding META alone, which is what readCase's own
+    // comment describes and what no in-memory test could produce before.
+    const halfWritingContext = {
+      ...context,
+      table: tableFailingPuts(context.table, (item) => item.SK.startsWith("APPLICANT#")),
+    };
+    await expect(
+      runImport(halfWritingContext, "rgs", { ...baseInput, mappedRows: rows }),
+    ).rejects.toThrow(/simulated write timeout/);
+    expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual(["31376"]);
+
+    const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+
+    // The whole point: the ref is spoken for, so nothing new is written under
+    // it. Re-importing would leave two cases sharing REF 31376, one of them
+    // permanently invisible to every listing in the API.
+    expect(secondSummary.casesCreated).toBe(0);
+    expect(secondSummary.casesSkippedUnreadable).toBe(1);
+    expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual(["31376"]);
+
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    const unreadableItems = open.reviewItems.filter(
+      (item) => item.reason === "UNREADABLE_STORED_CASE",
+    );
+    expect(unreadableItems).toHaveLength(1);
+    expect(unreadableItems[0]!.rawValue).toBe("31376");
+    expect(unreadableItems[0]!.detail).toMatch(/unreadable state/);
+
+    // ...and it stays skipped: a third run must not quietly decide otherwise.
+    const thirdSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+    expect(thirdSummary.casesCreated).toBe(0);
+    expect(thirdSummary.casesSkippedUnreadable).toBe(1);
+  });
+
+  it("repairs a ref that was reserved before a run died, under the reserved caseId", async () => {
+    const context = buildTestContext();
+    const rows = [buildMappedRow()];
+
+    // This time the case's own META put is what fails, so the ref is
+    // reserved and no case exists at all.
+    const reserveOnlyContext = {
+      ...context,
+      table: tableFailingPuts(context.table, (item) => item.SK === "META" && item.PK.includes("#CASE#")),
+    };
+    await expect(
+      runImport(reserveOnlyContext, "rgs", { ...baseInput, mappedRows: rows }),
+    ).rejects.toThrow(/simulated write timeout/);
+    expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual([]);
+
+    const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+
+    expect(secondSummary.casesCreated).toBe(1);
+    const repairedCase = await readCase(context, "rgs", secondSummary.createdCaseIds[0]!);
+    expect(repairedCase!.caseRef).toBe("31376");
+
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    expect(
+      open.reviewItems.filter((item) => item.reason === "UNREADABLE_STORED_CASE"),
+    ).toHaveLength(1);
+
+    // A third run finds a completed reservation and leaves it alone -- the
+    // repair must not itself become a source of duplicates.
+    const thirdSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+    expect(thirdSummary.casesCreated).toBe(0);
+    expect(thirdSummary.casesSkippedAlreadyImported).toBe(1);
+    expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual(["31376"]);
+  });
+
+  it("stays idempotent when the case-status index has not caught up", async () => {
+    const context = buildTestContext();
+    const rows = [
+      buildMappedRow({ caseRef: "1", sourceRow: 2, passportNumber: "P1111111" }),
+      buildMappedRow({ caseRef: "2", sourceRow: 3, passportNumber: "P2222222" }),
+    ];
+    await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+
+    // GSI1 returns nothing for the case-status partitions, which is what an
+    // operator re-running seconds after an aborted --commit actually sees.
+    // DynamoDB refuses a consistent read on an index, so the sweep cannot ask
+    // for a better answer; only the per-ref reservation can give one.
+    const laggingContext = { ...context, table: tableWithLaggingGsi1(context.table) };
+    const secondSummary = await runImport(laggingContext, "rgs", { ...baseInput, mappedRows: rows });
+
+    expect(secondSummary.casesCreated).toBe(0);
+    expect(secondSummary.casesSkippedAlreadyImported).toBe(2);
+    expect((await storedCaseRefsInStatus(context, "CLOSED")).sort()).toEqual(["1", "2"]);
+  });
+
+  it("flags a stored case whose META item carries no readable ref", async () => {
+    const context = buildTestContext();
+    await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
+
+    // A hand-repaired row: still indexed as a case, no longer naming its ref.
+    const storedMetaItems = await context.table.queryGsi("GSI1", "TENANT#rgs#CASE_STATUS#CLOSED");
+    const { caseRef: _droppedCaseRef, ...metaItemWithoutCaseRef } = storedMetaItems[0]!;
+    await context.table.put(metaItemWithoutCaseRef as typeof storedMetaItems[0]);
+
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [buildMappedRow({ caseRef: "99999", sourceRow: 3, passportNumber: "P9999999" })],
+    });
+
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    const unreadableItems = open.reviewItems.filter(
+      (item) => item.reason === "UNREADABLE_STORED_CASE",
+    );
+    expect(unreadableItems).toHaveLength(1);
+    expect(unreadableItems[0]!.detail).toMatch(/carries no readable REF NO/);
+    // The unrelated row still imports: one unreadable stored case must not
+    // stop the migration.
+    expect(summary.casesCreated).toBe(1);
   });
 });

@@ -3,8 +3,14 @@ import { ZodError } from "zod";
 import type { AppContext } from "@rgs/api/src/lib/context";
 import { CorruptRecordError, badRequest } from "@rgs/api/src/lib/errors";
 import { newId } from "@rgs/api/src/lib/ids";
-import { writeCase } from "@rgs/api/src/domain/crm/caseStore";
-import { listCasesByStatus } from "@rgs/api/src/domain/crm/cases";
+import { readCase, writeCase } from "@rgs/api/src/domain/crm/caseStore";
+import { listCaseRefsByStatus } from "@rgs/api/src/domain/crm/cases";
+import {
+  completeCaseRefReservation,
+  readCaseRefReservation,
+  reserveCaseRef,
+  type CaseRefReservation,
+} from "@rgs/api/src/domain/crm/caseRefIndex";
 import { createPartner, findPartnerByName } from "@rgs/api/src/domain/crm/partners";
 import {
   findTravellerByName,
@@ -22,6 +28,12 @@ export interface ImportSummary {
   rowsRead: number;
   casesCreated: number;
   casesSkippedAlreadyImported: number;
+  /**
+   * Rows whose ref names a stored case the importer could not read. Skipped
+   * rather than re-created — a second case under one ref is worse than a
+   * missing one — and every one of them raises a review item.
+   */
+  casesSkippedUnreadable: number;
   partnersCreated: number;
   partnersReused: number;
   travellersCreated: number;
@@ -66,6 +78,20 @@ const CASE_REF_SWEEP_PAGE_LIMIT = 1_000_000;
 
 /** Every migrated row names exactly one known applicant -- its own traveller. */
 const PRIMARY_APPLICANT_REF = "1";
+
+/**
+ * `ReviewItemSchema.sourceRow` is a positive int, so a review item about
+ * something that is not a workbook row still needs one. Row 1 is the header
+ * row, which never becomes a case, so it cannot collide with a real row's item.
+ */
+const HEADER_SOURCE_ROW = 1;
+
+/**
+ * `ReviewItemSchema.caseRef` is `min(1)`, and an unreadable stored case is
+ * precisely the case whose ref nobody can read. Self-describing rather than
+ * blank, and never a real ref.
+ */
+const UNREADABLE_CASE_REF_PLACEHOLDER = "(ref not readable)";
 
 /**
  * `CrmCaseSchema.destinationCountry` and `.receivedDate` are both required,
@@ -199,25 +225,193 @@ function resolveDuplicateCaseRefs(mappedRows: readonly MappedRow[]): Map<number,
   return resolutionBySourceRow;
 }
 
+interface AlreadyImportedSweep {
+  /** caseId by stored `caseRef`, for every case the status index can see. */
+  caseIdByCaseRef: Map<string, string>;
+  /** Stored cases whose META item names no readable `caseRef`. */
+  unreadableCaseIds: string[];
+}
+
 /**
  * Ruling (task-9): idempotency is keyed on `caseRef` (here, the effective
- * ref after duplicate resolution), and `caseRef` carries no index yet -- a
- * gap Plan 5 is left to close. Until then, the only way to know what a prior
- * run already imported is to sweep every case status; sweeping only the
- * default-limited first page of one status would under-count and re-import.
+ * ref after duplicate resolution). The per-ref reservation item is what
+ * decides it (see `claimCaseRef`); this sweep exists for the two things a
+ * per-ref read cannot answer — which stored cases are illegible, and which
+ * of a proposed group's members were already imported before this run.
+ * Sweeping only the default-limited first page of one status would
+ * under-count on both.
+ *
+ * Two things this deliberately does NOT do any more.
+ *
+ * It does not reassemble the cases. It used to call `listCasesByStatus`,
+ * which runs `readCase` per case: 2 strongly-consistent round-trips each,
+ * 14,312 of them on the real workbook, to collect one attribute the index
+ * query had already returned. `listCaseRefsByStatus` reads the ref off the
+ * META item instead — 9 queries for the whole sweep.
+ *
+ * And it does not discard what it could not read. `listCasesByStatus`
+ * returns `{ cases, unreadableCaseIds }`, and this function used to
+ * destructure `cases` alone. A case that will not reassemble — META written,
+ * applicant put lost to a timeout, which is exactly what a non-transactional
+ * `writeCase` leaves behind — was therefore absent from BOTH lists the
+ * importer saw, so its ref looked never-imported and was imported again,
+ * under a fresh caseId, on that run and on every run after it. Nothing ever
+ * reconciled the two cases sharing one ref.
  */
 async function sweepAlreadyImportedCaseRefs(
   context: AppContext,
   tenantId: string,
-): Promise<Set<string>> {
-  const alreadyImportedCaseRefs = new Set<string>();
+): Promise<AlreadyImportedSweep> {
+  const caseIdByCaseRef = new Map<string, string>();
+  const unreadableCaseIds: string[] = [];
   for (const caseStatus of crm.CASE_STATUSES) {
-    const { cases } = await listCasesByStatus(context, tenantId, caseStatus, CASE_REF_SWEEP_PAGE_LIMIT);
-    for (const existingCase of cases) {
-      alreadyImportedCaseRefs.add(existingCase.caseRef);
+    const caseRefListing = await listCaseRefsByStatus(
+      context,
+      tenantId,
+      caseStatus,
+      CASE_REF_SWEEP_PAGE_LIMIT,
+    );
+    for (const storedCaseRef of caseRefListing.storedCaseRefs) {
+      caseIdByCaseRef.set(storedCaseRef.caseRef, storedCaseRef.caseId);
     }
+    unreadableCaseIds.push(...caseRefListing.unreadableCaseIds);
   }
-  return alreadyImportedCaseRefs;
+  return { caseIdByCaseRef, unreadableCaseIds };
+}
+
+/** What the importer is allowed to do with one row's effective `caseRef`. */
+type CaseRefClaim =
+  /** A case already holds this ref, in full. Nothing to do. */
+  | { kind: "ALREADY_IMPORTED" }
+  /**
+   * This ref is spoken for by a stored case the importer cannot read. Skipped
+   * and flagged: re-importing would put a second case under one ref, and the
+   * unreadable one would stay invisible to every listing that exists.
+   */
+  | { kind: "UNREADABLE_STORED_CASE"; describedAs: string; reason: string }
+  /** Free to import, under this caseId. */
+  | {
+      kind: "IMPORT";
+      caseId: string;
+      reservation: CaseRefReservation | undefined;
+      /** True when a previous run reserved this ref and never wrote the case. */
+      repairingReservation: boolean;
+    };
+
+/**
+ * Decides, for one effective `caseRef`, whether a case may be written and
+ * under which id.
+ *
+ * The ref's own reservation item is the authority, not the status sweep.
+ * GSI1 is eventually consistent and cannot be read consistently, so "the
+ * sweep did not see it" genuinely means "the sweep did not see it", not "it
+ * is not there" — and an operator whose `--commit` aborted at row 5,000 and
+ * who re-runs immediately is the ordinary case, with the last several hundred
+ * writes exactly the ones the index has not caught up with. The reservation
+ * is a base-table GetItem, so it is strongly consistent and never lies about
+ * what a previous run did.
+ *
+ * A completed reservation ends it there: one read per row, and no reassembly
+ * of the case at all. Every other answer is rare enough to afford a real
+ * read of the case it names.
+ */
+async function claimCaseRef(
+  context: AppContext,
+  tenantId: string,
+  effectiveCaseRef: string,
+  caseIdByStoredCaseRef: ReadonlyMap<string, string>,
+  dryRun: boolean,
+): Promise<CaseRefClaim> {
+  let existingReservation: CaseRefReservation | undefined;
+  try {
+    existingReservation = await readCaseRefReservation(context, tenantId, effectiveCaseRef);
+  } catch (error) {
+    if (error instanceof CorruptRecordError) {
+      // The reservation row itself will not parse, so it cannot be trusted to
+      // say which case holds this ref -- and it cannot be ignored either,
+      // because ignoring it is how a second case under one ref happens.
+      return {
+        kind: "UNREADABLE_STORED_CASE",
+        describedAs: `the import reservation for REF ${effectiveCaseRef}`,
+        reason: error.reason,
+      };
+    }
+    throw error;
+  }
+
+  if (existingReservation?.completedAt !== undefined) {
+    return { kind: "ALREADY_IMPORTED" };
+  }
+
+  if (existingReservation === undefined) {
+    // No reservation. A case can still hold this ref: one imported before
+    // reservations existed, or one whose reservation write was lost. The
+    // sweep is allowed to answer here because a false negative from index lag
+    // is impossible in this branch -- a fully imported case always leaves a
+    // completed reservation, which was read consistently above.
+    const sweptCaseId = caseIdByStoredCaseRef.get(effectiveCaseRef);
+    if (sweptCaseId !== undefined) {
+      return await claimAgainstStoredCase(context, tenantId, effectiveCaseRef, sweptCaseId);
+    }
+    const caseId = newId("case", context.now().getTime());
+    return { kind: "IMPORT", caseId, reservation: undefined, repairingReservation: false };
+  }
+
+  // Reserved but never completed: a run died between the two writes. The
+  // reserved id says exactly which partition to look at.
+  const claimAgainstReservedCase = await claimAgainstStoredCase(
+    context,
+    tenantId,
+    effectiveCaseRef,
+    existingReservation.caseId,
+  );
+  if (claimAgainstReservedCase.kind === "IMPORT") {
+    // Re-writing under the RESERVED caseId overwrites one partition, so it
+    // repairs the gap with no possibility of a second case sharing the ref.
+    return {
+      kind: "IMPORT",
+      caseId: existingReservation.caseId,
+      reservation: existingReservation,
+      repairingReservation: true,
+    };
+  }
+  if (claimAgainstReservedCase.kind === "ALREADY_IMPORTED" && !dryRun) {
+    // The case is there and readable; only the completion marker was lost.
+    // Write it now so the next run needs no read at all.
+    await completeCaseRefReservation(context, tenantId, existingReservation);
+  }
+  return claimAgainstReservedCase;
+}
+
+/**
+ * Whether a stored case may be left alone, having actually read it. Only
+ * reached for a ref whose reservation is missing or unfinished, never on the
+ * ordinary already-imported path.
+ */
+async function claimAgainstStoredCase(
+  context: AppContext,
+  tenantId: string,
+  effectiveCaseRef: string,
+  caseId: string,
+): Promise<CaseRefClaim> {
+  try {
+    const storedCase = await readCase(context, tenantId, caseId);
+    if (storedCase !== undefined) {
+      return { kind: "ALREADY_IMPORTED" };
+    }
+  } catch (error) {
+    if (error instanceof CorruptRecordError) {
+      // The half-written case: META present, applicants lost to a timeout.
+      // Skipped rather than re-created, and named so a human can repair it.
+      return {
+        kind: "UNREADABLE_STORED_CASE",
+        describedAs: `case ${caseId} (REF ${effectiveCaseRef})`,
+        reason: error.reason,
+      };
+    }
+    throw error;
+  }
+  return { kind: "IMPORT", caseId, reservation: undefined, repairingReservation: false };
 }
 
 /**
@@ -446,7 +640,8 @@ export async function runImport(
   tenantId: string,
   input: RunImportInput,
 ): Promise<ImportSummary> {
-  const alreadyImportedCaseRefs = await sweepAlreadyImportedCaseRefs(context, tenantId);
+  const alreadyImportedSweep = await sweepAlreadyImportedCaseRefs(context, tenantId);
+  const alreadyImportedCaseRefs = alreadyImportedSweep.caseIdByCaseRef;
   const caseRefResolutionBySourceRow = resolveDuplicateCaseRefs(input.mappedRows);
   const partnerIdByCanonicalKey = new Map<string, string>();
 
@@ -454,6 +649,7 @@ export async function runImport(
     rowsRead: input.mappedRows.length,
     casesCreated: 0,
     casesSkippedAlreadyImported: 0,
+    casesSkippedUnreadable: 0,
     partnersCreated: 0,
     partnersReused: 0,
     travellersCreated: 0,
@@ -462,6 +658,21 @@ export async function runImport(
     groupsProposed: 0,
     createdCaseIds: [],
   };
+
+  // A stored case whose ref cannot be read is reported before a single row is
+  // processed: the importer cannot tell whether any of this run's refs are
+  // already held by it, so the operator has to be able to see it exists.
+  for (const unreadableCaseId of alreadyImportedSweep.unreadableCaseIds) {
+    await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
+      reason: "UNREADABLE_STORED_CASE",
+      sourceSheet: MINI_CRM_SHEET_NAME,
+      sourceRow: HEADER_SOURCE_ROW,
+      caseRef: UNREADABLE_CASE_REF_PLACEHOLDER,
+      fieldName: "REF NO.",
+      rawValue: unreadableCaseId,
+      detail: `Stored case ${unreadableCaseId} carries no readable REF NO., so this import cannot tell whether its ref is among the rows being imported. Repair or delete the stored record.`,
+    });
+  }
 
   for (const mappedRow of input.mappedRows) {
     // Guaranteed present: built from this exact array, keyed by sourceRow.
@@ -504,9 +715,40 @@ export async function runImport(
       summary.partnersReused += 1;
     }
 
-    if (alreadyImportedCaseRefs.has(caseRefResolution.effectiveCaseRef)) {
+    const caseRefClaim = await claimCaseRef(
+      context,
+      tenantId,
+      caseRefResolution.effectiveCaseRef,
+      alreadyImportedCaseRefs,
+      input.dryRun,
+    );
+    if (caseRefClaim.kind === "ALREADY_IMPORTED") {
       summary.casesSkippedAlreadyImported += 1;
       continue;
+    }
+    if (caseRefClaim.kind === "UNREADABLE_STORED_CASE") {
+      summary.casesSkippedUnreadable += 1;
+      await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
+        reason: "UNREADABLE_STORED_CASE",
+        sourceSheet: mappedRow.sourceSheet,
+        sourceRow: mappedRow.sourceRow,
+        caseRef: mappedRow.caseRef,
+        fieldName: "REF NO.",
+        rawValue: caseRefResolution.effectiveCaseRef,
+        detail: `REF ${caseRefResolution.effectiveCaseRef} is already held by ${caseRefClaim.describedAs}, which is stored in an unreadable state: ${caseRefClaim.reason}. This row was NOT imported -- a second case under one REF NO. would be worse than a missing one. Repair the stored record, then re-run the import.`,
+      });
+      continue;
+    }
+    if (caseRefClaim.repairingReservation) {
+      await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
+        reason: "UNREADABLE_STORED_CASE",
+        sourceSheet: mappedRow.sourceSheet,
+        sourceRow: mappedRow.sourceRow,
+        caseRef: mappedRow.caseRef,
+        fieldName: "REF NO.",
+        rawValue: caseRefResolution.effectiveCaseRef,
+        detail: `A previous import reserved REF ${caseRefResolution.effectiveCaseRef} as case ${caseRefClaim.caseId} but never wrote the case -- it stopped between the two writes. This run re-wrote the case under that same id. Check the row against the workbook.`,
+      });
     }
 
     // `joinPhones` keys its result by the RAW caseRef, same as pass 1 uses it
@@ -576,7 +818,10 @@ export async function runImport(
     try {
       migratedCase = crm.CrmCaseSchema.parse({
         tenantId,
-        caseId: newId("case", context.now().getTime()),
+        // The id the ref was reserved under, never a fresh one: re-writing a
+        // reserved-but-unwritten case must overwrite its partition, not add a
+        // second case under the same ref.
+        caseId: caseRefClaim.caseId,
         caseRef: caseRefResolution.effectiveCaseRef,
         caseType: resolvedCaseDraft.caseType,
         partnerId: partnerResolution.partnerId,
@@ -635,8 +880,17 @@ export async function runImport(
     // Migrated cases are never dragged by the derived-status rules: write
     // straight through the store, never through changeCaseStatus /
     // changeApplicantCustody / changeBillingStatus / changeApplicantOutcome.
+    //
+    // Reserve -> write -> complete. `writeCase` is not transactional, so the
+    // reservation brackets it: whatever this run dies in the middle of, the
+    // next one can tell what happened and repair it under the same caseId
+    // rather than creating a second case under the same ref.
     if (!input.dryRun) {
+      const reservation =
+        caseRefClaim.reservation ??
+        (await reserveCaseRef(context, tenantId, caseRefResolution.effectiveCaseRef, migratedCase.caseId));
       await writeCase(context, migratedCase);
+      await completeCaseRefReservation(context, tenantId, reservation);
     }
     summary.casesCreated += 1;
     summary.createdCaseIds.push(migratedCase.caseId);

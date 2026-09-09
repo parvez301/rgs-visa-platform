@@ -35,6 +35,19 @@ export function caseIdFromPartitionKey(partitionKey: string): string | undefined
   return caseId.length > 0 ? caseId : undefined;
 }
 
+/**
+ * The partition a caseRef's import reservation lives in.
+ *
+ * GSI1 (the case-status index) is the only way to ask "which caseRefs are
+ * already imported", and a GSI cannot be read consistently — so an importer
+ * re-run seconds after an aborted one does not see the cases that run wrote
+ * and imports them again. A reservation is keyed on the ref itself, so it is
+ * a base-table GetItem, which CAN be strongly consistent.
+ */
+export function caseRefIndexPartitionKey(tenantId: string, caseRef: string): string {
+  return `TENANT#${tenantId}#CASE_REF#${caseRef}`;
+}
+
 export function partnerPartitionKey(tenantId: string, partnerId: string): string {
   return `TENANT#${tenantId}#PARTNER#${partnerId}`;
 }

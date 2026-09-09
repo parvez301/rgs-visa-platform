@@ -10,6 +10,7 @@ import {
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
+import type { QueryOptions, TableItem } from "../../src/lib/db";
 import {
   changeApplicantCustody,
   changeApplicantOutcome,
@@ -17,6 +18,7 @@ import {
   changeCaseStatus,
   createCase,
   getCase,
+  listCaseRefsByStatus,
   listCasesByPartner,
   listCasesByStatus,
 } from "../../src/domain/crm/cases";
@@ -859,5 +861,72 @@ describe("crm cases", () => {
     const finalCase = await changeBillingStatus(context, "rgs", created.caseId, "PAID", "ops@rgs.test");
 
     expect(finalCase.caseStatus).toBe("WITHDRAWN");
+  });
+});
+
+describe("listCaseRefsByStatus", () => {
+  it("reads every stored ref straight off the index, without reassembling a case", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    await seedCase(context, partnerId, "31378");
+
+    // No `readCase` at all: one query per status partition, and the ref comes
+    // off the META item the query already returned. Reassembling instead costs
+    // two strongly-consistent round-trips per case (14,312 on the real
+    // workbook) to collect an attribute already in hand.
+    let baseTableReadCount = 0;
+    const countingContext = {
+      ...context,
+      table: {
+        ...context.table,
+        get: (partitionKey: string, sortKey: string) => {
+          baseTableReadCount += 1;
+          return context.table.get(partitionKey, sortKey);
+        },
+        query: (partitionKey: string, options?: QueryOptions) => {
+          baseTableReadCount += 1;
+          return context.table.query(partitionKey, options);
+        },
+        put: (item: TableItem) => context.table.put(item),
+        delete: (partitionKey: string, sortKey: string) => context.table.delete(partitionKey, sortKey),
+        queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) =>
+          context.table.queryGsi(indexName, partitionKey, options),
+      },
+    };
+
+    const listed = await listCaseRefsByStatus(countingContext, "rgs", "NEW", 1000);
+    expect(listed.storedCaseRefs.map((stored) => stored.caseRef).sort()).toEqual(["31377", "31378"]);
+    expect(listed.unreadableCaseIds).toEqual([]);
+    expect(baseTableReadCount).toBe(0);
+  });
+
+  it("still reports the ref of a case that will not reassemble", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const corruptedCase = await seedCase(context, partnerId, "31378");
+    // META with no applicant items — what a non-transactional writeCase leaves
+    // when it times out between its two puts. `listCasesByStatus` drops this
+    // case entirely, which is how its ref came to look never-imported.
+    await writeCase(context, { ...corruptedCase, applicants: [] });
+
+    expect((await listCasesByStatus(context, "rgs", "NEW")).cases).toHaveLength(0);
+    const listed = await listCaseRefsByStatus(context, "rgs", "NEW", 1000);
+    expect(listed.storedCaseRefs).toEqual([{ caseRef: "31378", caseId: corruptedCase.caseId }]);
+  });
+
+  it("names a META item that records no ref rather than dropping it", async () => {
+    const context = buildTestContext();
+    await context.table.put({
+      PK: casePartitionKey("rgs", "case_no_ref"),
+      SK: "META",
+      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
+      GSI1SK: "2026-01-02T10:00:00.000Z",
+      tenantId: "rgs",
+    });
+
+    const listed = await listCaseRefsByStatus(context, "rgs", "NEW", 1000);
+    expect(listed.storedCaseRefs).toEqual([]);
+    expect(listed.unreadableCaseIds).toEqual(["case_no_ref"]);
   });
 });

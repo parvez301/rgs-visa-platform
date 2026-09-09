@@ -321,6 +321,74 @@ export async function listCasesByStatus(
   return loadCasesFromMetaItems(context, tenantId, metaItems);
 }
 
+export interface StoredCaseRef {
+  caseRef: string;
+  caseId: string;
+}
+
+export interface CaseRefListing {
+  /** Every `caseRef` legible on a META item in this status partition. */
+  storedCaseRefs: StoredCaseRef[];
+  /**
+   * META items that name no usable `caseRef`. Named rather than dropped: a
+   * stored case whose ref cannot be read is a case an importer cannot know it
+   * has already imported, which is the one thing the caller must be told.
+   */
+  unreadableCaseIds: string[];
+}
+
+/**
+ * The `caseRef`s stored under one case status, read straight off the META
+ * items GSI1 already returned.
+ *
+ * `listCasesByStatus` cannot answer this cheaply: it reassembles every case
+ * through `readCase`, which costs one strongly-consistent GetItem plus one
+ * strongly-consistent Query per case. Measured on the real workbook that is
+ * 14,312 sequential round-trips to collect one attribute the index query had
+ * already handed over.
+ *
+ * It cannot answer it correctly either. `readCase` throws CorruptRecordError
+ * for a partition holding META with no applicant items — which `writeCase`,
+ * being non-transactional, produces on any timeout between its two writes —
+ * and `loadCasesFromMetaItems` then drops that case from the listing. Its
+ * `caseRef` never reaches the caller, so an importer concludes the ref was
+ * never imported and imports it a second time, on that run and on every run
+ * after it. Reading the attribute off the META item cannot fail that way: the
+ * META item is written first and carries the ref.
+ */
+export async function listCaseRefsByStatus(
+  context: AppContext,
+  tenantId: string,
+  caseStatus: crm.CaseStatus,
+  limit = 50,
+): Promise<CaseRefListing> {
+  const metaItems = await context.table.queryGsi(
+    "GSI1",
+    caseStatusGsi1Pk(tenantId, caseStatus),
+    { limit, scanForward: false },
+  );
+  const storedCaseRefs: StoredCaseRef[] = [];
+  const unreadableCaseIds: string[] = [];
+  for (const metaItem of metaItems) {
+    if (metaItem["SK"] !== META_SORT_KEY) continue;
+    const storedCaseRef = metaItem["caseRef"];
+    const caseId = caseIdOfMetaItem(metaItem);
+    if (typeof storedCaseRef === "string" && storedCaseRef.length > 0 && caseId !== undefined) {
+      storedCaseRefs.push({ caseRef: storedCaseRef, caseId });
+      continue;
+    }
+    // The index names a case whose META item carries no ref (or nothing that
+    // identifies it at all). Report the caseId if the item still knows it,
+    // and the storage key otherwise — it is all an operator has to find the
+    // row with, and String(undefined) would report the literal id "undefined".
+    unreadableCaseIds.push(caseId ?? metaItem.PK);
+    console.warn(
+      `CRM case META item in tenant ${tenantId} carries no usable caseRef: ${metaItem.PK}`,
+    );
+  }
+  return { storedCaseRefs, unreadableCaseIds };
+}
+
 export async function listCasesByPartner(
   context: AppContext,
   tenantId: string,
