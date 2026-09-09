@@ -9,3 +9,4 @@ export * from "./normalize/visaType";
 export * from "./normalize/partner";
 export * from "./normalize/date";
 export * from "./normalize/lookupKey";
+export * from "./reviewItem";
