@@ -7,11 +7,15 @@ import { registerCrmRoutes } from "../../src/http/crmApi";
 import { writeCase } from "../../src/domain/crm/caseStore";
 import {
   META_SORT_KEY,
+  REVIEW_ITEM_SORT_KEY,
   partnerListGsi1Pk,
   partnerPartitionKey,
   passportGsi3Pk,
+  reviewItemPartitionKey,
+  reviewQueueGsi1Pk,
   travellerPartitionKey,
 } from "../../src/domain/crm/keys";
+import { recordReviewItem } from "../../src/domain/crm/reviewQueue";
 import type { AppContext } from "../../src/lib/context";
 
 function buildRouter(context: AppContext): Router {
@@ -747,5 +751,260 @@ describe("crm admin routes", () => {
       canonicalName: "Ozzy Travels",
     });
     expect(rejected.statusCode).toBe(403);
+  });
+
+  // ------------------------------------------------------------------
+  // Migration review queue (spec §9): the rows the importer could not
+  // apply deterministically, parked for a human.
+  // ------------------------------------------------------------------
+
+  const baseReviewInput = {
+    reason: "UNMAPPED_STATUS",
+    sourceSheet: "Mini CRM",
+    sourceRow: 42,
+    caseRef: "31376",
+    fieldName: "Status",
+    rawValue: "DEU/DEL/190126/",
+  } as const;
+
+  function reviewItemIdsOf(payload: { reviewItems: { reviewItemId: string }[] }): string[] {
+    return payload.reviewItems.map((reviewItem) => reviewItem.reviewItemId);
+  }
+
+  it("lists open review items and resolves one", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
+
+    const listed = await call(router, "GET", "/api/v1/admin/crm/review");
+    expect(listed.statusCode).toBe(200);
+    expect(reviewItemIdsOf(listed.payload)).toEqual([recorded.reviewItemId]);
+    expect(listed.payload.unreadableReviewItemIds).toEqual([]);
+
+    const resolved = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`,
+      { reviewStatus: "APPLIED", resolvedValue: "IN_PROGRESS" },
+    );
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.payload.reviewStatus).toBe("APPLIED");
+    // The chosen value and the reviewer who chose it both have to survive the
+    // round trip — this is the audit record of a human decision.
+    expect(resolved.payload.resolvedValue).toBe("IN_PROGRESS");
+    expect(resolved.payload.resolvedBy).toBe("ops@rgs.test");
+
+    const afterResolve = await call(router, "GET", "/api/v1/admin/crm/review");
+    expect(afterResolve.payload.reviewItems).toHaveLength(0);
+  });
+
+  // The ?status= value has to reach the domain call. A handler that always
+  // asked for OPEN would still pass the test above, so this asks for the
+  // partition a resolved item actually moved to.
+  it("lists a resolved item under the status named in the query parameter", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
+    const dismissal = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`,
+      { reviewStatus: "DISMISSED" },
+    );
+    expect(dismissal.statusCode).toBe(200);
+
+    const dismissed = await call(router, "GET", "/api/v1/admin/crm/review", undefined, {
+      status: "DISMISSED",
+    });
+    expect(dismissed.statusCode).toBe(200);
+    expect(reviewItemIdsOf(dismissed.payload)).toEqual([recorded.reviewItemId]);
+
+    const stillOpen = await call(router, "GET", "/api/v1/admin/crm/review", undefined, {
+      status: "OPEN",
+    });
+    expect(stillOpen.payload.reviewItems).toHaveLength(0);
+  });
+
+  it("rejects an unknown review status with a 400 rather than silently listing OPEN", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const response = await call(router, "GET", "/api/v1/admin/crm/review", undefined, {
+      status: "NONSENSE",
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.payload.code).toBe("BAD_REQUEST");
+  });
+
+  it("reads a single review item back by id", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
+
+    const read = await call(router, "GET", `/api/v1/admin/crm/review/${recorded.reviewItemId}`);
+    expect(read.statusCode).toBe(200);
+    expect(read.payload.reviewItemId).toBe(recorded.reviewItemId);
+    // Provenance is the point of the queue: the row has to name the cell.
+    expect(read.payload.rawValue).toBe("DEU/DEL/190126/");
+    expect(read.payload.sourceSheet).toBe("Mini CRM");
+    expect(read.payload.sourceRow).toBe(42);
+  });
+
+  it("returns 404 for an unknown review item", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const response = await call(router, "GET", "/api/v1/admin/crm/review/nope");
+    expect(response.statusCode).toBe(404);
+    expect(response.payload.code).toBe("NOT_FOUND");
+  });
+
+  // parseBody, never a bare .parse(): router.ts maps only ApiError subclasses,
+  // so an unwrapped ZodError on request input escapes as a 500 where the
+  // caller deserves a 400.
+  it("rejects an unknown reviewStatus in the resolve body with 400, not 500", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
+
+    const response = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`,
+      { reviewStatus: "MAYBE" },
+    );
+    expect(response.statusCode).toBe(400);
+    expect(response.payload.code).toBe("BAD_REQUEST");
+  });
+
+  it("rejects a resolve call with no body at all with 400, not 500", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
+
+    const response = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`,
+    );
+    expect(response.statusCode).toBe(400);
+    expect(response.payload.code).toBe("BAD_REQUEST");
+  });
+
+  // Two reviewers working the queue at once is the expected case, so the
+  // second decision is a 409 rather than a silent overwrite of the first.
+  it("answers 409 when an already resolved item is resolved again", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
+    const resolvePath = `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`;
+
+    const first = await call(router, "PUT", resolvePath, { reviewStatus: "APPLIED" });
+    expect(first.statusCode).toBe(200);
+
+    const second = await call(router, "PUT", resolvePath, { reviewStatus: "DISMISSED" });
+    expect(second.statusCode).toBe(409);
+    expect(second.payload.code).toBe("CONFLICT");
+  });
+
+  // A row that will not parse must be named in the response, not dropped from
+  // it. Dropping unreadableReviewItemIds passes every other test in this file,
+  // and an item silently missing from the queue looks exactly like an item
+  // that was never imported — the failure this shape exists to prevent.
+  it("names an unreadable review row in the listing instead of dropping it", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const healthy = await recordReviewItem(context, "rgs", baseReviewInput);
+    // Indexed in the OPEN partition, but the body has lost its caseRef — the
+    // shape a half-written row or an older importer leaves behind.
+    await context.table.put({
+      PK: reviewItemPartitionKey("rgs", "rev_half_written"),
+      SK: REVIEW_ITEM_SORT_KEY,
+      GSI1PK: reviewQueueGsi1Pk("rgs", "OPEN"),
+      GSI1SK: "2026-07-23T10:00:00.000Z",
+      tenantId: "rgs",
+      reviewItemId: "rev_half_written",
+      reason: "UNMAPPED_STATUS",
+      reviewStatus: "OPEN",
+      sourceSheet: "Mini CRM",
+      sourceRow: 42,
+      fieldName: "Status",
+      rawValue: "DEU/DEL/190126/",
+      createdAt: "2026-07-23T10:00:00.000Z",
+    });
+
+    const listed = await call(router, "GET", "/api/v1/admin/crm/review");
+    expect(listed.statusCode).toBe(200);
+    expect(reviewItemIdsOf(listed.payload)).toEqual([healthy.reviewItemId]);
+    expect(listed.payload.unreadableReviewItemIds).toEqual(["rev_half_written"]);
+  });
+
+  // 409 and not 404 on the single read: the item is on file, it is unreadable.
+  it("answers 409 rather than 500 when a stored review item will not parse", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    await context.table.put({
+      PK: reviewItemPartitionKey("rgs", "rev_half_written"),
+      SK: REVIEW_ITEM_SORT_KEY,
+      GSI1PK: reviewQueueGsi1Pk("rgs", "OPEN"),
+      GSI1SK: "2026-07-23T10:00:00.000Z",
+      tenantId: "rgs",
+      reviewItemId: "rev_half_written",
+      reason: "UNMAPPED_STATUS",
+      reviewStatus: "OPEN",
+      sourceSheet: "Mini CRM",
+      sourceRow: 42,
+      fieldName: "Status",
+      rawValue: "DEU/DEL/190126/",
+      createdAt: "2026-07-23T10:00:00.000Z",
+    });
+
+    const read = await call(router, "GET", "/api/v1/admin/crm/review/rev_half_written");
+    expect(read.statusCode).toBe(409);
+    expect(read.payload.code).toBe("CORRUPT_RECORD");
+  });
+
+  it("rejects an unauthenticated caller on the review listing route", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const rejected = await callUnauthenticated(router, "GET", "/api/v1/admin/crm/review");
+    expect(rejected.statusCode).toBe(403);
+    expect(rejected.payload.code).toBe("FORBIDDEN");
+  });
+
+  // requireAdmin has to be the *first* statement, not merely present: the
+  // rejected call must leave the item untouched, still OPEN for a real
+  // reviewer. A guard that ran after resolveReviewItem would 403 the response
+  // and still have written the decision.
+  it("rejects an unauthenticated caller on the review resolve route without writing", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
+
+    const rejected = await callUnauthenticated(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`,
+      { reviewStatus: "APPLIED" },
+    );
+    expect(rejected.statusCode).toBe(403);
+
+    const stillOpen = await call(router, "GET", "/api/v1/admin/crm/review");
+    expect(reviewItemIdsOf(stillOpen.payload)).toEqual([recorded.reviewItemId]);
+  });
+
+  // The CDK admin route declares GET/POST/PUT/DELETE and no PATCH, so a PATCH
+  // resolve route would pass its unit tests and then 404 in deployment. Assert
+  // the absence, so adding one goes red here rather than in production.
+  it("exposes no PATCH route for resolving a review item", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
+
+    const patched = await call(
+      router,
+      "PATCH",
+      `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`,
+      { reviewStatus: "APPLIED" },
+    );
+    expect(patched.statusCode).toBe(404);
   });
 });

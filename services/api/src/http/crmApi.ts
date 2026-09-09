@@ -16,6 +16,12 @@ import { listCaseEvents } from "../domain/crm/crmEvents";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
 import { createPartner, listPartners } from "../domain/crm/partners";
 import {
+  getReviewItemOrThrow,
+  listReviewItems,
+  resolveReviewItem,
+  type ReviewItemResolution,
+} from "../domain/crm/reviewQueue";
+import {
   findTravellerByName,
   findTravellerByPassport,
   upsertTraveller,
@@ -64,6 +70,16 @@ const CaseStatusBody = z.object({ toStatus: z.enum(crm.CASE_STATUSES) });
 const BillingStatusBody = z.object({ toBillingStatus: z.enum(crm.BILLING_STATUSES) });
 const CustodyBody = z.object({ toCustody: z.enum(crm.CUSTODY_STATUSES) });
 const OutcomeBody = z.object({ toOutcome: z.enum(crm.APPLICANT_OUTCOMES) });
+
+/**
+ * Resolving means closing an open item, so OPEN is not among the destinations
+ * even though crm.REVIEW_STATUSES carries it — a "resolution" back to OPEN is
+ * a no-op the reviewer did not intend.
+ */
+const ResolveReviewItemBody = z.object({
+  reviewStatus: z.enum(["APPLIED", "DISMISSED"]),
+  resolvedValue: z.string().min(1).optional(),
+});
 
 /**
  * Mounted onto the admin router, so these inherit the admin Cognito authorizer
@@ -201,5 +217,45 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
           requestContext.callerEmail,
         );
       },
-    );
+    )
+    .add("GET", "/api/v1/admin/crm/review", async (requestContext) => {
+      requireAdmin(requestContext);
+      const requestedStatus = requestContext.queryParams["status"] ?? "OPEN";
+      // `find` over the shared tuple narrows to crm.ReviewStatus without a
+      // cast. An unrecognised value is a 400, never a quiet fall back to OPEN:
+      // a typo that returns the wrong queue looks like an empty queue.
+      const parsedStatus = crm.REVIEW_STATUSES.find((status) => status === requestedStatus);
+      if (parsedStatus === undefined) {
+        throw badRequest(`Unknown review status ${requestedStatus}`);
+      }
+      // { reviewItems, unreadableReviewItemIds } — a row that would not parse
+      // is named in the response rather than silently missing from it, exactly
+      // as the case and partner listings shape theirs. An item that vanishes
+      // from this queue is indistinguishable from one never imported.
+      return listReviewItems(context, tenantId, parsedStatus);
+    })
+    .add("GET", "/api/v1/admin/crm/review/{reviewItemId}", async (requestContext) => {
+      requireAdmin(requestContext);
+      return getReviewItemOrThrow(
+        context,
+        tenantId,
+        requestContext.pathParams["reviewItemId"]!,
+      );
+    })
+    .add("PUT", "/api/v1/admin/crm/review/{reviewItemId}/resolve", async (requestContext) => {
+      requireAdmin(requestContext);
+      // Typed as the domain's own interface, so a drift between this body
+      // schema and what resolveReviewItem accepts fails to compile here.
+      const resolution: ReviewItemResolution = parseBody(
+        ResolveReviewItemBody,
+        requestContext.body,
+      );
+      return resolveReviewItem(
+        context,
+        tenantId,
+        requestContext.pathParams["reviewItemId"]!,
+        resolution,
+        requestContext.callerEmail,
+      );
+    });
 }
