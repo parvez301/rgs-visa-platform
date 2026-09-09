@@ -3,6 +3,7 @@ import { IllegalStatusTransitionError } from "@rgs/shared";
 import { submitApplication } from "../src/domain/applications";
 import {
   addInternalNote,
+  getApplicationById,
   getApplicationDetailForAdmin,
   listApplicationsByStatus,
   presignDocumentDownloadForAdmin,
@@ -11,6 +12,7 @@ import {
   transitionApplication,
 } from "../src/domain/admin";
 import { listRecentActivity, listUserActivity } from "../src/domain/activity";
+import { CorruptRecordError } from "../src/lib/errors";
 import { buildTestContext, createSubmittableUaeDraft } from "./helpers";
 
 async function submittedApplication(context = buildTestContext()) {
@@ -41,10 +43,73 @@ describe("status queues", () => {
   it("lists submitted applications for the admin queue", async () => {
     const { context, applicationId } = await submittedApplication();
     const submittedQueue = await listApplicationsByStatus(context, "SUBMITTED");
-    expect(submittedQueue.map((application) => application.applicationId)).toContain(
-      applicationId,
-    );
-    expect(await listApplicationsByStatus(context, "APPROVED")).toHaveLength(0);
+    expect(
+      submittedQueue.applications.map((application) => application.applicationId),
+    ).toContain(applicationId);
+    expect(submittedQueue.unreadableApplicationIds).toEqual([]);
+    expect((await listApplicationsByStatus(context, "APPROVED")).applications).toHaveLength(0);
+  });
+
+  // --- C3: router.ts maps only ApiError, so a raw ZodError from one stored
+  // --- row answered 500 for the whole screen. This is the ops team's main
+  // --- work queue; one hand-repaired row must not close it for everybody.
+  it("skips a malformed application row instead of 500ing the whole queue", async () => {
+    const { context, applicationId } = await submittedApplication();
+    // A row the index still names but that no longer satisfies the schema:
+    // `status` is required and absent here.
+    await context.table.put({
+      PK: "USER#user_9",
+      SK: "APP#app_half_written",
+      GSI1PK: "STATUS#SUBMITTED",
+      GSI1SK: "2026-07-23T10:00:00.000Z",
+      applicationId: "app_half_written",
+      userId: "user_9",
+    });
+
+    const submittedQueue = await listApplicationsByStatus(context, "SUBMITTED");
+    expect(
+      submittedQueue.applications.map((application) => application.applicationId),
+    ).toEqual([applicationId]);
+    // Named, not merely absent: an application missing from this queue is
+    // otherwise indistinguishable from one that was never submitted.
+    expect(submittedQueue.unreadableApplicationIds).toEqual(["app_half_written"]);
+  });
+
+  it("answers a typed 409 rather than a 500 when a single application will not parse", async () => {
+    const context = buildTestContext();
+    await context.table.put({
+      PK: "USER#user_9",
+      SK: "APP#app_half_written",
+      GSI3PK: "APP#app_half_written",
+      GSI3SK: "A",
+      applicationId: "app_half_written",
+      userId: "user_9",
+    });
+
+    const read = getApplicationById(context, "app_half_written");
+    await expect(read).rejects.toBeInstanceOf(CorruptRecordError);
+    // 409, never 404: the row is on file and unreadable. A 404 would tell an
+    // operator to re-create an application that already exists.
+    await expect(read).rejects.toMatchObject({ statusCode: 409, code: "CORRUPT_RECORD" });
+    await expect(read).rejects.toThrow("app_half_written");
+  });
+
+  it("names an unreadable application by its storage key when the row lost its id", async () => {
+    const context = buildTestContext();
+    await context.table.put({
+      PK: "USER#user_9",
+      SK: "APP#app_lost_its_id",
+      GSI1PK: "STATUS#SUBMITTED",
+      GSI1SK: "2026-07-23T10:00:00.000Z",
+      userId: "user_9",
+    });
+
+    // String(item.applicationId) would report the literal id "undefined",
+    // which finds no row at all. The storage key still names it.
+    const submittedQueue = await listApplicationsByStatus(context, "SUBMITTED");
+    expect(submittedQueue.unreadableApplicationIds).toEqual([
+      "USER#user_9 / APP#app_lost_its_id",
+    ]);
   });
 });
 
@@ -190,21 +255,50 @@ describe("notes and activity", () => {
   it("exposes the user's full activity trail and the recent feed", async () => {
     const { context, applicationId } = await submittedApplication();
     const userTrail = await listUserActivity(context, "user_1");
-    const trailEventTypes = userTrail.map((activityEvent) => activityEvent.eventType);
+    const trailEventTypes = userTrail.events.map((activityEvent) => activityEvent.eventType);
     expect(trailEventTypes).toContain("APPLICATION_STARTED");
     expect(trailEventTypes).toContain("DOC_UPLOADED");
     expect(trailEventTypes).toContain("SUBMITTED");
 
     const recentFeed = await listRecentActivity(context, 2);
     expect(
-      recentFeed.some((activityEvent) => activityEvent.applicationId === applicationId),
+      recentFeed.events.some((activityEvent) => activityEvent.applicationId === applicationId),
     ).toBe(true);
+    expect(recentFeed.unreadableEventIds).toEqual([]);
+  });
+
+  // --- C3, the activity half. A bad EVENT# row used to 500 the admin feed
+  // --- for every admin until its day bucket aged out of the window, and one
+  // --- user's trail forever, because listUserActivity has no window at all.
+  it("skips a malformed event instead of 500ing the feed and the user trail", async () => {
+    const { context } = await submittedApplication();
+    const dayBucket = context.now().toISOString().slice(0, 10);
+    // `eventType` is required and absent: the shape a future code path or a
+    // hand-repair in the console leaves behind.
+    await context.table.put({
+      PK: `EVENT#${dayBucket}`,
+      SK: "9999#evt_half_written",
+      GSI2PK: "USER#user_1",
+      GSI2SK: "9999",
+      eventId: "evt_half_written",
+      userId: "user_1",
+      createdAt: "2026-07-23T10:00:00.000Z",
+      meta: {},
+    });
+
+    const recentFeed = await listRecentActivity(context, 2);
+    expect(recentFeed.events.length).toBeGreaterThan(0);
+    expect(recentFeed.unreadableEventIds).toEqual(["evt_half_written"]);
+
+    const userTrail = await listUserActivity(context, "user_1");
+    expect(userTrail.events.length).toBeGreaterThan(0);
+    expect(userTrail.unreadableEventIds).toEqual(["evt_half_written"]);
   });
 
   it("stamps user actor identity on SUBMITTED and admin actor on STATUS_CHANGED", async () => {
     const { context, applicationId } = await submittedApplication();
     const userTrail = await listUserActivity(context, "user_1");
-    const submittedEvent = userTrail.find(
+    const submittedEvent = userTrail.events.find(
       (activityEvent) => activityEvent.eventType === "SUBMITTED",
     );
     expect(submittedEvent?.actorRole).toBe("user");
@@ -221,7 +315,7 @@ describe("notes and activity", () => {
       "asha@example.com",
     );
     const updatedTrail = await listUserActivity(context, "user_1");
-    const statusChangedEvent = updatedTrail.find(
+    const statusChangedEvent = updatedTrail.events.find(
       (activityEvent) => activityEvent.eventType === "STATUS_CHANGED",
     );
     expect(statusChangedEvent?.actorRole).toBe("admin");

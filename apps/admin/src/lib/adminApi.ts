@@ -67,9 +67,41 @@ export interface ReviewDocumentInput {
   rejectReason?: string;
 }
 
+interface ApplicationListing {
+  applications: Application[];
+  unreadableApplicationIds: string[];
+}
+
+interface ActivityListing {
+  events: ActivityEvent[];
+  unreadableEventIds: string[];
+}
+
+/**
+ * A stored row the API could not reassemble. It is skipped so one bad row
+ * cannot take a whole screen down, but skipping it silently would make a
+ * missing application indistinguishable from one never submitted -- so it is
+ * at least said out loud where an operator reporting a problem can find it.
+ */
+function warnAboutUnreadable(entity: string, unreadableIds: string[]): void {
+  if (unreadableIds.length === 0) return;
+  console.warn(
+    `${unreadableIds.length} ${entity}(s) could not be read and were left out: ${unreadableIds.join(", ")}`,
+  );
+}
+
 export const adminApi = {
-  listApplications: (idToken: string, status: ApplicationStatus) =>
-    apiFetch<Application[]>(`/api/v1/admin/applications?status=${status}`, { idToken }),
+  // The API answers { applications, unreadableApplicationIds } so that one
+  // malformed row cannot 500 the whole queue. The pages want the list, so it
+  // is unwrapped here; a skipped row is reported rather than merely absent.
+  listApplications: async (idToken: string, status: ApplicationStatus) => {
+    const listing = await apiFetch<ApplicationListing>(
+      `/api/v1/admin/applications?status=${status}`,
+      { idToken },
+    );
+    warnAboutUnreadable("application", listing.unreadableApplicationIds);
+    return listing.applications;
+  },
 
   getApplication: (idToken: string, applicationId: string) =>
     apiFetch<{ application: Application; documents: ApplicationDocument[] }>(
@@ -126,15 +158,17 @@ export const adminApi = {
       idToken,
     }),
 
-  listActivity: (idToken: string, options: { userId?: string; daysBack?: number } = {}) => {
+  listActivity: async (idToken: string, options: { userId?: string; daysBack?: number } = {}) => {
     const queryParams = new URLSearchParams();
     if (options.userId) queryParams.set("userId", options.userId);
     if (options.daysBack !== undefined) queryParams.set("daysBack", String(options.daysBack));
     const queryString = queryParams.toString();
-    return apiFetch<ActivityEvent[]>(
+    const listing = await apiFetch<ActivityListing>(
       `/api/v1/admin/activity${queryString ? `?${queryString}` : ""}`,
       { idToken },
     );
+    warnAboutUnreadable("activity event", listing.unreadableEventIds);
+    return listing.events;
   },
 
   listLeads: (idToken: string) => apiFetch<Lead[]>("/api/v1/admin/leads", { idToken }),

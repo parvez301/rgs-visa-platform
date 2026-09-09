@@ -127,7 +127,41 @@ describe("admin API routing", () => {
       ),
     );
     expect(result.statusCode).toBe(200);
-    expect(Array.isArray(result.payload)).toBe(true);
+    // { applications, unreadableApplicationIds }: a row that will not parse is
+    // named rather than 500ing the whole ops queue.
+    expect(result.payload).toEqual({ applications: [], unreadableApplicationIds: [] });
+  });
+
+  // C3: a query parameter is caller input, so a bad one is a 400. Parsed with
+  // a bare `.parse()` these threw a ZodError, which router.ts does not map --
+  // so a typo answered 500 "Internal error" and told the operator nothing.
+  it("400s a mistyped ?status= rather than 500ing", async () => {
+    const context = buildTestContext();
+    const adminRouter = buildAdminRouter(context);
+    const result = parseResult(
+      await adminRouter.dispatch(
+        makeEvent("GET", "/api/v1/admin/applications", {
+          sub: "admin_1",
+          query: { status: "SUBMITTTED" },
+        }),
+      ),
+    );
+    expect(result.statusCode).toBe(400);
+    expect(JSON.stringify(result.payload)).toContain("status");
+  });
+
+  it("400s a missing ?docType= on the document download rather than 500ing", async () => {
+    const context = buildTestContext();
+    const adminRouter = buildAdminRouter(context);
+    const result = parseResult(
+      await adminRouter.dispatch(
+        makeEvent("GET", "/api/v1/admin/applications/app_1/documents/download", {
+          sub: "admin_1",
+        }),
+      ),
+    );
+    expect(result.statusCode).toBe(400);
+    expect(JSON.stringify(result.payload)).toContain("docType");
   });
 
   it("lists user profiles for activity name resolution", async () => {

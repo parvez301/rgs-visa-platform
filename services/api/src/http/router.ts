@@ -115,6 +115,31 @@ export function parseBody<SchemaType extends ZodType>(
   }
 }
 
+/**
+ * A query parameter is caller input exactly as a body is, so a bad one is a
+ * 400. Parsed with a bare `.parse()` it throws a ZodError, `errorToResponse`
+ * below maps only ApiError, and a typo'd `?status=SUBMITTTED` answered 500
+ * "Internal error" — which tells an operator the server is broken rather than
+ * that they mistyped a word.
+ */
+export function parseQueryParam<SchemaType extends ZodType>(
+  schema: SchemaType,
+  parameterName: string,
+  rawValue: string | undefined,
+): SchemaType["_output"] {
+  try {
+    return schema.parse(rawValue);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const firstIssue = error.issues[0];
+      throw badRequest(
+        `${parameterName}: ${firstIssue ? firstIssue.message : "invalid value"}`,
+      );
+    }
+    throw error;
+  }
+}
+
 function errorToResponse(error: unknown): APIGatewayProxyResultV2 {
   if (error instanceof ApiError) {
     return {

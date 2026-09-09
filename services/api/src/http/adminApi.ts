@@ -24,7 +24,7 @@ import {
   listNotices,
   upsertNotice,
 } from "../domain/notices";
-import { Router, parseBody, type RequestContext } from "./router";
+import { Router, parseBody, parseQueryParam, type RequestContext } from "./router";
 import { registerCrmRoutes } from "./crmApi";
 
 const TransitionSchema = z.object({
@@ -60,9 +60,14 @@ export function buildAdminRouter(context: AppContext): Router {
   const adminRouter = new Router()
     .add("GET", "/api/v1/admin/applications", async (requestContext) => {
       requireAdmin(requestContext);
-      const status = z
-        .enum(APPLICATION_STATUSES)
-        .parse(requestContext.queryParams["status"] ?? "SUBMITTED");
+      const status = parseQueryParam(
+        z.enum(APPLICATION_STATUSES),
+        "status",
+        requestContext.queryParams["status"] ?? "SUBMITTED",
+      );
+      // { applications, unreadableApplicationIds } — a row that would not
+      // parse is named in the response rather than taking the ops team's
+      // whole work queue down with it.
       return listApplicationsByStatus(context, status);
     })
     .add("GET", "/api/v1/admin/applications/{applicationId}", async (requestContext) => {
@@ -109,7 +114,11 @@ export function buildAdminRouter(context: AppContext): Router {
       "/api/v1/admin/applications/{applicationId}/documents/download",
       async (requestContext) => {
         requireAdmin(requestContext);
-        const docType = z.enum(DOC_TYPES).parse(requestContext.queryParams["docType"] ?? "");
+        const docType = parseQueryParam(
+          z.enum(DOC_TYPES),
+          "docType",
+          requestContext.queryParams["docType"] ?? "",
+        );
         const travellerIndex = Number(requestContext.queryParams["travellerIndex"] ?? "0");
         const downloadUrl = await presignDocumentDownloadForAdmin(
           context,

@@ -8,7 +8,7 @@ import {
 } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
-import { badRequest, conflict, notFound } from "../lib/errors";
+import { CorruptRecordError, badRequest, conflict, notFound } from "../lib/errors";
 import {
   applicationToItem,
   itemToApplication,
@@ -26,16 +26,46 @@ export async function getApplicationById(
   return itemToApplication(applicationItem);
 }
 
+export interface ApplicationListing {
+  applications: Application[];
+  /**
+   * Rows the index names that could not be turned back into an Application.
+   * Named rather than merely absent: this is the ops team's work queue, and
+   * an application that vanishes from it is indistinguishable from one never
+   * submitted.
+   */
+  unreadableApplicationIds: string[];
+}
+
+/**
+ * One malformed APP# row must not take the whole queue down with it. Before
+ * this, `items.map(itemToApplication)` threw a raw ZodError, router.ts maps
+ * only ApiError, and the ops team's main screen answered 500 for every admin
+ * in the tenant until someone found and repaired the row. The bad row is now
+ * skipped, warned about with the id that finds it, and named in the response.
+ * Only CorruptRecordError is swallowed; every other failure still propagates.
+ */
 export async function listApplicationsByStatus(
   context: AppContext,
   status: ApplicationStatus,
   limit = 50,
-): Promise<Application[]> {
+): Promise<ApplicationListing> {
   const items = await context.table.queryGsi("GSI1", `STATUS#${status}`, {
     limit,
     scanForward: false,
   });
-  return items.map(itemToApplication);
+  const applications: Application[] = [];
+  const unreadableApplicationIds: string[] = [];
+  for (const item of items) {
+    try {
+      applications.push(itemToApplication(item));
+    } catch (error) {
+      if (!(error instanceof CorruptRecordError)) throw error;
+      unreadableApplicationIds.push(error.recordId);
+      console.warn(`Skipped unreadable application ${error.recordId}: ${error.reason}`);
+    }
+  }
+  return { applications, unreadableApplicationIds };
 }
 
 export interface AdminApplicationDetail {

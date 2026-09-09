@@ -8,11 +8,11 @@ import {
   type CountryProduct,
   type WizardStep,
 } from "@rgs/shared";
-import { z } from "zod";
+import { ZodError, z } from "zod";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
 import type { TableItem } from "../lib/db";
-import { badRequest, conflict, notFound } from "../lib/errors";
+import { badRequest, conflict, corruptRecord, notFound } from "../lib/errors";
 import { newId } from "../lib/ids";
 import { resolveCountryProduct } from "./config";
 import { ensureUserProfile } from "./users";
@@ -29,8 +29,45 @@ export function applicationToItem(application: Application): TableItem {
   };
 }
 
+/**
+ * The single place a stored row becomes an Application.
+ *
+ * Raw, a ZodError is not an ApiError and router.ts maps only ApiError
+ * subclasses — so one half-written APP# item answered 500 from every read
+ * that touched it, including the ops team's main work queue. Typed as
+ * CorruptRecordError it answers 409 naming the row, exactly as the CRM
+ * listings do, and a listing can then catch precisely this and skip.
+ */
 export function itemToApplication(item: TableItem): Application {
-  return ApplicationSchema.parse(item);
+  try {
+    return ApplicationSchema.parse(item);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw corruptRecord("Application", applicationIdOfItem(item), describeFirstIssue(error));
+    }
+    throw error;
+  }
+}
+
+/**
+ * The id that names a stored application row. The body carries it, but a row
+ * that lost it is exactly the kind of row this path exists for, and
+ * String(undefined) would report the literal id "undefined" — which finds
+ * nothing. The storage key always names the row, so it is the fallback.
+ */
+function applicationIdOfItem(item: TableItem): string {
+  const storedApplicationId = item["applicationId"];
+  if (typeof storedApplicationId === "string" && storedApplicationId.length > 0) {
+    return storedApplicationId;
+  }
+  return `${item.PK} / ${item.SK}`;
+}
+
+function describeFirstIssue(error: ZodError): string {
+  const firstIssue = error.issues[0];
+  return firstIssue
+    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
+    : "the stored item failed schema validation";
 }
 
 export async function createDraft(
