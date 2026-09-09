@@ -102,6 +102,13 @@ This is a **pnpm workspace**. Package names are `@rgs/marketing`, `@rgs/portal`,
 DELIVERED`), payment statuses, document types, activity event types, and the
 seed country catalog. Change contracts here first; everything else consumes it.
 
+The CRM domain core lives under `packages/shared/src/crm/` and is exported as the
+`crm` namespace (`import { crm } from "@rgs/shared"`). It owns the three CRM
+status axes (case, custody, billing), the spreadsheet normalizers, and the CRM
+entity schemas. CRM persistence and routes live in
+`services/api/src/domain/crm/` and `services/api/src/http/crmApi.ts`, mounted on
+the admin API under `/api/v1/admin/crm/*`.
+
 ---
 
 ## Prerequisites
