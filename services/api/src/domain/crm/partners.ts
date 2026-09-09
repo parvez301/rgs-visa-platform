@@ -1,0 +1,95 @@
+import { crm } from "@rgs/shared";
+import type { AppContext } from "../../lib/context";
+import { badRequest, notFound } from "../../lib/errors";
+import { newId } from "../../lib/ids";
+import { partnerListGsi1Pk, partnerPartitionKey } from "./keys";
+
+export interface CreatePartnerInput {
+  canonicalName: string;
+  partnerType?: crm.PartnerType;
+  aliases?: string[];
+  notes?: string;
+}
+
+export async function createPartner(
+  context: AppContext,
+  tenantId: string,
+  input: CreatePartnerInput,
+  actorEmail: string,
+): Promise<crm.Partner> {
+  const normalized = crm.normalizePartnerName(input.canonicalName);
+  if (normalized.canonicalKey === null) {
+    throw badRequest("Partner name could not be normalized");
+  }
+
+  const partner = crm.PartnerSchema.parse({
+    tenantId,
+    partnerId: newId("prt", context.now().getTime()),
+    canonicalName: input.canonicalName,
+    partnerType: input.partnerType ?? normalized.partnerType,
+    aliases: input.aliases ?? [],
+    ...(input.notes !== undefined ? { notes: input.notes } : {}),
+    createdAt: context.now().toISOString(),
+  });
+
+  await context.table.put({
+    PK: partnerPartitionKey(tenantId, partner.partnerId),
+    SK: "META",
+    GSI1PK: partnerListGsi1Pk(tenantId),
+    // The canonical key is a storage attribute only — PartnerSchema has no such
+    // field, so it must not be spread into the domain object.
+    GSI1SK: normalized.canonicalKey,
+    createdByEmail: actorEmail,
+    ...partner,
+  });
+  return partner;
+}
+
+export async function listPartners(
+  context: AppContext,
+  tenantId: string,
+): Promise<crm.Partner[]> {
+  const partnerItems = await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
+  return partnerItems.map((partnerItem) => crm.PartnerSchema.parse(stripKeys(partnerItem)));
+}
+
+export async function getPartnerOrThrow(
+  context: AppContext,
+  tenantId: string,
+  partnerId: string,
+): Promise<crm.Partner> {
+  const partnerItem = await context.table.get(partnerPartitionKey(tenantId, partnerId), "META");
+  if (!partnerItem) throw notFound("Partner");
+  return crm.PartnerSchema.parse(stripKeys(partnerItem));
+}
+
+/**
+ * Folds the raw name through the shared normalizer, so "VWI Mumbai" and
+ * "VWI BOM" resolve to the same partner rather than creating a duplicate.
+ */
+export async function findPartnerByName(
+  context: AppContext,
+  tenantId: string,
+  rawName: string,
+): Promise<crm.Partner | undefined> {
+  const normalized = crm.normalizePartnerName(rawName);
+  if (normalized.canonicalKey === null) return undefined;
+  const partnerItems = await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
+  // Match on the RAW item's GSI1SK. Parsing first would strip the key.
+  const matchingItem = partnerItems.find(
+    (partnerItem) => partnerItem.GSI1SK === normalized.canonicalKey,
+  );
+  return matchingItem ? crm.PartnerSchema.parse(stripKeys(matchingItem)) : undefined;
+}
+
+function stripKeys(item: Record<string, unknown>): Record<string, unknown> {
+  const {
+    PK: _partitionKey,
+    SK: _sortKey,
+    GSI1PK: _gsi1Pk,
+    GSI1SK: _gsi1Sk,
+    createdByEmail: _createdByEmail,
+    ...domainFields
+  } = item;
+  return domainFields;
+}
