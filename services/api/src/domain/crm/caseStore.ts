@@ -40,9 +40,13 @@ export async function writeCase(context: AppContext, crmCase: crm.CrmCase): Prom
     });
   }
 
-  // Drop applicant items beyond the current count, or a shrunk case keeps ghosts.
+  // Drop applicant items beyond the current count, or a shrunk case keeps
+  // ghosts. This is a read-after-write: an eventually consistent read can miss
+  // the very item it is about to delete, and a surviving ghost applicant
+  // blocks DECIDED and CLOSED for good, so it must be strongly consistent.
   const existingApplicantItems = await context.table.query(partitionKey, {
     skPrefix: APPLICANT_SORT_KEY_PREFIX,
+    consistentRead: true,
   });
   for (const staleItem of existingApplicantItems.slice(applicants.length)) {
     await context.table.delete(partitionKey, staleItem.SK);

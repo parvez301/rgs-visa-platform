@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildTestContext } from "../helpers";
 import { readCase, readCaseOrThrow, writeCase } from "../../src/domain/crm/caseStore";
 import { CorruptRecordError } from "../../src/lib/errors";
@@ -90,6 +90,38 @@ describe("caseStore", () => {
       skPrefix: APPLICANT_SORT_KEY_PREFIX,
     });
     expect(applicantItems).toHaveLength(1);
+  });
+
+  it("re-reads the applicant items consistently before deleting the ghosts", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+
+    const querySpy = vi.spyOn(context.table, "query");
+    let queryOptions: unknown;
+    try {
+      await writeCase(
+        context,
+        buildCase({
+          applicants: [
+            { applicantRef: "31377", travellerId: "trv_1", custody: "NOT_HELD", outcome: "PENDING" },
+          ],
+        } as Partial<crm.CrmCase>),
+      );
+      // Read before restoring: mockRestore also clears the recorded calls.
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      queryOptions = querySpy.mock.calls[0]![1];
+    } finally {
+      querySpy.mockRestore();
+    }
+
+    // An eventually consistent read here can miss the item it is about to
+    // delete, leaving a ghost applicant that blocks DECIDED and CLOSED for
+    // good. InMemoryTableClient is always consistent, so only the request
+    // itself can show the bug.
+    expect(queryOptions).toEqual({
+      skPrefix: APPLICANT_SORT_KEY_PREFIX,
+      consistentRead: true,
+    });
   });
 
   it("indexes the case by status and by partner", async () => {
