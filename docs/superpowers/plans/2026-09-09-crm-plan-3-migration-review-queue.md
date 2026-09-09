@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Load the 7,157-importable-row RGS Excel workbook into the CRM built by Plans 1-2, deterministically where the mapping tables allow and into a human review queue where they do not.
+**Goal:** Load the 7,156-importable-row RGS Excel workbook into the CRM built by Plans 1-2, deterministically where the mapping tables allow and into a human review queue where they do not.
 
 **Architecture:** A new `services/migration` workspace package reads the workbook by column *position* (headers are unreliable), converts Excel serial dates at the reader boundary, and maps each row through the Plan 1 normalizers. Rows that map cleanly are written through the Plan 2 domain functions; rows that do not become `ReviewItem` rows the admin API exposes for human resolution. The importer is idempotent on `caseRef` (the Excel REF NO), so it can be re-run against staging until the review queue is boring. Pass 2 of spec §9 — LLM resolution of the residue — is a **named seam** in this plan (`ResidueResolver`, with a deterministic no-op implementation) that Plan 4's agent layer fills in without restructuring anything.
 
@@ -34,10 +34,13 @@ These were measured against the real workbook. Do not re-derive them; do not con
 | Fact | Value | Why it matters |
 |---|---|---|
 | Workbook sheets | `Mini CRM`, `REQURIED INFORMATION`, `2025 YEAR`, `CHECKLIST` | Only `Mini CRM` and `2025 YEAR` are imported |
-| `Mini CRM` size | `rowCount` 7,553 · `actualRowCount` 7,162 · **7,157 rows carry a REF NO** | The primary ledger. The three numbers differ and the difference is explained in the two rows below — do not "fix" the reader to make them agree. |
+| `Mini CRM` size | `rowCount` 7,553 · `actualRowCount` 7,162 · **7,156 rows carry a usable REF NO** | The primary ledger. The three numbers differ and the difference is explained in the two rows below — do not "fix" the reader to make them agree. |
+| **`caseRef` is NOT unique** | 7,156 rows carry only **7,138 distinct** REF NOs. 18 are duplicated; **14 of those span two different partners** and usually two different countries (ref 32669 is PARADISE TOURS/Kenya *and* Ozzy Travels/Japan). Only 2 are the same traveller twice. | Measured by running Task 7's `mapRow` over the whole sheet. Idempotency **cannot** be a blind upsert on `caseRef` — it would put one partner's traveller into another partner's case and lose the first, on every re-run. See `task-9-ruling-duplicate-caserefs.md`. |
+| `2025 YEAR` loses nothing | It is a strict SUBSET of `Mini CRM` by REF NO: 6,527 refs in both, **0 refs only in `2025 YEAR`**. Of its 6,545 rows, 1,545 carry a phone and **all 1,545 join to a case**. | `Mini CRM` is the complete case source; `2025 YEAR` is purely a phone/tracking lookup. `joinPhones` discards nothing today — keep the unmatched-row guard anyway, the sheet is live. |
+| The two sheets have DIFFERENT column orders | `Mini CRM`: Entries c11, Visa Type c12, Status c13. `2025 YEAR`: Visa Type c13, Entries c14, Status c15. Phone is `2025 YEAR` c10 and has no `Mini CRM` column at all. | Verified against both sheets' own header rows. This is why the reader reads by position **per sheet** and never shares a column map between them. |
 | `2025 YEAR` size | `rowCount` 6,549 · `actualRowCount` 6,547 · **6,546 rows carry a REF NO** | Supplies `Phone` and `TRACKING NO.`, which `Mini CRM` lacks |
 | 391 blank rows sit inside `Mini CRM`'s used range | `rowCount` runs to 7,553 but only 7,162 rows hold anything | `eachRow` without `{includeEmpty:true}` skips them. Never iterate `1..rowCount` — you would map 391 empty rows into 391 junk cases. |
-| 4 `Mini CRM` rows are non-blank but have **no REF NO** | Rows 5984, 6308, 6615, 6900 hold only a date in column C (`APPLICANTS NAME`): Jun/Jul/Aug/Sep 2026 | They are **month divider rows** someone typed into the name column, not data. The reader's `if (caseRef === "") return;` drops them, which is correct — they must NOT become cases and must NOT raise review items. This is also why the sheet yields 7,157 and not 7,161. |
+| 4 `Mini CRM` rows are non-blank but have **no REF NO** | Rows 5984, 6308, 6615, 6900 hold only a date in column C (`APPLICANTS NAME`): Jun/Jul/Aug/Sep 2026 | They are **month divider rows** someone typed into the name column, not data. The reader's `if (caseRef === "") return;` drops them, which is correct — they must NOT become cases and must NOT raise review items. This is also why the sheet yields 7,156 and not 7,161. The last of the five excluded rows is 1001, whose REF NO is a broken formula resolving to `#REF!`; earlier counts included it because `String(value)` on its `{formula, result}` object is `"[object Object]"`, which does not start with `#`. Task 6's `normaliseRefNo` refuses Excel error literals, so it is correctly dropped. |
 | `Mini CRM` columns | A=`C`(received date) B=`REF NO.` C=`APPLICANTS NAME` D=`No.` E=`REFRENCE`(partner) F=`Country` G=`DOB` H=`Sub Date` I=`Collection` J=`Passport No.` K=`Entries` L=`Visa Type` M=`Status` N=`Additional Items` | Read by position |
 | `2025 YEAR` columns | A=`DATE` B=`REF NO.` C=`APPLICANTS NAME` D=`REFRENCE` E=**header literally says `China`** F=`DOB` G=`No.` H=`Sub Date` I=`Collection` J=`Phone` K=`TRACKING NO.` L=`Passport No.` M=`Visa Type` N=`Entries` | Column E's header is a country someone typed into the header cell. **Never key on header text for this sheet — use position.** |
 | Date cells are **mixed within every column**, on both sheets | Measured tally per column, `Date` / `string` / empty: `Mini CRM` Sub Date 0 / 5,609 / 1,552 · Collection 1,045 / 1,921 / 4,195 · `2025 YEAR` Sub Date 2,021 / 3,054 / 1,471 · DATE 1,544 / 4,716 / 285 | **There is no per-sheet rule.** An earlier draft of this plan claimed `Mini CRM` is all text and `2025 YEAR` is all serials. That is wrong and was disproved by measurement. Branch on the value's runtime type, never on which sheet it came from. |
@@ -1200,7 +1203,7 @@ git commit -m "feat(migration): read the workbook by column position with serial
   - `interface PendingReviewItem { reason: crm.ReviewReason; fieldName: string; rawValue: string; proposedValue?: string; detail?: string }`
   - `mapRow(rawRow: RawMiniCrmRow): MappedRow`
 
-**Context for the implementer:** This is spec §9's pass 1 and it is a **pure function** — no I/O, no database, no clock. That is what makes it testable against all 7,157 importable rows in a second.
+**Context for the implementer:** This is spec §9's pass 1 and it is a **pure function** — no I/O, no database, no clock. That is what makes it testable against all 7,156 importable rows in a second.
 
 The rules that decide review vs. accept:
 
@@ -1875,7 +1878,7 @@ describe("runImport", () => {
 
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     // Spec §5: migrated rows carry no billing evidence, and UNKNOWN is what
-    // the billing_overdue watchdog excludes. UNBILLED would nag on all 7,157 imported cases.
+    // the billing_overdue watchdog excludes. UNBILLED would nag on all 7,156 imported cases.
     expect(importedCase!.billingStatus).toBe("UNKNOWN");
   });
 
@@ -2013,7 +2016,7 @@ git commit -m "feat(migration): add the idempotent import run"
 
 **Context for the implementer:** The CLI is the operator's entry point. It must default to `--dry-run` — an import that writes to a real table on a mistyped command is exactly the accident this guard prevents. Writing requires an explicit `--commit`.
 
-The full-workbook test is the one that matters: it runs all 7,157 importable rows through `readWorkbook` + `mapRow` and asserts the review-queue rate is in the expected band. It **skips** rather than fails when the workbook is absent, because the file lives outside the repo (`/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx`) and CI will not have it.
+The full-workbook test is the one that matters: it runs all 7,156 importable rows through `readWorkbook` + `mapRow` and asserts the review-queue rate is in the expected band. It **skips** rather than fails when the workbook is absent, because the file lives outside the repo (`/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx`) and CI will not have it.
 
 - [ ] **Step 1: Write the CLI**
 
@@ -2079,7 +2082,7 @@ describeIfWorkbook("the real workbook", () => {
     // regressions most likely here: dropping the `caseRef === ""` guard admits
     // the 4 month-divider rows (7,161), and iterating `1..rowCount` instead of
     // `eachRow` admits the 391 blank rows (7,552).
-    expect(extract.miniCrmRows.length).toBe(7157);
+    expect(extract.miniCrmRows.length).toBe(7156);
     expect(extract.yearRows.length).toBe(6546);
 
     const mappedRows = extract.miniCrmRows.map(mapRow);
