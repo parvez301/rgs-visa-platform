@@ -35,54 +35,54 @@ function buildStubbedTableClient(pages: StubbedQueryPage[]): {
 }
 
 function buildItem(sortKey: string): TableItem {
-  return { PK: "TENANT#rgs#CASE#case_1", SK: sortKey };
+  return { PK: "PARTITION#1", SK: sortKey };
 }
 
 describe("DynamoTableClient query paging", () => {
   it("follows LastEvaluatedKey until the pages run out", async () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([
-      { Items: [buildItem("APPLICANT#00")], LastEvaluatedKey: { PK: "p", SK: "APPLICANT#00" } },
-      { Items: [buildItem("APPLICANT#01")], LastEvaluatedKey: { PK: "p", SK: "APPLICANT#01" } },
-      { Items: [buildItem("APPLICANT#02")] },
+      { Items: [buildItem("ITEM#00")], LastEvaluatedKey: { PK: "p", SK: "ITEM#00" } },
+      { Items: [buildItem("ITEM#01")], LastEvaluatedKey: { PK: "p", SK: "ITEM#01" } },
+      { Items: [buildItem("ITEM#02")] },
     ]);
 
-    const items = await tableClient.query("TENANT#rgs#CASE#case_1");
+    const items = await tableClient.query("PARTITION#1");
 
     // Past DynamoDB's 1 MB page, a single-page read silently truncates.
     expect(items.map((item) => item.SK)).toEqual([
-      "APPLICANT#00",
-      "APPLICANT#01",
-      "APPLICANT#02",
+      "ITEM#00",
+      "ITEM#01",
+      "ITEM#02",
     ]);
     expect(capturedInputs).toHaveLength(3);
     expect(capturedInputs[0]!.ExclusiveStartKey).toBeUndefined();
-    expect(capturedInputs[1]!.ExclusiveStartKey).toEqual({ PK: "p", SK: "APPLICANT#00" });
-    expect(capturedInputs[2]!.ExclusiveStartKey).toEqual({ PK: "p", SK: "APPLICANT#01" });
+    expect(capturedInputs[1]!.ExclusiveStartKey).toEqual({ PK: "p", SK: "ITEM#00" });
+    expect(capturedInputs[2]!.ExclusiveStartKey).toEqual({ PK: "p", SK: "ITEM#01" });
   });
 
   it("stops at the requested limit instead of draining every page", async () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([
       {
-        Items: [buildItem("APPLICANT#00"), buildItem("APPLICANT#01")],
-        LastEvaluatedKey: { PK: "p", SK: "APPLICANT#01" },
+        Items: [buildItem("ITEM#00"), buildItem("ITEM#01")],
+        LastEvaluatedKey: { PK: "p", SK: "ITEM#01" },
       },
-      { Items: [buildItem("APPLICANT#02")] },
+      { Items: [buildItem("ITEM#02")] },
     ]);
 
-    const items = await tableClient.query("TENANT#rgs#CASE#case_1", { limit: 2 });
+    const items = await tableClient.query("PARTITION#1", { limit: 2 });
 
-    expect(items.map((item) => item.SK)).toEqual(["APPLICANT#00", "APPLICANT#01"]);
+    expect(items.map((item) => item.SK)).toEqual(["ITEM#00", "ITEM#01"]);
     expect(capturedInputs).toHaveLength(1);
     expect(capturedInputs[0]!.Limit).toBe(2);
   });
 
   it("asks the next page only for the items the limit still needs", async () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([
-      { Items: [buildItem("APPLICANT#00")], LastEvaluatedKey: { PK: "p", SK: "APPLICANT#00" } },
-      { Items: [buildItem("APPLICANT#01"), buildItem("APPLICANT#02")] },
+      { Items: [buildItem("ITEM#00")], LastEvaluatedKey: { PK: "p", SK: "ITEM#00" } },
+      { Items: [buildItem("ITEM#01"), buildItem("ITEM#02")] },
     ]);
 
-    const items = await tableClient.query("TENANT#rgs#CASE#case_1", { limit: 3 });
+    const items = await tableClient.query("PARTITION#1", { limit: 3 });
 
     expect(items).toHaveLength(3);
     expect(capturedInputs[0]!.Limit).toBe(3);
@@ -93,19 +93,19 @@ describe("DynamoTableClient query paging", () => {
 describe("DynamoTableClient consistent reads", () => {
   it("leaves ConsistentRead unset unless the caller opts in", async () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([{ Items: [] }]);
-    await tableClient.query("TENANT#rgs#CASE#case_1");
+    await tableClient.query("PARTITION#1");
     expect(capturedInputs[0]!.ConsistentRead).toBeUndefined();
   });
 
   it("asks for a consistent read when the caller opts in", async () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([{ Items: [] }]);
-    await tableClient.query("TENANT#rgs#CASE#case_1", { consistentRead: true });
+    await tableClient.query("PARTITION#1", { consistentRead: true });
     expect(capturedInputs[0]!.ConsistentRead).toBe(true);
   });
 
   it("never asks for a consistent read on a GSI, which DynamoDB rejects", async () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([{ Items: [] }]);
-    await tableClient.queryGsi("GSI1", "TENANT#rgs#CASE_STATUS#NEW", { consistentRead: true });
+    await tableClient.queryGsi("GSI1", "INDEXED_PARTITION#1", { consistentRead: true });
     expect(capturedInputs[0]!.IndexName).toBe("GSI1");
     expect(capturedInputs[0]!.ConsistentRead).toBeUndefined();
   });

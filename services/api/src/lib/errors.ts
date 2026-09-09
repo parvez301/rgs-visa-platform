@@ -33,7 +33,7 @@ export function conflict(message: string): ApiError {
  */
 export class CorruptRecordError extends ApiError {
   constructor(
-    public readonly entity: string,
+    entity: string,
     public readonly recordId: string,
     public readonly reason: string,
   ) {

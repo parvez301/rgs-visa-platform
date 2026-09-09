@@ -341,7 +341,7 @@ async function loadCasesFromMetaItems(
     } catch (error) {
       if (!(error instanceof CorruptRecordError)) throw error;
       console.warn(
-        `Skipped unreadable CRM case ${caseId} in tenant ${tenantId}: ${error.message}`,
+        `Skipped unreadable CRM case ${error.recordId} in tenant ${tenantId}: ${error.reason}`,
       );
     }
   }
