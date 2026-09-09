@@ -143,6 +143,118 @@ export async function buildEdgeCaseWorkbook(): Promise<Buffer> {
   return Buffer.from(arrayBuffer);
 }
 
+/** Writes one sparse row, so a fixture can sit at the real file's row numbers. */
+function writeRowAt(
+  sheet: ExcelJS.Worksheet,
+  sheetRowNumber: number,
+  columnValues: ReadonlyArray<ExcelJS.CellValue | undefined>,
+): void {
+  const targetRow = sheet.getRow(sheetRowNumber);
+  columnValues.forEach((cellValue, zeroBasedColumnOffset) => {
+    if (cellValue === undefined) {
+      return;
+    }
+    targetRow.getCell(zeroBasedColumnOffset + 1).value = cellValue;
+  });
+}
+
+const BROKEN_REFERENCE_FORMULA: ExcelJS.CellValue = {
+  formula: "#REF!&\" \"&#REF!",
+  result: { error: "#REF!" },
+  date1904: false,
+};
+
+const RICH_TEXT_APPLICANT_NAME: ExcelJS.CellValue = {
+  richText: [{ text: "Pushpender " }, { text: "singh bais " }],
+};
+
+/**
+ * The three non-Date object shapes measured across both sheets, each placed at
+ * the sheet row it really occupies so `sourceRow` assertions read against the
+ * measurement:
+ *
+ *  - row 54  col 3 (APPLICANTS NAME): `{richText}` — `String(value)` gives
+ *    "[object Object]", i.e. a garbage traveller name on an otherwise good case.
+ *  - row 1001 col 2 (REF NO): `{formula, result}` resolving to "#REF!" — a
+ *    stray pasted email template whose reference is broken. This is not data:
+ *    it carries no identity and must be dropped, not imported under a junk key.
+ *  - row 3001 col 1 (the received-date column) and "2025 YEAR" row 1844 col 10
+ *    (Phone): `{text, hyperlink}` sitting in columns that are not text fields.
+ *    Column-shift junk, not values. They must survive as their literal text so
+ *    Task 7 can raise them, and must never quietly become a date or a phone.
+ */
+export async function buildObjectCellWorkbook(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+
+  const miniCrm = workbook.addWorksheet("Mini CRM");
+  miniCrm.addRow(MINI_CRM_HEADER_ROW);
+  writeRowAt(miniCrm, 54, [
+    "10-01-2025",
+    31400,
+    RICH_TEXT_APPLICANT_NAME,
+    1,
+    "VWI BOM",
+    "Turkey",
+    undefined,
+    "12/31/2024",
+    undefined,
+    "V2404480",
+    "Single",
+    "Business",
+    "Handover",
+    undefined,
+  ]);
+  writeRowAt(miniCrm, 1001, [
+    "11-01-2025",
+    BROKEN_REFERENCE_FORMULA,
+    "SOMEBODY ELSE",
+    1,
+    "VWI BOM",
+    "Turkey",
+  ]);
+  writeRowAt(miniCrm, 3001, [
+    { text: "travel@airbournetravels.com", hyperlink: "mailto:travel@airbournetravels.com" },
+    31402,
+    "NEHA KAPOOR",
+    1,
+    "VWI Pune",
+    "Spain",
+  ]);
+
+  const yearSheet = workbook.addWorksheet("2025 YEAR");
+  yearSheet.addRow(YEAR_HEADER_ROW);
+  writeRowAt(yearSheet, 54, [
+    "10-01-2025",
+    31400,
+    RICH_TEXT_APPLICANT_NAME,
+    "VWI BOM",
+    "Turkey",
+    undefined,
+    1,
+    45658,
+    undefined,
+    723001238,
+    "DTDC9911",
+  ]);
+  writeRowAt(yearSheet, 1001, ["11-01-2025", BROKEN_REFERENCE_FORMULA, "SOMEBODY ELSE"]);
+  writeRowAt(yearSheet, 1844, [
+    "12-01-2025",
+    31403,
+    "MUKESH KUMAR",
+    "VWI Delhi",
+    "Japan",
+    undefined,
+    1,
+    undefined,
+    undefined,
+    { text: "Mukesh Kumar", hyperlink: "mailto:mukesh@example.invalid" },
+    "DTDC7788",
+  ]);
+
+  const arrayBuffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
 /** A workbook whose "Mini CRM" sheet is missing: reading it must be refused. */
 export async function buildWorkbookWithoutMiniCrmSheet(): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();

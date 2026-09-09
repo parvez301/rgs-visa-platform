@@ -35,10 +35,42 @@ export const MINI_CRM_SHEET_NAME = "Mini CRM";
 export const YEAR_SHEET_NAME = "2025 YEAR";
 
 /**
- * Cells arrive as strings, numbers, Dates, or rich-text objects depending on
- * how the value was entered. Everything becomes trimmed text; a numeric value
- * that looks like a date serial is converted here, at the boundary, because
- * the shared date normalizer deliberately refuses serials.
+ * Excel's error literals. A cell holding one of these has no value to import —
+ * in the REF NO column it has no identity either, which is why `normaliseRefNo`
+ * refuses them rather than keying a case on "#REF!".
+ */
+const EXCEL_ERROR_TEXTS: ReadonlySet<string> = new Set([
+  "#REF!",
+  "#VALUE!",
+  "#N/A",
+  "#NAME?",
+  "#DIV/0!",
+  "#NULL!",
+  "#NUM!",
+  "#SPILL!",
+  "#CALC!",
+  "#GETTING_DATA",
+]);
+
+/**
+ * Cells arrive as strings, numbers, Dates, or one of three object shapes,
+ * every one of them measured on the real workbook. `String(value)` yields
+ * "[object Object]" on all three, so each is unwrapped explicitly:
+ *
+ *  - `{richText}`   — a name split into formatting runs (APPLICANTS NAME, row 54
+ *                     on both sheets). Join the runs' text.
+ *  - `{formula, …}` — a stray pasted formula (REF NO, row 1001 on both sheets).
+ *                     Take its cached result, which is itself unwrapped.
+ *  - `{text, …}`    — a hyperlink. Take the display text.
+ *
+ * exceljs's own `cell.text` is NOT a shortcut here: for the formula shape it
+ * returns `result.toString()`, and the result is `{error: "#REF!"}`, so
+ * `cell.text` is itself "[object Object]" — measured, not assumed. Unwrapping
+ * the value is the only route that is right for all three.
+ *
+ * Everything becomes trimmed text; a numeric value that looks like a date
+ * serial is converted by `normaliseDateCell`, at the boundary, because the
+ * shared date normalizer deliberately refuses serials.
  */
 export function normaliseCellText(rawCellValue: unknown): string {
   if (rawCellValue === null || rawCellValue === undefined) {
@@ -50,8 +82,31 @@ export function normaliseCellText(rawCellValue: unknown): string {
     // timezone while looking correct on a +04:00 machine.
     return rawCellValue.toISOString().slice(0, 10);
   }
-  if (typeof rawCellValue === "object" && "text" in rawCellValue) {
-    return String((rawCellValue as { text: unknown }).text).trim();
+  if (typeof rawCellValue === "object") {
+    if ("richText" in rawCellValue) {
+      const formattingRuns = (rawCellValue as { richText: unknown }).richText;
+      if (Array.isArray(formattingRuns)) {
+        return formattingRuns
+          .map((formattingRun): string =>
+            typeof formattingRun === "object" && formattingRun !== null && "text" in formattingRun
+              ? String((formattingRun as { text: unknown }).text)
+              : "",
+          )
+          .join("")
+          .trim();
+      }
+    }
+    if ("formula" in rawCellValue || "sharedFormula" in rawCellValue) {
+      // The cached result may be a string, a number, a Date, or an error
+      // wrapper. Unwrap it the same way as any other cell.
+      return normaliseCellText((rawCellValue as { result?: unknown }).result);
+    }
+    if ("error" in rawCellValue) {
+      return String((rawCellValue as { error: unknown }).error).trim();
+    }
+    if ("text" in rawCellValue) {
+      return String((rawCellValue as { text: unknown }).text).trim();
+    }
   }
   if (typeof rawCellValue === "number") {
     return String(rawCellValue);
@@ -75,10 +130,17 @@ export function normaliseDateCell(rawCellValue: unknown): string {
   return normaliseCellText(rawCellValue);
 }
 
-/** `31376.0` and `"31376.0"` both become `"31376"`. Case identity depends on this. */
+/**
+ * `31376.0` and `"31376.0"` both become `"31376"`. Case identity depends on this.
+ *
+ * An Excel error resolves to "" rather than to its literal: row 1001 on both
+ * sheets holds a broken formula in REF NO, and "#REF!" is non-empty, so without
+ * this the reader would import a junk case keyed on "#REF!" — and, being an
+ * identity, re-import it on every run.
+ */
 export function normaliseRefNo(rawCellValue: unknown): string {
   const text = normaliseCellText(rawCellValue);
-  if (text === "") {
+  if (text === "" || EXCEL_ERROR_TEXTS.has(text)) {
     return "";
   }
   const numericValue = Number(text);

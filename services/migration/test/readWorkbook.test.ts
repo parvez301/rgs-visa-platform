@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   buildEdgeCaseWorkbook,
   buildFixtureWorkbook,
+  buildObjectCellWorkbook,
   buildWorkbookWithoutMiniCrmSheet,
 } from "./fixtures/buildFixtureWorkbook";
 import {
@@ -17,6 +18,7 @@ import {
 
 let extract: WorkbookExtract;
 let edgeCaseExtract: WorkbookExtract;
+let objectCellExtract: WorkbookExtract;
 
 async function writeWorkbookToTemporaryFile(workbookContents: Buffer): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "rgs-migration-"));
@@ -33,6 +35,10 @@ beforeAll(async () => {
 
   edgeCaseExtract = await readWorkbook(
     await writeWorkbookToTemporaryFile(await buildEdgeCaseWorkbook()),
+  );
+
+  objectCellExtract = await readWorkbook(
+    await writeWorkbookToTemporaryFile(await buildObjectCellWorkbook()),
   );
 });
 
@@ -136,6 +142,91 @@ describe("readWorkbook on the rows the primary fixture cannot express", () => {
   it("refuses a workbook with no Mini CRM sheet", async () => {
     const workbookPath = await writeWorkbookToTemporaryFile(await buildWorkbookWithoutMiniCrmSheet());
     await expect(readWorkbook(workbookPath)).rejects.toThrow(/Mini CRM/);
+  });
+});
+
+describe("the three non-Date object shapes measured across both sheets", () => {
+  it("joins richText runs instead of storing a garbage traveller name", () => {
+    // Mini CRM row 54 col 3 and 2025 YEAR row 54 col 3, the APPLICANTS NAME
+    // column. String(value) here is "[object Object]", which would import the
+    // case under a garbage name.
+    const richTextRow = objectCellExtract.miniCrmRows.find((row) => row.sourceRow === 54);
+    expect(richTextRow).toBeDefined();
+    expect(richTextRow!.applicantsName).toBe("Pushpender singh bais");
+    expect(richTextRow!.applicantsName).not.toContain("[object Object]");
+  });
+
+  it("drops the broken-formula REF NO instead of keying a case on '#REF!'", () => {
+    // Mini CRM row 1001 col 2 and 2025 YEAR row 1001 col 2: a stray pasted
+    // formula whose reference is broken. "#REF!" is non-empty, so an
+    // implementation that merely stringifies it creates a junk case whose
+    // identity is "#REF!" — and re-creates it on every subsequent import.
+    expect(objectCellExtract.miniCrmRows.some((row) => row.sourceRow === 1001)).toBe(false);
+    expect(objectCellExtract.yearRows.some((row) => row.sourceRow === 1001)).toBe(false);
+    for (const caseRef of objectCellExtract.miniCrmRows.map((row) => row.caseRef)) {
+      expect(caseRef).not.toBe("#REF!");
+      expect(caseRef).not.toContain("[object Object]");
+    }
+    expect(normaliseRefNo({ formula: "#REF!", result: { error: "#REF!" } })).toBe("");
+    expect(normaliseRefNo({ error: "#REF!" })).toBe("");
+    expect(normaliseRefNo("#REF!")).toBe("");
+  });
+
+  it("still keeps a formula's error text where it is not an identity", () => {
+    // Only REF NO refuses it. Elsewhere "#REF!" is the honest reading of the
+    // cell and Task 7 can raise it; "[object Object]" would not be.
+    expect(normaliseCellText({ formula: "#REF!", result: { error: "#REF!" } })).toBe("#REF!");
+    expect(normaliseCellText({ error: "#N/A" })).toBe("#N/A");
+  });
+
+  it("reads a formula's computed result when it is a real value", () => {
+    expect(normaliseCellText({ formula: "A1&B1", result: "VWI Mumbai" })).toBe("VWI Mumbai");
+    expect(normaliseCellText({ formula: "A1+B1", result: 31376 })).toBe("31376");
+    expect(normaliseRefNo({ formula: "A1+B1", result: 31376 })).toBe("31376");
+    expect(normaliseCellText({ sharedFormula: "B1", result: "VWI BOM" })).toBe("VWI BOM");
+    expect(normaliseCellText({ formula: "TODAY()", result: new Date(Date.UTC(2025, 9, 1)) })).toBe(
+      "2025-10-01",
+    );
+  });
+
+  it("keeps a hyperlink in the received-date column as its literal text", () => {
+    // Mini CRM row 3001 col 1: travel@airbournetravels.com sitting in the
+    // received-date column. Column-shift junk, not a date. It must arrive as
+    // the email text so Task 7 can raise it — never as "[object Object]", and
+    // never as something that could parse as a date.
+    const shiftedRow = objectCellExtract.miniCrmRows.find((row) => row.sourceRow === 3001);
+    expect(shiftedRow).toBeDefined();
+    expect(shiftedRow!.receivedDateRaw).toBe("travel@airbournetravels.com");
+    expect(shiftedRow!.receivedDateRaw).not.toContain("[object Object]");
+    expect(Number.isNaN(Date.parse(shiftedRow!.receivedDateRaw))).toBe(true);
+  });
+
+  it("keeps a hyperlink in the Phone column as a name, not as digits", () => {
+    // 2025 YEAR row 1844 col 10: a person's name where a phone number belongs.
+    // normalisePhone must not coerce it into a number.
+    const shiftedYearRow = objectCellExtract.yearRows.find((row) => row.sourceRow === 1844);
+    expect(shiftedYearRow).toBeDefined();
+    expect(shiftedYearRow!.phoneRaw).toBe("Mukesh Kumar");
+    expect(shiftedYearRow!.phoneRaw).not.toContain("[object Object]");
+    expect(shiftedYearRow!.phoneRaw).not.toMatch(/^\d+$/);
+  });
+
+  it("agrees with exceljs's own cell.text on the two shapes it resolves", () => {
+    // Cross-check against the library's resolution where it is correct. It is
+    // NOT correct for the formula shape: cell.text returns result.toString(),
+    // and the result is {error:"#REF!"}, so cell.text is "[object Object]".
+    // That is why this reader unwraps the value rather than reading cell.text.
+    expect(normaliseCellText({ richText: [{ text: "Pushpender " }, { text: "singh bais " }] })).toBe(
+      "Pushpender singh bais",
+    );
+    expect(
+      normaliseCellText({ text: "MYANMAR - SALIL KUMAR SRIVASTAVA ", hyperlink: "mailto:x@y.z" }),
+    ).toBe("MYANMAR - SALIL KUMAR SRIVASTAVA");
+  });
+
+  it("survives a malformed richText rather than throwing mid-import", () => {
+    expect(normaliseCellText({ richText: [] })).toBe("");
+    expect(normaliseCellText({ formula: "A1", result: undefined })).toBe("");
   });
 });
 
