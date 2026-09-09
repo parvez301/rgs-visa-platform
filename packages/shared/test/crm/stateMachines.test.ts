@@ -47,6 +47,7 @@ describe("custody machine", () => {
     expect(canTransitionCustody("AT_EMBASSY", "WITH_RGS")).toBe(true);
     expect(canTransitionCustody("WITH_RGS", "IN_TRANSIT")).toBe(true);
     expect(canTransitionCustody("IN_TRANSIT", "RETURNED")).toBe(true);
+    expect(canTransitionCustody("IN_TRANSIT", "WITH_RGS")).toBe(true);
   });
 
   it("allows handing a passport straight back without couriering it", () => {
@@ -69,6 +70,7 @@ describe("billing machine", () => {
     expect(canTransitionBilling("BILL_SENT", "PART_PAID")).toBe(true);
     expect(canTransitionBilling("PART_PAID", "PAID")).toBe(true);
     expect(canTransitionBilling("BILL_SENT", "WRITTEN_OFF")).toBe(true);
+    expect(canTransitionBilling("UNBILLED", "WRITTEN_OFF")).toBe(true);
   });
 
   it("refuses to unpay", () => {

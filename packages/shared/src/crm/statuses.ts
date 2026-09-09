@@ -12,20 +12,20 @@ export const CASE_STATUSES = [
 export type CaseStatus = (typeof CASE_STATUSES)[number];
 
 /** Statuses a case can still move out of. */
-export const LIVE_CASE_STATUSES = [
+export const LIVE_CASE_STATUSES: readonly CaseStatus[] = [
   "NEW",
   "IN_PROGRESS",
   "APPOINTMENT_SET",
   "SUBMITTED",
-] as const;
+];
 
 /** Statuses that end a case. Nothing transitions out of these. */
-export const TERMINAL_CASE_STATUSES = [
+export const TERMINAL_CASE_STATUSES: readonly CaseStatus[] = [
   "CLOSED",
   "NOT_SUBMITTED",
   "WITHDRAWN",
   "DUPLICATE",
-] as const;
+];
 
 export const CUSTODY_STATUSES = [
   "NOT_HELD",

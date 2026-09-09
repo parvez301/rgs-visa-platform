@@ -26,12 +26,12 @@ export function canTransitionCaseStatus(
   fromStatus: CaseStatus,
   toStatus: CaseStatus,
 ): boolean {
-  if (TERMINAL_CASE_STATUSES.includes(fromStatus as (typeof TERMINAL_CASE_STATUSES)[number])) {
+  if (TERMINAL_CASE_STATUSES.includes(fromStatus)) {
     return false;
   }
   if (
     CASE_STATUS_OFF_RAMPS.includes(toStatus) &&
-    LIVE_CASE_STATUSES.includes(fromStatus as (typeof LIVE_CASE_STATUSES)[number])
+    LIVE_CASE_STATUSES.includes(fromStatus)
   ) {
     return true;
   }
@@ -78,7 +78,7 @@ export function deriveCaseStatusFromApplicants(
   currentCaseStatus: CaseStatus,
   applicantOutcomes: readonly ApplicantOutcome[],
 ): CaseStatus {
-  if (TERMINAL_CASE_STATUSES.includes(currentCaseStatus as (typeof TERMINAL_CASE_STATUSES)[number])) {
+  if (TERMINAL_CASE_STATUSES.includes(currentCaseStatus)) {
     return currentCaseStatus;
   }
   if (currentCaseStatus === "DECIDED" || applicantOutcomes.length === 0) {
