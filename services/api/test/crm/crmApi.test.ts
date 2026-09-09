@@ -164,6 +164,7 @@ describe("crm admin routes", () => {
     });
     expect(listed.statusCode).toBe(200);
     expect(listed.payload.cases).toHaveLength(1);
+    expect(listed.payload.unreadableCaseIds).toEqual([]);
   });
 
   it("moves the case status through PUT", async () => {
@@ -558,6 +559,9 @@ describe("crm admin routes", () => {
     expect(listed.payload.cases.map((listedCase: { caseId: string }) => listedCase.caseId)).toEqual([
       healthy.payload.caseId,
     ]);
+    // The skipped row is named in the payload. Without this the case simply is
+    // not there, and nothing tells the operator that anything went wrong.
+    expect(listed.payload.unreadableCaseIds).toEqual([corrupted.payload.caseId]);
 
     // The broken case itself is still reported, and as a typed error rather than a 500.
     const broken = await call(

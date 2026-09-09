@@ -330,12 +330,12 @@ describe("crm cases", () => {
     const context = buildTestContext();
     const partnerId = await seedPartner(context);
     const created = await seedCase(context, partnerId);
-    expect(await listCasesByStatus(context, "rgs", "NEW")).toHaveLength(1);
+    expect((await listCasesByStatus(context, "rgs", "NEW")).cases).toHaveLength(1);
 
     await changeCaseStatus(context, "rgs", created.caseId, "IN_PROGRESS", "ops@rgs.test");
     // The GSI1 entry must move with the status, or the queue shows stale rows.
-    expect(await listCasesByStatus(context, "rgs", "NEW")).toHaveLength(0);
-    expect(await listCasesByStatus(context, "rgs", "IN_PROGRESS")).toHaveLength(1);
+    expect((await listCasesByStatus(context, "rgs", "NEW")).cases).toHaveLength(0);
+    expect((await listCasesByStatus(context, "rgs", "IN_PROGRESS")).cases).toHaveLength(1);
   });
 
   it("lists cases by partner", async () => {
@@ -343,7 +343,7 @@ describe("crm cases", () => {
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     await seedCase(context, partnerId, "31378");
-    expect(await listCasesByPartner(context, "rgs", partnerId)).toHaveLength(2);
+    expect((await listCasesByPartner(context, "rgs", partnerId)).cases).toHaveLength(2);
   });
 
   it("keeps listing the healthy cases when one partition lost its applicants", async () => {
@@ -354,10 +354,45 @@ describe("crm cases", () => {
     // Half-written partition: META survived, the applicant items did not.
     await writeCase(context, { ...corruptedCase, applicants: [] });
 
-    const listedCases = await listCasesByStatus(context, "rgs", "NEW");
+    const { cases: listedCases } = await listCasesByStatus(context, "rgs", "NEW");
     expect(listedCases.map((listedCase) => listedCase.caseId)).toEqual([healthyCase.caseId]);
     expect(listedCases[0]!.caseRef).toBe("31377");
     expect(listedCases[0]!.applicants).toHaveLength(1);
+  });
+
+  it("reports the cases it had to skip in the result, not only in a log line", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const healthyCase = await seedCase(context, partnerId, "31377");
+    const corruptedCase = await seedCase(context, partnerId, "31378");
+    await writeCase(context, { ...corruptedCase, applicants: [] });
+
+    // A console.warn nobody reads is not reporting: without the skipped ids in
+    // the payload, a case disappearing from the queue looks like a case that
+    // was never there.
+    const listed = await listCasesByStatus(context, "rgs", "NEW");
+    expect(listed.cases.map((listedCase) => listedCase.caseId)).toEqual([healthyCase.caseId]);
+    expect(listed.unreadableCaseIds).toEqual([corruptedCase.caseId]);
+  });
+
+  it("reports nothing skipped when every case in the queue is healthy", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    const listed = await listCasesByStatus(context, "rgs", "NEW");
+    expect(listed.unreadableCaseIds).toEqual([]);
+  });
+
+  it("reports the cases it had to skip on the by-partner listing too", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    const corruptedCase = await seedCase(context, partnerId, "31378");
+    await writeCase(context, { ...corruptedCase, applicants: [] });
+
+    const listed = await listCasesByPartner(context, "rgs", partnerId);
+    expect(listed.cases).toHaveLength(1);
+    expect(listed.unreadableCaseIds).toEqual([corruptedCase.caseId]);
   });
 
   it("warns with the caseId of a case it had to skip", async () => {
@@ -421,7 +456,7 @@ describe("crm cases", () => {
     );
     expect(afterTheReturn.caseStatus).toBe("SUBMITTED");
     const submittedQueue = await listCasesByStatus(context, "rgs", "SUBMITTED");
-    expect(submittedQueue.map((queuedCase) => queuedCase.caseId)).toContain(created.caseId);
+    expect(submittedQueue.cases.map((queuedCase) => queuedCase.caseId)).toContain(created.caseId);
 
     // The corrected photo goes back to the embassy: the returned applicant
     // rejoins the queue as PENDING.
@@ -452,7 +487,7 @@ describe("crm cases", () => {
     const context = buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId);
-    expect(await listCasesByStatus(context, "other-tenant", "NEW")).toEqual([]);
+    expect((await listCasesByStatus(context, "other-tenant", "NEW")).cases).toEqual([]);
   });
 
   it("throws a 404 reading a case that does not exist", async () => {

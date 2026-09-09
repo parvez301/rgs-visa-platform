@@ -122,19 +122,13 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       if (!crm.CASE_STATUSES.includes(requestedStatus as crm.CaseStatus)) {
         throw badRequest(`Unknown case status ${requestedStatus}`);
       }
-      return {
-        cases: await listCasesByStatus(context, tenantId, requestedStatus as crm.CaseStatus),
-      };
+      // { cases, unreadableCaseIds } — a row the store could not reassemble is
+      // named in the response rather than silently missing from it.
+      return listCasesByStatus(context, tenantId, requestedStatus as crm.CaseStatus);
     })
     .add("GET", "/api/v1/admin/crm/cases/by-partner/{partnerId}", async (requestContext) => {
       requireAdmin(requestContext);
-      return {
-        cases: await listCasesByPartner(
-          context,
-          tenantId,
-          requestContext.pathParams["partnerId"]!,
-        ),
-      };
+      return listCasesByPartner(context, tenantId, requestContext.pathParams["partnerId"]!);
     })
     .add("POST", "/api/v1/admin/crm/cases", async (requestContext) => {
       requireAdmin(requestContext);

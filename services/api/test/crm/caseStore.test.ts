@@ -124,6 +124,32 @@ describe("caseStore", () => {
     });
   });
 
+  it("re-reads the applicant items consistently when reassembling a case", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+
+    const querySpy = vi.spyOn(context.table, "query");
+    let queryOptions: unknown;
+    try {
+      await readCase(context, "rgs", "case_1");
+      // Read before restoring: mockRestore also clears the recorded calls.
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      queryOptions = querySpy.mock.calls[0]![1];
+    } finally {
+      querySpy.mockRestore();
+    }
+
+    // An eventually consistent miss here hands back applicants: [] for a
+    // perfectly healthy case, which readCase reports as CorruptRecordError and
+    // the list endpoint then skips — a live case silently leaves the queue.
+    // InMemoryTableClient is always consistent, so only the request itself can
+    // show the bug.
+    expect(queryOptions).toEqual({
+      skPrefix: APPLICANT_SORT_KEY_PREFIX,
+      consistentRead: true,
+    });
+  });
+
   it("indexes the case by status and by partner", async () => {
     const context = buildTestContext();
     await writeCase(context, buildCase());

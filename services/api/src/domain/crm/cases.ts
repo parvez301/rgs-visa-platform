@@ -289,12 +289,23 @@ async function applyDerivedCaseStatusIfLegal(
   return updatedCase;
 }
 
+/**
+ * A case listing plus the ids of the rows it could not read. The skipped ids
+ * travel with the payload on purpose: a case that silently drops out of a queue
+ * is indistinguishable from a case that was never there, and a console.warn
+ * nobody is watching does not make that visible to the operator looking at it.
+ */
+export interface CaseListing {
+  cases: crm.CrmCase[];
+  unreadableCaseIds: string[];
+}
+
 export async function listCasesByStatus(
   context: AppContext,
   tenantId: string,
   caseStatus: crm.CaseStatus,
   limit = 50,
-): Promise<crm.CrmCase[]> {
+): Promise<CaseListing> {
   const metaItems = await context.table.queryGsi(
     "GSI1",
     caseStatusGsi1Pk(tenantId, caseStatus),
@@ -308,7 +319,7 @@ export async function listCasesByPartner(
   tenantId: string,
   partnerId: string,
   limit = 50,
-): Promise<crm.CrmCase[]> {
+): Promise<CaseListing> {
   const metaItems = await context.table.queryGsi(
     "GSI2",
     partnerCasesGsi2Pk(tenantId, partnerId),
@@ -323,15 +334,17 @@ export async function listCasesByPartner(
  *
  * One case that cannot be reassembled (a half-written partition) must not hide
  * the healthy ones — a whole tenant's queue would go down with it — so the bad
- * row is skipped and logged with its caseId. Only CorruptRecordError is
- * swallowed; every other failure still propagates.
+ * row is skipped, logged with its caseId, and named in `unreadableCaseIds` so
+ * the caller can say something happened. Only CorruptRecordError is swallowed;
+ * every other failure still propagates.
  */
 async function loadCasesFromMetaItems(
   context: AppContext,
   tenantId: string,
   metaItems: Array<Record<string, unknown>>,
-): Promise<crm.CrmCase[]> {
+): Promise<CaseListing> {
   const loadedCases: crm.CrmCase[] = [];
+  const unreadableCaseIds: string[] = [];
   for (const metaItem of metaItems) {
     if (metaItem["SK"] !== CASE_META_SORT_KEY) continue;
     const caseId = String(metaItem["caseId"]);
@@ -340,10 +353,11 @@ async function loadCasesFromMetaItems(
       if (loadedCase) loadedCases.push(loadedCase);
     } catch (error) {
       if (!(error instanceof CorruptRecordError)) throw error;
+      unreadableCaseIds.push(error.recordId);
       console.warn(
         `Skipped unreadable CRM case ${error.recordId} in tenant ${tenantId}: ${error.reason}`,
       );
     }
   }
-  return loadedCases;
+  return { cases: loadedCases, unreadableCaseIds };
 }

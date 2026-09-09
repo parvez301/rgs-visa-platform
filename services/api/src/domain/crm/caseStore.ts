@@ -62,8 +62,15 @@ export async function readCase(
   const metaItem = await context.table.get(partitionKey, CASE_META_SORT_KEY);
   if (!metaItem) return undefined;
 
+  // Strongly consistent for the same reason writeCase's re-read is: an
+  // eventually consistent query can miss an applicant item that is really
+  // there. Here the cost is worse than a ghost — a healthy case comes back
+  // with applicants: [], which parses as CorruptRecordError, which the list
+  // endpoint skips, and the case leaves the queue without anything being wrong
+  // with it.
   const applicantItems = await context.table.query(partitionKey, {
     skPrefix: APPLICANT_SORT_KEY_PREFIX,
+    consistentRead: true,
   });
 
   try {
