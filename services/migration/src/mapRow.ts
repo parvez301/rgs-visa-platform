@@ -153,23 +153,52 @@ function mapApplicantCount(
  * The sheet's "payment status" column, which the importer used to ignore
  * entirely — along with the claim, in a comment beside `billingStatus:
  * "UNKNOWN"`, that "migrated rows carry no billing evidence". 34 rows carry
- * exactly that evidence.
- *
- * Only the unambiguous spellings are mapped. Measured on the real workbook:
- * "Bill Sent" x18, "Recived In Cash/UPI" x7, "Payment Receive" x7 — each of
- * which states plainly whether the bill went out or the money came in.
- *
- * Two values are deliberately NOT here. "In Cash" (x1) names a payment
- * METHOD and does not say whether the cash was received or is merely
- * expected; and one cell is a {text, hyperlink} object holding
- * "MYANMAR - SALIL KUMAR SRIVASTAVA" plus a Drive link — a name, not a
- * payment status. Both raise a review item instead. Guessing either would
- * put a fabricated billing state on a real case.
+ * exactly that evidence: "Bill Sent" x18, "Recived In Cash/UPI" x7,
+ * "Payment Receive" x7, and 2 that state no billing fact at all.
  */
-const BILLING_STATUS_BY_PAYMENT_STATUS_KEY: Record<string, crm.BillingStatus> = {
-  "BILL SENT": "BILL_SENT",
-  "RECIVED IN CASH/UPI": "PAID",
-  "PAYMENT RECEIVE": "PAID",
+interface BillingMapping {
+  /** What the import actually writes. Never a terminal state. */
+  billingStatus: crm.BillingStatus;
+  /**
+   * True when the cell says the money ARRIVED, i.e. the sheet's own claim is
+   * `PAID` and the import is deliberately declining to write it.
+   */
+  sheetClaimsPaymentReceived: boolean;
+}
+
+/**
+ * What the import writes for each spelling, and where it refuses to go.
+ *
+ * `PAID` is not here, and must not be. `BILLING_TRANSITIONS` gives it no exits
+ * (`stateMachines.ts`), `changeBillingStatus` is on the forbidden list for
+ * migrated cases, and `PUT /api/v1/admin/crm/cases/{caseId}/billing` is the
+ * only route — so a `PAID` written off a free-text spreadsheet cell is
+ * uncorrectable by anything in the product. `isCaseClosable` then treats it as
+ * settled, so those cases also auto-CLOSE the moment their last passport is
+ * marked RETURNED, and CLOSED is terminal too: one mis-keyed cell locks a real
+ * case on both axes, permanently.
+ *
+ * So the two receipt spellings write `BILL_SENT` — which has exits — and raise
+ * an UNCONFIRMED_PAYMENT item carrying the raw cell. Fourteen cases then need
+ * one operator click to reach PAID. That is cheap, and it is reversible in the
+ * direction that matters.
+ *
+ * Widening `BILLING_TRANSITIONS` to give `PAID` an exit would be the other way
+ * to do this, and it is the wrong way: that terminal state is a Plan 2 domain
+ * decision, and changing it to accommodate a migration is the tail wagging the
+ * dog.
+ *
+ * Two values are still deliberately absent. "In Cash" (x1) names a payment
+ * METHOD and does not say whether the cash was received or is merely expected;
+ * and one cell is a {text, hyperlink} object holding "MYANMAR - SALIL KUMAR
+ * SRIVASTAVA" plus a Drive link — a name, not a payment status. Both raise
+ * UNMAPPED_STATUS instead. Guessing either would put a fabricated billing
+ * state on a real case.
+ */
+const BILLING_MAPPING_BY_PAYMENT_STATUS_KEY: Record<string, BillingMapping> = {
+  "BILL SENT": { billingStatus: "BILL_SENT", sheetClaimsPaymentReceived: false },
+  "RECIVED IN CASH/UPI": { billingStatus: "BILL_SENT", sheetClaimsPaymentReceived: true },
+  "PAYMENT RECEIVE": { billingStatus: "BILL_SENT", sheetClaimsPaymentReceived: true },
 };
 
 export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
@@ -247,15 +276,28 @@ export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
     legacyRaw["TRACKING NO."] = rawRow.trackingNumber;
   }
 
-  const billingStatus =
-    BILLING_STATUS_BY_PAYMENT_STATUS_KEY[crm.buildLookupKey(rawRow.paymentStatus)];
-  if (!isBlank(rawRow.paymentStatus) && billingStatus === undefined) {
+  const billingMapping =
+    BILLING_MAPPING_BY_PAYMENT_STATUS_KEY[crm.buildLookupKey(rawRow.paymentStatus)];
+  const billingStatus = billingMapping?.billingStatus;
+  if (!isBlank(rawRow.paymentStatus) && billingMapping === undefined) {
     reviewItems.push({
       reason: "UNMAPPED_STATUS",
       fieldName: "payment status",
       rawValue: rawRow.paymentStatus,
       detail:
         "The payment status column holds a value that does not state whether the bill was sent or the money received, so billing was left UNKNOWN rather than guessed.",
+    });
+  }
+  // Every other inference on this branch raises a review item; this one used
+  // to raise none, and it was the one that could not be undone.
+  if (billingMapping?.sheetClaimsPaymentReceived === true) {
+    reviewItems.push({
+      reason: "UNCONFIRMED_PAYMENT",
+      fieldName: "payment status",
+      rawValue: rawRow.paymentStatus,
+      proposedValue: "PAID",
+      detail:
+        "The sheet records payment as received, but PAID is a terminal billing state with no exits and no route can correct it on a migrated case, so this case was imported as BILL_SENT instead. Confirm the receipt against the sheet, then mark it paid.",
     });
   }
 

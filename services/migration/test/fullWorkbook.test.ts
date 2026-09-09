@@ -1,6 +1,9 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { crm } from "@rgs/shared";
 import { buildTestContext } from "@rgs/api/test/helpers";
+import { caseStatusGsi1Pk } from "@rgs/api/src/domain/crm/keys";
+import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
 import { readWorkbook } from "../src/readWorkbook";
 import { mapRow } from "../src/mapRow";
 import { joinPhones } from "../src/joinPhones";
@@ -140,13 +143,11 @@ describe.skipIf(!workbookIsPresent)(
       expect(firstRunSummary.casesSkippedAlreadyImported).toBe(0);
       expect(firstRunSummary.groupsProposed).toBe(importInput.proposedGroups.length);
 
-      // Measured 2026-09-09 after the whole-branch fix round: 238 partners,
-      // 3,980 review items (was 3,932 before the round -- +21 COLUMN_SHIFT_JUNK
-      // and +4 MISSING_REQUIRED_FIELD from the `No.` column, +22 DUPLICATE_REF
-      // from withheld contact details and "2025 YEAR" self-conflicts, +2
-      // UNMAPPED_STATUS from the payment column, -1 SUSPECT_PHONE now that a
-      // duplicated ref raises one phone item rather than two). Banded, not
-      // exact -- the sheet is live and will keep gaining rows, and a band
+      // Measured 2026-09-10 after fix round 2: 238 partners, 3,994 review
+      // items (3,980 after fix round 1, +14 UNCONFIRMED_PAYMENT from NEW-1 --
+      // the rows whose payment cell says the money arrived, which are now
+      // imported as BILL_SENT and queued rather than written PAID). Banded,
+      // not exact -- the sheet is live and will keep gaining rows, and a band
       // here is more honest than freezing today's exact partner mix while
       // still catching the regressions that would blow well past it (e.g.
       // treating every blank cell as a review item, which would push this
@@ -171,6 +172,55 @@ describe.skipIf(!workbookIsPresent)(
       expect(secondRunSummary.groupsProposed).toBe(0);
       expect(secondRunSummary.casesSkippedAlreadyImported).toBe(mappedRows.length);
       expect(secondRunSummary.casesSkippedUnreadable).toBe(0);
+
+      /**
+       * NEW-1, at full scale and stated as the invariant rather than as a
+       * count that will drift with the sheet: not one of the 7,156 migrated
+       * cases may be written into a billing state it can never leave.
+       *
+       * `BILLING_TRANSITIONS` gives PAID and WRITTEN_OFF no exits, and
+       * `changeBillingStatus` is on the forbidden list for migrated cases, so
+       * a case written PAID off a spreadsheet cell is uncorrectable by
+       * anything in the product -- and `isCaseClosable` then auto-CLOSEs it,
+       * which is terminal too. Measured: BILL_SENT 32, PAID 0, and 14
+       * UNCONFIRMED_PAYMENT items naming the cells that said otherwise.
+       */
+      const billingStatusTally = new Map<string, number>();
+      for (const caseStatus of crm.CASE_STATUSES) {
+        const metaItems = await context.table.queryGsi(
+          "GSI1",
+          caseStatusGsi1Pk("rgs-rehearsal", caseStatus),
+          { limit: 100_000 },
+        );
+        for (const metaItem of metaItems) {
+          const billingStatus = String(metaItem["billingStatus"] ?? "UNKNOWN");
+          billingStatusTally.set(billingStatus, (billingStatusTally.get(billingStatus) ?? 0) + 1);
+        }
+      }
+      for (const [billingStatus, caseCount] of billingStatusTally) {
+        const isTerminal = crm.BILLING_STATUSES.every(
+          (candidate) => !crm.canTransitionBilling(billingStatus as crm.BillingStatus, candidate),
+        );
+        expect({ billingStatus, caseCount, isTerminal }).toEqual({
+          billingStatus,
+          caseCount,
+          isTerminal: false,
+        });
+      }
+      expect(billingStatusTally.get("PAID")).toBeUndefined();
+      expect(billingStatusTally.get("BILL_SENT")).toBe(32);
+
+      const rehearsalQueue = await listReviewItems(context, "rgs-rehearsal", "OPEN", 100_000);
+      const unconfirmedPayments = rehearsalQueue.reviewItems.filter(
+        (reviewItem) => reviewItem.reason === "UNCONFIRMED_PAYMENT",
+      );
+      expect(unconfirmedPayments).toHaveLength(14);
+      // Each one carries the cell it came from and the state to move to, or a
+      // reviewer cannot act on it.
+      for (const unconfirmedPayment of unconfirmedPayments) {
+        expect(unconfirmedPayment.rawValue.trim()).not.toBe("");
+        expect(unconfirmedPayment.proposedValue).toBe("PAID");
+      }
     }, 60_000);
   },
 );

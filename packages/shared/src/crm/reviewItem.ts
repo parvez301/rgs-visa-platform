@@ -30,6 +30,23 @@ export const REVIEW_REASONS = [
    * and the stored record is not, so it names a `caseId` rather than a value.
    */
   "UNREADABLE_STORED_CASE",
+  /**
+   * The sheet says the money arrived, and the importer refused to act on it.
+   *
+   * `BILLING_TRANSITIONS` gives `PAID` no exits, `changeBillingStatus` is on
+   * the forbidden list for migrated cases, and `isCaseClosable` treats `PAID`
+   * as settled — so an import that wrote `PAID` off a free-text spreadsheet
+   * cell would lock the case on both axes with nothing in the product able to
+   * correct it. The import therefore writes `BILL_SENT`, which has exits, and
+   * raises this: `rawValue` is the cell, `proposedValue` is the state an
+   * operator should move it to once they have confirmed the receipt.
+   *
+   * Distinct from UNMAPPED_STATUS on purpose. That one names a value nothing
+   * could understand; this one names a value that WAS understood and was
+   * deliberately not applied, and the two need different queue filters because
+   * they need different work.
+   */
+  "UNCONFIRMED_PAYMENT",
 ] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
 

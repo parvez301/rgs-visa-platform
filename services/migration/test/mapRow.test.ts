@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { crm } from "@rgs/shared";
 import { mapRow } from "../src/mapRow";
 import type { RawMiniCrmRow } from "../src/readWorkbook";
 
@@ -325,10 +326,60 @@ describe("mapRow — pass 1", () => {
     );
     expect(
       mapRow(buildRawRow({ paymentStatus: "Recived In Cash/UPI" })).caseDraft.billingStatus,
-    ).toBe("PAID");
+    ).toBe("BILL_SENT");
     expect(mapRow(buildRawRow({ paymentStatus: "Payment Receive" })).caseDraft.billingStatus).toBe(
-      "PAID",
+      "BILL_SENT",
     );
+  });
+
+  // NEW-1. The import must never write a terminal billing state off a
+  // free-text spreadsheet cell.
+  it("never writes PAID, because nothing in the product could take it back", () => {
+    for (const receiptSpelling of ["Recived In Cash/UPI", "Payment Receive"]) {
+      const mapped = mapRow(buildRawRow({ paymentStatus: receiptSpelling }));
+      expect(mapped.caseDraft.billingStatus).not.toBe("PAID");
+      // Not merely "not PAID": it must land somewhere an operator can move on
+      // from, which is the whole reason BILL_SENT was chosen.
+      expect(mapped.caseDraft.billingStatus).toBe("BILL_SENT");
+      expect(crm.canTransitionBilling(mapped.caseDraft.billingStatus!, "PAID")).toBe(true);
+    }
+  });
+
+  it("raises UNCONFIRMED_PAYMENT with the raw cell when the sheet says the money arrived", () => {
+    const mapped = mapRow(buildRawRow({ paymentStatus: "Recived In Cash/UPI" }));
+    const paymentReview = mapped.reviewItems.find(
+      (reviewItem) => reviewItem.reason === "UNCONFIRMED_PAYMENT",
+    );
+    expect(paymentReview).toBeDefined();
+    expect(paymentReview!.fieldName).toBe("payment status");
+    expect(paymentReview!.rawValue).toBe("Recived In Cash/UPI");
+    expect(paymentReview!.proposedValue).toBe("PAID");
+    expect(paymentReview!.detail).toContain("BILL_SENT");
+  });
+
+  it("raises nothing extra for a bill that was merely sent", () => {
+    // "Bill Sent" states a fact the import can apply in full: it keeps its
+    // mapping and must NOT be dragged into the confirm-me queue with the 14.
+    const mapped = mapRow(buildRawRow({ paymentStatus: "Bill Sent" }));
+    expect(mapped.caseDraft.billingStatus).toBe("BILL_SENT");
+    expect(mapped.reviewItems).toEqual([]);
+  });
+
+  /**
+   * The one-way door itself, asserted against the real state machine rather
+   * than described in a comment. If a later change gives PAID an exit this
+   * test goes green-but-pointless, so it also pins the reason BILL_SENT is
+   * safe: PAID is terminal, BILL_SENT is not.
+   */
+  it("is pinned to a domain where PAID is terminal and BILL_SENT is not", () => {
+    for (const anyBillingStatus of crm.BILLING_STATUSES) {
+      expect(crm.canTransitionBilling("PAID", anyBillingStatus)).toBe(false);
+    }
+    expect(crm.canTransitionBilling("BILL_SENT", "PAID")).toBe(true);
+    // And the consequence that made it worse than a stuck billing field: a
+    // PAID case auto-CLOSEs, and CLOSED is terminal too.
+    expect(crm.isCaseClosable(["RETURNED"], "PAID")).toBe(true);
+    expect(crm.isCaseClosable(["RETURNED"], "BILL_SENT")).toBe(false);
   });
 
   it("refuses to guess a payment status it cannot read, and queues it instead", () => {
