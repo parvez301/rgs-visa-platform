@@ -150,6 +150,30 @@ describe("caseStore", () => {
     });
   });
 
+  it("reads the case META item consistently, exactly as it reads the applicants", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+
+    const getSpy = vi.spyOn(context.table, "get");
+    let getOptions: unknown;
+    try {
+      await readCase(context, "rgs", "case_1");
+      // Read before restoring: mockRestore also clears the recorded calls.
+      expect(getSpy).toHaveBeenCalledTimes(1);
+      getOptions = getSpy.mock.calls[0]![2];
+    } finally {
+      getSpy.mockRestore();
+    }
+
+    // The same defect class as the two reads above, one level up: an
+    // eventually consistent META read can miss the item that was just written,
+    // and readCase then reports a perfectly healthy case as missing — a 404 on
+    // the single-case route, or a false entry in unreadableCaseIds on the
+    // listing. InMemoryTableClient is always consistent, so only the request
+    // itself can show the bug.
+    expect(getOptions).toEqual({ consistentRead: true });
+  });
+
   it("indexes the case by status and by partner", async () => {
     const context = buildTestContext();
     await writeCase(context, buildCase());

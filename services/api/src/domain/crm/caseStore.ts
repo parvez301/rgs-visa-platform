@@ -59,7 +59,14 @@ export async function readCase(
   caseId: string,
 ): Promise<crm.CrmCase | undefined> {
   const partitionKey = casePartitionKey(tenantId, caseId);
-  const metaItem = await context.table.get(partitionKey, META_SORT_KEY);
+  // Strongly consistent, for the same reason the applicant read below is: an
+  // eventually consistent get can miss a META item that was written moments
+  // earlier, and a case that exists then reads back as no case at all — a 404
+  // from the single-case route, or a false entry in unreadableCaseIds on the
+  // listing.
+  const metaItem = await context.table.get(partitionKey, META_SORT_KEY, {
+    consistentRead: true,
+  });
   if (!metaItem) return undefined;
 
   // Strongly consistent for the same reason writeCase's re-read is: an

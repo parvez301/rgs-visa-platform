@@ -32,8 +32,21 @@ export interface QueryOptions {
   consistentRead?: boolean;
 }
 
+/**
+ * The only knob a single-item read has. Same opt-in as QueryOptions, and for
+ * the same reason: an eventually consistent get can miss an item that was
+ * written moments earlier, which reads back as a record that does not exist.
+ */
+export interface GetOptions {
+  consistentRead?: boolean;
+}
+
 export interface TableClient {
-  get(partitionKey: string, sortKey: string): Promise<TableItem | undefined>;
+  get(
+    partitionKey: string,
+    sortKey: string,
+    options?: GetOptions,
+  ): Promise<TableItem | undefined>;
   put(item: TableItem): Promise<void>;
   delete(partitionKey: string, sortKey: string): Promise<void>;
   query(partitionKey: string, options?: QueryOptions): Promise<TableItem[]>;
@@ -57,9 +70,17 @@ export class DynamoTableClient implements TableClient {
     });
   }
 
-  async get(partitionKey: string, sortKey: string): Promise<TableItem | undefined> {
+  async get(
+    partitionKey: string,
+    sortKey: string,
+    options: GetOptions = {},
+  ): Promise<TableItem | undefined> {
     const result = await this.documentClient.send(
-      new GetCommand({ TableName: this.tableName, Key: { PK: partitionKey, SK: sortKey } }),
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { PK: partitionKey, SK: sortKey },
+        ConsistentRead: options.consistentRead,
+      }),
     );
     return result.Item as TableItem | undefined;
   }
@@ -154,7 +175,11 @@ export class InMemoryTableClient implements TableClient {
     return `${partitionKey}\u0000${sortKey}`;
   }
 
-  async get(partitionKey: string, sortKey: string): Promise<TableItem | undefined> {
+  async get(
+    partitionKey: string,
+    sortKey: string,
+    _options: GetOptions = {},
+  ): Promise<TableItem | undefined> {
     return this.items.get(InMemoryTableClient.itemKey(partitionKey, sortKey));
   }
 

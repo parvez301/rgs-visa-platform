@@ -1,9 +1,11 @@
 import { DynamoDBClient, type QueryCommandInput } from "@aws-sdk/client-dynamodb";
+import type { GetCommandInput } from "@aws-sdk/lib-dynamodb";
 import { describe, expect, it } from "vitest";
 import { DynamoTableClient, type TableItem } from "../src/lib/db";
 
 interface StubbedQueryPage {
-  Items: TableItem[];
+  Items?: TableItem[];
+  Item?: TableItem;
   LastEvaluatedKey?: Record<string, unknown>;
 }
 
@@ -12,11 +14,13 @@ interface StubbedQueryPage {
  * serialization, so the test sees the command input the client built and hands
  * back canned pages. Nothing leaves the process.
  */
-function buildStubbedTableClient(pages: StubbedQueryPage[]): {
+function buildStubbedTableClient<CapturedInput = QueryCommandInput>(
+  pages: StubbedQueryPage[],
+): {
   tableClient: DynamoTableClient;
-  capturedInputs: QueryCommandInput[];
+  capturedInputs: CapturedInput[];
 } {
-  const capturedInputs: QueryCommandInput[] = [];
+  const capturedInputs: CapturedInput[] = [];
   const dynamoClient = new DynamoDBClient({
     region: "us-east-1",
     credentials: { accessKeyId: "test-key", secretAccessKey: "test-secret" },
@@ -24,7 +28,7 @@ function buildStubbedTableClient(pages: StubbedQueryPage[]): {
   let servedPageCount = 0;
   dynamoClient.middlewareStack.add(
     () => async (handlerArguments) => {
-      capturedInputs.push(handlerArguments.input as QueryCommandInput);
+      capturedInputs.push(handlerArguments.input as CapturedInput);
       const page = pages[servedPageCount] ?? { Items: [] };
       servedPageCount += 1;
       return { output: { ...page, $metadata: {} }, response: undefined };
@@ -100,6 +104,20 @@ describe("DynamoTableClient consistent reads", () => {
   it("asks for a consistent read when the caller opts in", async () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([{ Items: [] }]);
     await tableClient.query("PARTITION#1", { consistentRead: true });
+    expect(capturedInputs[0]!.ConsistentRead).toBe(true);
+  });
+
+  it("leaves ConsistentRead unset on a get unless the caller opts in", async () => {
+    const { tableClient, capturedInputs } = buildStubbedTableClient<GetCommandInput>([{}]);
+    await tableClient.get("PARTITION#1", "META");
+    expect(capturedInputs[0]!.ConsistentRead).toBeUndefined();
+  });
+
+  it("asks for a consistent read on a get when the caller opts in", async () => {
+    // The CRM's META reads use this: an eventually consistent get can miss an
+    // item that was just written and report a live record as missing.
+    const { tableClient, capturedInputs } = buildStubbedTableClient<GetCommandInput>([{}]);
+    await tableClient.get("PARTITION#1", "META", { consistentRead: true });
     expect(capturedInputs[0]!.ConsistentRead).toBe(true);
   });
 
