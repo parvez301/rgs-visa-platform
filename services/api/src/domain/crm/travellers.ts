@@ -71,6 +71,27 @@ export async function findTravellerByPassport(
   return firstMatch ? crm.CrmTravellerSchema.parse(stripKeys(firstMatch)) : undefined;
 }
 
+/**
+ * Fuzzy fallback for the 74% of rows that carry no passport number (spec §5):
+ * matches on the normalized full name via GSI2, mirroring how
+ * findTravellerByPassport matches on GSI3. Not unique — two different people
+ * can share a normalized name — so this returns the earliest match, same as
+ * the passport lookup.
+ */
+export async function findTravellerByName(
+  context: AppContext,
+  tenantId: string,
+  fullName: string,
+): Promise<crm.CrmTraveller | undefined> {
+  const matches = await context.table.queryGsi(
+    "GSI2",
+    travellerNameGsi2Pk(tenantId, normalizeTravellerName(fullName)),
+    { limit: 1 },
+  );
+  const firstMatch = matches[0];
+  return firstMatch ? crm.CrmTravellerSchema.parse(stripKeys(firstMatch)) : undefined;
+}
+
 export async function getTravellerOrThrow(
   context: AppContext,
   tenantId: string,

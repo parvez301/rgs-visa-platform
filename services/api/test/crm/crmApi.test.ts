@@ -1,0 +1,327 @@
+import { describe, expect, it } from "vitest";
+import type { APIGatewayProxyEventV2 } from "aws-lambda";
+import { buildTestContext } from "../helpers";
+import { Router } from "../../src/http/router";
+import { registerCrmRoutes } from "../../src/http/crmApi";
+import type { AppContext } from "../../src/lib/context";
+
+function buildRouter(context: AppContext): Router {
+  return registerCrmRoutes(new Router(), context);
+}
+
+function buildEvent(
+  method: string,
+  path: string,
+  body?: unknown,
+  queryStringParameters?: Record<string, string>,
+): APIGatewayProxyEventV2 {
+  return {
+    rawPath: path,
+    requestContext: {
+      http: { method },
+      authorizer: { jwt: { claims: { sub: "admin_1", email: "ops@rgs.test" } } },
+    },
+    ...(queryStringParameters ? { queryStringParameters } : {}),
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  } as unknown as APIGatewayProxyEventV2;
+}
+
+async function call(
+  router: Router,
+  method: string,
+  path: string,
+  body?: unknown,
+  query?: Record<string, string>,
+): Promise<{ statusCode: number; payload: any }> {
+  const response = (await router.dispatch(buildEvent(method, path, body, query))) as {
+    statusCode: number;
+    body: string;
+  };
+  return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
+}
+
+describe("crm admin routes", () => {
+  it("creates a partner then a case, and reads the case back", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+
+    const partnerResponse = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    expect(partnerResponse.statusCode).toBe(200);
+    const partnerId = partnerResponse.payload.partnerId;
+
+    const caseResponse = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+    expect(caseResponse.statusCode).toBe(200);
+    expect(caseResponse.payload.caseStatus).toBe("NEW");
+
+    const caseId = caseResponse.payload.caseId;
+    const readResponse = await call(router, "GET", `/api/v1/admin/crm/cases/${caseId}`);
+    expect(readResponse.statusCode).toBe(200);
+    expect(readResponse.payload.caseRef).toBe("31377");
+  });
+
+  it("lists cases by status from the query parameter", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+
+    const listed = await call(router, "GET", "/api/v1/admin/crm/cases", undefined, {
+      status: "NEW",
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.payload.cases).toHaveLength(1);
+  });
+
+  it("moves the case status through PUT", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+
+    const moved = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/cases/${created.payload.caseId}/status`,
+      { toStatus: "IN_PROGRESS" },
+    );
+    expect(moved.statusCode).toBe(200);
+    expect(moved.payload.caseStatus).toBe("IN_PROGRESS");
+  });
+
+  it("returns 409 for an illegal transition", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+    const caseId = created.payload.caseId;
+    await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
+      toStatus: "WITHDRAWN",
+    });
+    const illegal = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
+      toStatus: "IN_PROGRESS",
+    });
+    expect(illegal.statusCode).toBe(409);
+  });
+
+  it("returns 400 for a body that fails validation", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const bad = await call(router, "PUT", "/api/v1/admin/crm/cases/case_1/status", {
+      toStatus: "NOT_A_STATUS",
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it("returns 404 for a case that does not exist", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const missing = await call(router, "GET", "/api/v1/admin/crm/cases/nope");
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it("exposes the audit trail for a case", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+    const events = await call(
+      router,
+      "GET",
+      `/api/v1/admin/crm/cases/${created.payload.caseId}/events`,
+    );
+    expect(events.statusCode).toBe(200);
+    expect(events.payload.events[0].eventType).toBe("CASE_CREATED");
+  });
+
+  it("creates a traveller and finds the same one again by passport", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const created = await call(router, "POST", "/api/v1/admin/crm/travellers", {
+      fullName: "Umesh Kumar Yadav",
+      passportNumber: "Z6931368",
+    });
+    expect(created.statusCode).toBe(200);
+
+    const found = await call(
+      router,
+      "GET",
+      "/api/v1/admin/crm/travellers/by-passport/Z6931368",
+    );
+    expect(found.statusCode).toBe(200);
+    expect(found.payload.travellerId).toBe(created.payload.travellerId);
+  });
+
+  it("returns 404 looking up a passport with no traveller", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const missing = await call(
+      router,
+      "GET",
+      "/api/v1/admin/crm/travellers/by-passport/NOPE12345",
+    );
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it("moves applicant custody through PUT", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+    const moved = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/cases/${created.payload.caseId}/applicants/0/custody`,
+      { toCustody: "WITH_RGS" },
+    );
+    expect(moved.statusCode).toBe(200);
+    expect(moved.payload.applicants[0].custody).toBe("WITH_RGS");
+  });
+
+  // --- Authorised addition (1): findTravellerByName + its route. ---
+  // 74% of source rows carry no passport number, so name matching is the
+  // only dedup path available through the API for that majority — this is
+  // the route Plan 3's migration importer needs.
+  it("creates a traveller with no passport and finds it again by name", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const created = await call(router, "POST", "/api/v1/admin/crm/travellers", {
+      fullName: "No Passport Person",
+    });
+    expect(created.statusCode).toBe(200);
+
+    const found = await call(
+      router,
+      "GET",
+      `/api/v1/admin/crm/travellers/by-name/${encodeURIComponent("No Passport Person")}`,
+    );
+    expect(found.statusCode).toBe(200);
+    expect(found.payload.travellerId).toBe(created.payload.travellerId);
+  });
+
+  it("returns 404 looking up a name with no traveller", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const missing = await call(
+      router,
+      "GET",
+      `/api/v1/admin/crm/travellers/by-name/${encodeURIComponent("Nobody At All")}`,
+    );
+    expect(missing.statusCode).toBe(404);
+  });
+
+  // --- Authorised addition (2): a route for changeApplicantOutcome. ---
+  // Task 7 gave the CRM a way to record a visa's outcome; the brief predates
+  // it and has no route, so this exercises the route added for it.
+  it("changes an applicant's outcome through PUT and derives the case status", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+
+    const moved = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/cases/${created.payload.caseId}/applicants/31377/outcome`,
+      { toOutcome: "APPROVED" },
+    );
+    expect(moved.statusCode).toBe(200);
+    expect(moved.payload.applicants[0].outcome).toBe("APPROVED");
+    // Single applicant, now decided — the derived-status rule (spec §5) fires
+    // automatically, same as custody/billing driving CLOSED.
+    expect(moved.payload.caseStatus).toBe("DECIDED");
+  });
+
+  it("returns 404 changing the outcome of an applicant that does not exist", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+    const missing = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/cases/${created.payload.caseId}/applicants/NOT_A_REF/outcome`,
+      { toOutcome: "APPROVED" },
+    );
+    expect(missing.statusCode).toBe(404);
+  });
+});

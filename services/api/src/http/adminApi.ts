@@ -25,6 +25,7 @@ import {
   upsertNotice,
 } from "../domain/notices";
 import { Router, parseBody, type RequestContext } from "./router";
+import { registerCrmRoutes } from "./crmApi";
 
 const TransitionSchema = z.object({
   toStatus: z.enum(APPLICATION_STATUSES),
@@ -47,7 +48,7 @@ const ReviewDocumentSchema = z.object({
 
 const NoteSchema = z.object({ noteText: z.string().min(1).max(2000) });
 
-function requireAdmin(requestContext: RequestContext): {
+export function requireAdmin(requestContext: RequestContext): {
   adminId: string;
   adminEmail: string;
 } {
@@ -56,7 +57,7 @@ function requireAdmin(requestContext: RequestContext): {
 }
 
 export function buildAdminRouter(context: AppContext): Router {
-  return new Router()
+  const adminRouter = new Router()
     .add("GET", "/api/v1/admin/applications", async (requestContext) => {
       requireAdmin(requestContext);
       const status = z
@@ -186,4 +187,5 @@ export function buildAdminRouter(context: AppContext): Router {
       const seededCount = await seedCountryConfig(context);
       return { seededCount };
     });
+  return registerCrmRoutes(adminRouter, context);
 }
