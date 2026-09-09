@@ -318,7 +318,8 @@ Case-folded exact match first, then an explicit alias table:
 `SWISS`/`SWIZTERLAND` → CH, `NETHERLAND`/`NETHERLANDS` → NL,
 `VEITNAM` → VN, `SRILANKA`/`Sri Lanka ETA` → LK (with `Sri Lanka ETA`
 additionally setting `visaType: E-VISA`), `KOREA`/`SOUTH KOREA` → KR,
-`Cote d'Ivoire (Ivory Coast)` → CI, `CROTIA` → HR, `ETHOPIA` → ET.
+`Cote d'Ivoire (Ivory Coast)` → CI, `CROTIA` → HR, `ETHOPIA` → ET,
+`ALGERIA` → DZ, `CZECH REPUBLIC`/`CZECH GROUP` → CZ, `DUBAI` → AE.
 Unmatched → review queue.
 
 ### Partner (257 strings) → canonical partners with aliases
@@ -334,6 +335,20 @@ Seeded from what the workbook already sells, drawn from `Visa Type` and
 `Additional Items`: visa service fee, government/embassy fee, photo making,
 form filling, hotel booking, ticket booking, collection charge, courier charge,
 Chinese translation, attestation, apostille, PCC.
+
+### Blank cells are "not recorded", not "needs review"
+
+Measured over the real workbook: flagging every blank cell puts 4,648 of
+7,161 rows (64.9%) into the review queue; treating blank as absent puts
+1,016 (14.2%) there. The large number is almost entirely empty `Entries`
+(3,678), `Visa Type` (2,721) and `Status` (2,688) cells — fields the desk
+simply never filled in, not values that failed to map.
+
+Rule: a blank source cell yields an absent field, not a review flag. The
+review queue is for values that were present and could not be resolved.
+Normalizers still return `needsReview: true` for a blank input — that is
+their contract — but the migration treats "blank input" and "unresolvable
+input" differently, and only the second reaches a human.
 
 ---
 

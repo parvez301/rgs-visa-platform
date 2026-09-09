@@ -73,4 +73,21 @@ describe("normalizeCountry", () => {
     expect(numericResult.needsReview).toBe(true);
     expect(numericResult.rawValue).toBe("45658");
   });
+
+  it("maps the three destinations found missing in the real workbook", () => {
+    // 91 rows across the workbook resolved to null before these were added.
+    expect(normalizeCountry("CZECH REPUBLIC").countryCode).toBe("CZ");
+    expect(normalizeCountry("Czech Republic").countryCode).toBe("CZ");
+    expect(normalizeCountry("CZECH GROUP").countryCode).toBe("CZ");
+    expect(normalizeCountry("ALGERIA").countryCode).toBe("DZ");
+    // Dubai is a city; RGS books it as the UAE.
+    expect(normalizeCountry("DUBAI").countryCode).toBe("AE");
+  });
+
+  it("still refuses to guess at a service line sitting in the country column", () => {
+    // "TRAVEL INSURANCE" (21 rows) and "PASSPORT NEW" (34) are not destinations.
+    expect(normalizeCountry("TRAVEL INSURANCE").countryCode).toBeNull();
+    expect(normalizeCountry("TRAVEL INSURANCE").needsReview).toBe(true);
+    expect(normalizeCountry("PASSPORT NEW").countryCode).toBeNull();
+  });
 });
