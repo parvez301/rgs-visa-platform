@@ -40,6 +40,35 @@ async function call(
   return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
 }
 
+// Mirrors buildEvent, but omits the authorizer claims entirely — the same
+// way router.test.ts's "rejects unauthenticated admin calls" constructs an
+// unauthenticated request (no `authorizer` key at all, so the router's
+// jwtClaims default to {} and callerId becomes "").
+function buildUnauthenticatedEvent(
+  method: string,
+  path: string,
+  body?: unknown,
+): APIGatewayProxyEventV2 {
+  return {
+    rawPath: path,
+    requestContext: { http: { method } },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  } as unknown as APIGatewayProxyEventV2;
+}
+
+async function callUnauthenticated(
+  router: Router,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ statusCode: number; payload: any }> {
+  const response = (await router.dispatch(buildUnauthenticatedEvent(method, path, body))) as {
+    statusCode: number;
+    body: string;
+  };
+  return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
+}
+
 describe("crm admin routes", () => {
   it("creates a partner then a case, and reads the case back", async () => {
     const context = buildTestContext();
@@ -347,5 +376,24 @@ describe("crm admin routes", () => {
       { toOutcome: "APPROVED" },
     );
     expect(missing.statusCode).toBe(404);
+  });
+
+  // requireAdmin(requestContext) is the first statement in every CRM route,
+  // verified statically elsewhere — these two prove the reject path actually
+  // fires on a CRM route itself: one read route, one mutating route.
+  it("rejects an unauthenticated caller on a CRM read route", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const rejected = await callUnauthenticated(router, "GET", "/api/v1/admin/crm/partners");
+    expect(rejected.statusCode).toBe(403);
+  });
+
+  it("rejects an unauthenticated caller on a CRM write route", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const rejected = await callUnauthenticated(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    expect(rejected.statusCode).toBe(403);
   });
 });

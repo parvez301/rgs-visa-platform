@@ -75,4 +75,27 @@ describe("crm partners", () => {
     expect(partner.partnerType).toBe("CORPORATE");
     expect(partner.aliases).toEqual(["Sudiva"]);
   });
+
+  it("stores contact details when they are supplied and reads them back", async () => {
+    const context = buildTestContext();
+    const partner = await createPartner(
+      context,
+      "rgs",
+      {
+        canonicalName: "Ozzy Travels",
+        contactPhone: "+919810000001",
+        contactEmail: "desk@ozzytravels.test",
+        contactWhatsapp: "+919810000002",
+      },
+      "ops@rgs.test",
+    );
+    expect(partner.contactPhone).toBe("+919810000001");
+    expect(partner.contactEmail).toBe("desk@ozzytravels.test");
+    expect(partner.contactWhatsapp).toBe("+919810000002");
+
+    const reloaded = await getPartnerOrThrow(context, "rgs", partner.partnerId);
+    expect(reloaded.contactPhone).toBe("+919810000001");
+    expect(reloaded.contactEmail).toBe("desk@ozzytravels.test");
+    expect(reloaded.contactWhatsapp).toBe("+919810000002");
+  });
 });

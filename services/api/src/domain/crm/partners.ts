@@ -9,6 +9,9 @@ export interface CreatePartnerInput {
   partnerType?: crm.PartnerType;
   aliases?: string[];
   notes?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  contactWhatsapp?: string;
 }
 
 export async function createPartner(
@@ -29,6 +32,9 @@ export async function createPartner(
     partnerType: input.partnerType ?? normalized.partnerType,
     aliases: input.aliases ?? [],
     ...(input.notes !== undefined ? { notes: input.notes } : {}),
+    ...(input.contactPhone !== undefined ? { contactPhone: input.contactPhone } : {}),
+    ...(input.contactEmail !== undefined ? { contactEmail: input.contactEmail } : {}),
+    ...(input.contactWhatsapp !== undefined ? { contactWhatsapp: input.contactWhatsapp } : {}),
     createdAt: context.now().toISOString(),
   });
 

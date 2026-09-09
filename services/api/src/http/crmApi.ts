@@ -27,6 +27,9 @@ const CreatePartnerBody = z.object({
   partnerType: z.enum(crm.PARTNER_TYPES).optional(),
   aliases: z.array(z.string()).optional(),
   notes: z.string().optional(),
+  contactPhone: z.string().optional(),
+  contactEmail: z.string().email().optional(),
+  contactWhatsapp: z.string().optional(),
 });
 
 const CreateCaseBody = z.object({
