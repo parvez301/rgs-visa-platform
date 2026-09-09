@@ -1,6 +1,6 @@
 import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
-import { badRequest, notFound } from "../../lib/errors";
+import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import { partnerListGsi1Pk, partnerPartitionKey } from "./keys";
 
@@ -23,6 +23,17 @@ export async function createPartner(
   const normalized = crm.normalizePartnerName(input.canonicalName);
   if (normalized.canonicalKey === null) {
     throw badRequest("Partner name could not be normalized");
+  }
+  // Two partners on one canonical key is the exact failure normalizePartnerName
+  // exists to prevent: the cases split across both, and so do that partner's
+  // volume and revenue. 409 rather than returning the existing record, because
+  // an operator typing a duplicate should be told; the bulk importer is
+  // expected to call findPartnerByName first, by design.
+  const existingPartner = await findPartnerByName(context, tenantId, input.canonicalName);
+  if (existingPartner) {
+    throw conflict(
+      `Partner ${existingPartner.partnerId} (${existingPartner.canonicalName}) already uses the name ${input.canonicalName}`,
+    );
   }
 
   const partner = crm.PartnerSchema.parse({

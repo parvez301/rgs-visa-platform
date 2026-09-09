@@ -34,6 +34,45 @@ describe("crm partners", () => {
     expect(found!.canonicalName).toBe("VWI Mumbai");
   });
 
+  it("refuses a second partner that folds to the same canonical key", async () => {
+    const context = buildTestContext();
+    const existing = await createPartner(
+      context,
+      "rgs",
+      { canonicalName: "VWI Mumbai" },
+      "ops@rgs.test",
+    );
+
+    // "VWI BOM" folds to the canonical key "VWI Mumbai" already holds. Two
+    // partners on one key split that partner's cases, volume and revenue.
+    const duplicateAttempt = createPartner(
+      context,
+      "rgs",
+      { canonicalName: "VWI BOM" },
+      "ops@rgs.test",
+    );
+    await expect(duplicateAttempt).rejects.toMatchObject({ statusCode: 409 });
+    // The existing partnerId is in the message, so a caller recovers without a
+    // second lookup.
+    await expect(duplicateAttempt).rejects.toThrow(existing.partnerId);
+
+    const partners = await listPartners(context, "rgs");
+    expect(partners.map((partner) => partner.partnerId)).toEqual([existing.partnerId]);
+  });
+
+  it("lets a second tenant use a canonical key the first tenant already holds", async () => {
+    const context = buildTestContext();
+    await createPartner(context, "rgs", { canonicalName: "VWI Mumbai" }, "ops@rgs.test");
+    const otherTenantPartner = await createPartner(
+      context,
+      "other-tenant",
+      { canonicalName: "VWI Mumbai" },
+      "ops@rgs.test",
+    );
+    expect(otherTenantPartner.tenantId).toBe("other-tenant");
+    expect(await listPartners(context, "other-tenant")).toHaveLength(1);
+  });
+
   it("returns undefined when no partner matches", async () => {
     const context = buildTestContext();
     expect(await findPartnerByName(context, "rgs", "Nobody Travels")).toBeUndefined();
