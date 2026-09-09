@@ -161,19 +161,15 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
     })
     .add(
       "PUT",
-      "/api/v1/admin/crm/cases/{caseId}/applicants/{applicantIndex}/custody",
+      "/api/v1/admin/crm/cases/{caseId}/applicants/{applicantRef}/custody",
       async (requestContext) => {
         requireAdmin(requestContext);
         const body = parseBody(CustodyBody, requestContext.body);
-        const applicantIndex = Number(requestContext.pathParams["applicantIndex"]);
-        if (!Number.isInteger(applicantIndex) || applicantIndex < 0) {
-          throw badRequest("applicantIndex must be a non-negative integer");
-        }
         return changeApplicantCustody(
           context,
           tenantId,
           requestContext.pathParams["caseId"]!,
-          applicantIndex,
+          requestContext.pathParams["applicantRef"]!,
           body.toCustody,
           requestContext.callerEmail,
         );

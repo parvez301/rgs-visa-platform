@@ -110,7 +110,7 @@ describe("crm cases", () => {
         },
         "ops@rgs.test",
       ),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it("allows a non-visa case with no visa type", async () => {
@@ -158,11 +158,12 @@ describe("crm cases", () => {
   it("moves custody on a single applicant without touching the case status", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
     const updated = await changeApplicantCustody(
       context,
       "rgs",
       created.caseId,
-      0,
+      applicantRef,
       "WITH_RGS",
       "ops@rgs.test",
     );
@@ -174,18 +175,26 @@ describe("crm cases", () => {
   it("refuses an illegal custody transition with a 409", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
     // NOT_HELD may only go to WITH_RGS.
     await expect(
-      changeApplicantCustody(context, "rgs", created.caseId, 0, "AT_EMBASSY", "ops@rgs.test"),
+      changeApplicantCustody(context, "rgs", created.caseId, applicantRef, "AT_EMBASSY", "ops@rgs.test"),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
-  it("rejects a custody change for an applicant index that does not exist", async () => {
+  it("rejects a custody change for an applicant ref that does not exist", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await expect(
-      changeApplicantCustody(context, "rgs", created.caseId, 7, "WITH_RGS", "ops@rgs.test"),
-    ).rejects.toMatchObject({ statusCode: 400 });
+      changeApplicantCustody(
+        context,
+        "rgs",
+        created.caseId,
+        "no-such-applicant-ref",
+        "WITH_RGS",
+        "ops@rgs.test",
+      ),
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("moves billing independently of the other two axes", async () => {
@@ -311,32 +320,65 @@ describe("crm cases", () => {
   it("becomes CLOSED once every applicant is returned and billing is paid", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
 
-    await changeApplicantCustody(context, "rgs", created.caseId, 0, "WITH_RGS", "ops@rgs.test");
-    await changeApplicantCustody(context, "rgs", created.caseId, 0, "RETURNED", "ops@rgs.test");
+    await changeApplicantCustody(context, "rgs", created.caseId, applicantRef, "WITH_RGS", "ops@rgs.test");
+    await changeApplicantCustody(context, "rgs", created.caseId, applicantRef, "RETURNED", "ops@rgs.test");
     await changeBillingStatus(context, "rgs", created.caseId, "BILL_SENT", "ops@rgs.test");
     const paidCase = await changeBillingStatus(context, "rgs", created.caseId, "PAID", "ops@rgs.test");
 
     expect(paidCase.caseStatus).toBe("CLOSED");
 
+    // Selected by eventType, not by the meta field under test, so the
+    // assertions below can actually fail.
     const events = await listCaseEvents(context, "rgs", created.caseId);
-    const closeEvent = events.find(
-      (event) => event.eventType === "CASE_STATUS_CHANGED" && event.meta["toStatus"] === "CLOSED",
+    const statusChangedEvent = events.find((event) => event.eventType === "CASE_STATUS_CHANGED");
+    expect(statusChangedEvent!.meta["fromStatus"]).toBe("NEW");
+    expect(statusChangedEvent!.meta["toStatus"]).toBe("CLOSED");
+  });
+
+  it("closes via the custody path when billing already reached PAID first", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
+
+    // Billing settles before the passport comes back — the reverse order from
+    // the test above — so only the CLOSED check inside changeApplicantCustody
+    // (not changeBillingStatus) can be what closes the case.
+    await changeBillingStatus(context, "rgs", created.caseId, "BILL_SENT", "ops@rgs.test");
+    await changeBillingStatus(context, "rgs", created.caseId, "PAID", "ops@rgs.test");
+
+    await changeApplicantCustody(context, "rgs", created.caseId, applicantRef, "WITH_RGS", "ops@rgs.test");
+    const returnedLast = await changeApplicantCustody(
+      context,
+      "rgs",
+      created.caseId,
+      applicantRef,
+      "RETURNED",
+      "ops@rgs.test",
     );
-    expect(closeEvent!.meta["fromStatus"]).toBe("NEW");
-    expect(closeEvent!.meta["toStatus"]).toBe("CLOSED");
+
+    expect(returnedLast.caseStatus).toBe("CLOSED");
+
+    // Selected by eventType, not by the meta field under test, so the
+    // assertions below can actually fail.
+    const events = await listCaseEvents(context, "rgs", created.caseId);
+    const statusChangedEvent = events.find((event) => event.eventType === "CASE_STATUS_CHANGED");
+    expect(statusChangedEvent!.meta["fromStatus"]).toBe("NEW");
+    expect(statusChangedEvent!.meta["toStatus"]).toBe("CLOSED");
   });
 
   it("does not close a case while billing is still unpaid", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
 
-    await changeApplicantCustody(context, "rgs", created.caseId, 0, "WITH_RGS", "ops@rgs.test");
+    await changeApplicantCustody(context, "rgs", created.caseId, applicantRef, "WITH_RGS", "ops@rgs.test");
     const returnedButUnpaid = await changeApplicantCustody(
       context,
       "rgs",
       created.caseId,
-      0,
+      applicantRef,
       "RETURNED",
       "ops@rgs.test",
     );
@@ -348,18 +390,19 @@ describe("crm cases", () => {
   it("does not close a case when billing is UNKNOWN, even with every passport returned", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
 
     // Simulate a migrated case whose billing was never re-classified — the
     // importer writes this status directly through caseStore, never through
     // changeBillingStatus (UNKNOWN is reserved for the migration).
     await writeCase(context, { ...created, billingStatus: "UNKNOWN" });
 
-    await changeApplicantCustody(context, "rgs", created.caseId, 0, "WITH_RGS", "ops@rgs.test");
+    await changeApplicantCustody(context, "rgs", created.caseId, applicantRef, "WITH_RGS", "ops@rgs.test");
     const returnedWithUnknownBilling = await changeApplicantCustody(
       context,
       "rgs",
       created.caseId,
-      0,
+      applicantRef,
       "RETURNED",
       "ops@rgs.test",
     );
@@ -371,10 +414,11 @@ describe("crm cases", () => {
   it("does not drag a terminal case back into CLOSED by a later derivation", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
     await changeCaseStatus(context, "rgs", created.caseId, "WITHDRAWN", "ops@rgs.test");
 
-    await changeApplicantCustody(context, "rgs", created.caseId, 0, "WITH_RGS", "ops@rgs.test");
-    await changeApplicantCustody(context, "rgs", created.caseId, 0, "RETURNED", "ops@rgs.test");
+    await changeApplicantCustody(context, "rgs", created.caseId, applicantRef, "WITH_RGS", "ops@rgs.test");
+    await changeApplicantCustody(context, "rgs", created.caseId, applicantRef, "RETURNED", "ops@rgs.test");
     await changeBillingStatus(context, "rgs", created.caseId, "BILL_SENT", "ops@rgs.test");
     const finalCase = await changeBillingStatus(context, "rgs", created.caseId, "PAID", "ops@rgs.test");
 

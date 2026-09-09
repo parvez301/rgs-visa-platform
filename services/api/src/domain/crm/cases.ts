@@ -1,4 +1,5 @@
 import { crm } from "@rgs/shared";
+import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
@@ -35,36 +36,47 @@ export async function createCase(
   await getPartnerOrThrow(context, tenantId, input.partnerId);
 
   const nowIso = context.now().toISOString();
-  const crmCase = crm.CrmCaseSchema.parse({
-    tenantId,
-    caseId: newId("case", context.now().getTime()),
-    caseRef: input.caseRef,
-    caseType: input.caseType,
-    partnerId: input.partnerId,
-    destinationCountry: input.destinationCountry,
-    ...(input.visaType !== undefined ? { visaType: input.visaType } : {}),
-    ...(input.entryType !== undefined ? { entryType: input.entryType } : {}),
-    ...(input.processing !== undefined ? { processing: input.processing } : {}),
-    caseStatus: "NEW",
-    billingStatus: "UNBILLED",
-    receivedDate: input.receivedDate,
-    lineItems: [],
-    totalInr: 0,
-    watchdogOverrides: {},
-    mutedRules: [],
-    applicants: input.applicants.map((applicant) => ({
-      applicantRef: applicant.applicantRef,
-      travellerId: applicant.travellerId,
-      ...(applicant.passportNumber !== undefined
-        ? { passportNumber: applicant.passportNumber }
-        : {}),
-      custody: "NOT_HELD",
-      outcome: "PENDING",
-    })),
-    createdAt: nowIso,
-    updatedAt: nowIso,
-    createdByEmail: actorEmail,
-  });
+  let crmCase: crm.CrmCase;
+  try {
+    crmCase = crm.CrmCaseSchema.parse({
+      tenantId,
+      caseId: newId("case", context.now().getTime()),
+      caseRef: input.caseRef,
+      caseType: input.caseType,
+      partnerId: input.partnerId,
+      destinationCountry: input.destinationCountry,
+      ...(input.visaType !== undefined ? { visaType: input.visaType } : {}),
+      ...(input.entryType !== undefined ? { entryType: input.entryType } : {}),
+      ...(input.processing !== undefined ? { processing: input.processing } : {}),
+      caseStatus: "NEW",
+      billingStatus: "UNBILLED",
+      receivedDate: input.receivedDate,
+      lineItems: [],
+      totalInr: 0,
+      watchdogOverrides: {},
+      mutedRules: [],
+      applicants: input.applicants.map((applicant) => ({
+        applicantRef: applicant.applicantRef,
+        travellerId: applicant.travellerId,
+        ...(applicant.passportNumber !== undefined
+          ? { passportNumber: applicant.passportNumber }
+          : {}),
+        custody: "NOT_HELD",
+        outcome: "PENDING",
+      })),
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      createdByEmail: actorEmail,
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const firstIssue = error.issues[0];
+      throw badRequest(
+        firstIssue ? `${firstIssue.path.join(".")}: ${firstIssue.message}` : "Invalid case",
+      );
+    }
+    throw error;
+  }
 
   await writeCase(context, crmCase);
   await recordCrmEvent(context, tenantId, crmCase.caseId, "CASE_CREATED", actorEmail, {
@@ -110,14 +122,17 @@ export async function changeApplicantCustody(
   context: AppContext,
   tenantId: string,
   caseId: string,
-  applicantIndex: number,
+  applicantRef: string,
   toCustody: crm.CustodyStatus,
   actorEmail: string,
 ): Promise<crm.CrmCase> {
   const currentCase = await readCaseOrThrow(context, tenantId, caseId);
+  const applicantIndex = currentCase.applicants.findIndex(
+    (applicant) => applicant.applicantRef === applicantRef,
+  );
   const caseApplicant = currentCase.applicants[applicantIndex];
-  if (!caseApplicant) {
-    throw badRequest(`Case has no applicant at index ${applicantIndex}`);
+  if (applicantIndex === -1 || !caseApplicant) {
+    throw notFound("Applicant");
   }
   if (!crm.canTransitionCustody(caseApplicant.custody, toCustody)) {
     throw conflict(`Cannot move custody from ${caseApplicant.custody} to ${toCustody}`);
@@ -136,7 +151,7 @@ export async function changeApplicantCustody(
   };
   await writeCase(context, updatedCase);
   await recordCrmEvent(context, tenantId, caseId, "CUSTODY_CHANGED", actorEmail, {
-    applicantIndex,
+    applicantRef,
     fromCustody: caseApplicant.custody,
     toCustody,
   });

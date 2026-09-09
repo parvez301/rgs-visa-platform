@@ -230,11 +230,35 @@ describe("crm admin routes", () => {
     const moved = await call(
       router,
       "PUT",
-      `/api/v1/admin/crm/cases/${created.payload.caseId}/applicants/0/custody`,
+      `/api/v1/admin/crm/cases/${created.payload.caseId}/applicants/31377/custody`,
       { toCustody: "WITH_RGS" },
     );
     expect(moved.statusCode).toBe(200);
     expect(moved.payload.applicants[0].custody).toBe("WITH_RGS");
+  });
+
+  it("returns 404 moving custody for an applicant that does not exist", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+    });
+    const missing = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/cases/${created.payload.caseId}/applicants/NOT_A_REF/custody`,
+      { toCustody: "WITH_RGS" },
+    );
+    expect(missing.statusCode).toBe(404);
   });
 
   // --- Authorised addition (1): findTravellerByName + its route. ---
