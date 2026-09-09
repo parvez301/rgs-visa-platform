@@ -66,6 +66,32 @@ describe("crm keys", () => {
   // The standing rule: keys.ts is the only file allowed to write a CRM
   // DynamoDB key literal. A copy of "META" elsewhere is a second definition of
   // the storage layout, free to drift from this one.
+  //
+  // Every quote JavaScript has, not just the double one: the guard used to
+  // require a leading `"`, so a template literal — the very form a key built
+  // from a tenant id takes — walked straight past it.
+  const KEY_LITERAL_PATTERN = /["'`](META|APPLICANT#|NOTE#|EVENT#|TENANT#)/g;
+
+  function keyLiteralsIn(source: string): string[] {
+    return source.match(KEY_LITERAL_PATTERN) ?? [];
+  }
+
+  it("catches a key literal whichever quote it is written with", () => {
+    expect(keyLiteralsIn('const sortKey = "META";')).toHaveLength(1);
+    expect(keyLiteralsIn("const sortKey = 'META';")).toHaveLength(1);
+    expect(keyLiteralsIn("const sortKey = `META`;")).toHaveLength(1);
+    // The shape that motivated this: an interpolated partition key.
+    expect(keyLiteralsIn("const partitionKey = `TENANT#${tenantId}#CASE#${caseId}`;")).toHaveLength(
+      1,
+    );
+    expect(keyLiteralsIn("const applicantKey = `APPLICANT#${index}`;")).toHaveLength(1);
+  });
+
+  it("does not fire on prose that merely names a key", () => {
+    expect(keyLiteralsIn("// the META item carries the case body")).toEqual([]);
+    expect(keyLiteralsIn("import { META_SORT_KEY } from './keys';")).toEqual([]);
+  });
+
   it("is the only CRM domain file that writes a key literal", async () => {
     const domainDirectory = new URL("../../src/domain/crm/", import.meta.url);
     const domainFileNames = (await readdir(domainDirectory)).filter(
@@ -75,7 +101,7 @@ describe("crm keys", () => {
 
     for (const fileName of domainFileNames) {
       const source = await readFile(new URL(fileName, domainDirectory), "utf8");
-      const keyLiterals = source.match(/"(META|APPLICANT#|NOTE#|EVENT#|TENANT#)/g) ?? [];
+      const keyLiterals = keyLiteralsIn(source);
       expect({ fileName, keyLiterals }).toEqual({ fileName, keyLiterals: [] });
     }
   });
