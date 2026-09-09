@@ -7,6 +7,7 @@ import {
   buildFixtureWorkbook,
   buildObjectCellWorkbook,
   buildWorkbookWithoutMiniCrmSheet,
+  buildWorkbookWithoutYearSheet,
 } from "./fixtures/buildFixtureWorkbook";
 import {
   normaliseCellText,
@@ -158,6 +159,15 @@ describe("readWorkbook on the rows the primary fixture cannot express", () => {
   it("refuses a workbook with no Mini CRM sheet", async () => {
     const workbookPath = await writeWorkbookToTemporaryFile(await buildWorkbookWithoutMiniCrmSheet());
     await expect(readWorkbook(workbookPath)).rejects.toThrow(/Mini CRM/);
+  });
+
+  // The year sheet used to be optional (`yearSheet?.eachRow`), so a renamed or
+  // re-cased sheet produced `yearRows: []` and a run that reported success
+  // while dropping every phone and tracking number the join recovers -- 1,545
+  // and 2,634 of them on the real workbook.
+  it("refuses a workbook with no 2025 YEAR sheet rather than silently joining nothing", async () => {
+    const workbookPath = await writeWorkbookToTemporaryFile(await buildWorkbookWithoutYearSheet());
+    await expect(readWorkbook(workbookPath)).rejects.toThrow(/2025 YEAR/);
   });
 });
 

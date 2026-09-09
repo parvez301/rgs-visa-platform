@@ -8,7 +8,19 @@ import { proposeGroups } from "../src/groupCases";
 import { passthroughResidueResolver } from "../src/residueResolver";
 import { runImport } from "../src/importRun";
 
-const WORKBOOK_PATH = "/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx";
+/**
+ * Where the workbook is, in order of authority: the RGS_WORKBOOK_PATH
+ * environment variable, then the path it sat at during the migration build.
+ *
+ * The hard-coded path alone was the whole problem: renaming or archiving the
+ * file after cutover -- or running on any other machine -- turned every
+ * assertion below into nothing, and the suite reported green. A second
+ * developer would have had no way to run these at all, and the "migration N
+ * passing" figure quoted in the ledger was reproducible on exactly one
+ * machine.
+ */
+const DEFAULT_WORKBOOK_PATH = "/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx";
+const WORKBOOK_PATH = process.env["RGS_WORKBOOK_PATH"] ?? DEFAULT_WORKBOOK_PATH;
 const workbookIsPresent = existsSync(WORKBOOK_PATH);
 
 /**
@@ -16,7 +28,28 @@ const workbookIsPresent = existsSync(WORKBOOK_PATH);
  * suite is a LOCAL rehearsal, not a CI gate. The describe title itself names
  * the expected path so a `vitest run` skip line is self-explanatory instead
  * of a silent, unexplained "↓ the real workbook".
+ *
+ * A skip is a hole in the evidence, so it is also stated where a machine can
+ * see it: `RGS_REQUIRE_WORKBOOK=1` turns the absence into a failure, which is
+ * what a cutover-day check or a CI job with the file mounted should set. The
+ * always-running guard below says the same thing to a human reading output.
  */
+const workbookIsRequired = process.env["RGS_REQUIRE_WORKBOOK"] === "1";
+
+describe("the real workbook rehearsal's own preconditions", () => {
+  it("is either running against a workbook or explicitly, visibly skipped", () => {
+    if (!workbookIsPresent) {
+      console.warn(
+        `[fullWorkbook] SKIPPING the full-scale rehearsal: no workbook at ${WORKBOOK_PATH}. ` +
+          "Set RGS_WORKBOOK_PATH to point at it, or RGS_REQUIRE_WORKBOOK=1 to make its absence a failure.",
+      );
+    }
+    // Green by default, because CI genuinely has no copy of a file holding
+    // 7,156 real customers' passport numbers. Red on demand, so "the gate ran"
+    // is something a cutover check can actually assert rather than assume.
+    expect(workbookIsPresent || !workbookIsRequired).toBe(true);
+  });
+});
 describe.skipIf(!workbookIsPresent)(
   workbookIsPresent
     ? "the real workbook"

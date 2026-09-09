@@ -753,6 +753,25 @@ describe("crm admin routes", () => {
     expect(rejected.statusCode).toBe(403);
   });
 
+  // N3: the guard on GET review/{reviewItemId} could be deleted with the whole
+  // suite green. Its two siblings were covered and this one -- the route that
+  // returns one specific record -- was not. Live exposure is nil today because
+  // the admin proxy sits behind its own Cognito authorizer, but requireAdmin
+  // is the in-code layer and the same stack already fronts another proxy with
+  // a *users* authorizer; a consolidation would remove the only thing guarding
+  // this route with nothing going red.
+  it("rejects an unauthenticated caller on the single review-item route", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
+    const rejected = await callUnauthenticated(
+      router,
+      "GET",
+      `/api/v1/admin/crm/review/${recorded.reviewItemId}`,
+    );
+    expect(rejected.statusCode).toBe(403);
+  });
+
   // ------------------------------------------------------------------
   // Migration review queue (spec §9): the rows the importer could not
   // apply deterministically, parked for a human.

@@ -35,10 +35,20 @@ export interface ImportSummary {
    * missing one — and every one of them raises a review item.
    */
   casesSkippedUnreadable: number;
+  /** Distinct partners this run created. */
   partnersCreated: number;
-  partnersReused: number;
+  /**
+   * ROWS whose partner name matched a partner that already existed, not the
+   * number of partners. On the real workbook it reports 6,918 beside
+   * `partnersCreated: 238`, and `console.table` prints both to the operator --
+   * named `partnersReused` those two numbers read as 7,156 partners, which is
+   * thirty times the truth. The name now says which it is.
+   */
+  rowsMatchedToExistingPartner: number;
+  /** Distinct travellers this run created. */
   travellersCreated: number;
-  travellersReused: number;
+  /** ROWS matched to an existing traveller, on the same footing as above. */
+  rowsMatchedToExistingTraveller: number;
   reviewItemsRecorded: number;
   groupsProposed: number;
   createdCaseIds: string[];
@@ -110,9 +120,13 @@ const UNREADABLE_CASE_REF_PLACEHOLDER = "(ref not readable)";
  * every substitution raises a `MISSING_REQUIRED_FIELD` review item carrying
  * the sentinel on `proposedValue`, so a human sees exactly which of the 452 /
  * 225 rows carry a placeholder instead of a real value. "1970-01-01" is the
- * most important of these to flag, since it is also `GSI2SK` -- an unflagged
- * placeholder date would sort 225 cases to the front of every partner
- * listing looking like the firm's oldest work. Sentinels are still chosen to
+ * most important of these to flag, since it is also `GSI2SK` and
+ * `listCasesByPartner` reads GSI2 with `scanForward: false` -- descending --
+ * so an unflagged placeholder date sorts its 225 cases to the very END of
+ * their partners' listings, not the front. Measured on the busiest partner
+ * (785 cases) that puts a sentinel-dated case on page 16 at the route's
+ * default limit of 50: invisible rather than prominent, which is why the
+ * queue is the only way anyone finds it. Sentinels are still chosen to
  * be self-describing where possible: "ZZ" is ISO-3166's reserved
  * user-assigned "unknown" code; "1970-01-01" predates RGS's operation
  * entirely, but only the review item makes that legible.
@@ -528,7 +542,7 @@ async function resolvePartner(
  * asked, so the race has nowhere to happen.
  *
  * Honesty in the dry run: with nothing written, every lookup missed, so the
- * dry run reported `travellersCreated 7156 / travellersReused 0` against the
+ * dry run reported `travellersCreated 7156 / rowsMatchedToExistingTraveller 0` against the
  * real `5534 / 1622` -- a 29% overstatement, in the one number the operator's
  * only pre-flight check exists to give them.
  *
@@ -668,11 +682,31 @@ async function resolveResidue(
     ) {
       continue;
     }
-    reviewItemsToRecord.push(
-      resolution === undefined
-        ? pendingReviewItem
-        : { ...pendingReviewItem, proposedValue: resolution.proposedValue, confidence: resolution.confidence },
-    );
+    if (resolution === undefined) {
+      reviewItemsToRecord.push(pendingReviewItem);
+      continue;
+    }
+    // ReviewItemSchema requires confidence in [0, 1] and nothing validates
+    // what a resolver returns. A Plan 4 resolver answering -0.2 -- below the
+    // auto-apply threshold, so it lands here rather than being applied --
+    // would abort the run at the schema parse after N cases are already
+    // written, which is precisely the half-written state C1 exists for. The
+    // item is worth more than the number attached to it, so an out-of-range
+    // confidence is dropped and said out loud, not allowed to stop the import.
+    const confidenceIsUsable =
+      Number.isFinite(resolution.confidence) &&
+      resolution.confidence >= 0 &&
+      resolution.confidence <= 1;
+    reviewItemsToRecord.push({
+      ...pendingReviewItem,
+      proposedValue: resolution.proposedValue,
+      ...(confidenceIsUsable ? { confidence: resolution.confidence } : {}),
+      ...(confidenceIsUsable
+        ? {}
+        : {
+            detail: `${pendingReviewItem.detail ?? ""} The resolver reported a confidence of ${resolution.confidence}, which is outside the 0-1 range the schema allows, so it was not recorded.`.trim(),
+          }),
+    });
   }
 
   return { caseDraft, reviewItemsToRecord };
@@ -728,9 +762,9 @@ export async function runImport(
     casesSkippedAlreadyImported: 0,
     casesSkippedUnreadable: 0,
     partnersCreated: 0,
-    partnersReused: 0,
+    rowsMatchedToExistingPartner: 0,
     travellersCreated: 0,
-    travellersReused: 0,
+    rowsMatchedToExistingTraveller: 0,
     reviewItemsRecorded: 0,
     groupsProposed: 0,
     createdCaseIds: [],
@@ -789,7 +823,7 @@ export async function runImport(
     if (partnerResolution.created) {
       summary.partnersCreated += 1;
     } else {
-      summary.partnersReused += 1;
+      summary.rowsMatchedToExistingPartner += 1;
     }
 
     const caseRefClaim = await claimCaseRef(
@@ -865,7 +899,7 @@ export async function runImport(
     if (travellerResolution.created) {
       summary.travellersCreated += 1;
     } else {
-      summary.travellersReused += 1;
+      summary.rowsMatchedToExistingTraveller += 1;
     }
 
     const residueResult = await resolveResidue(mappedRow, input.residueResolver);
@@ -1123,7 +1157,7 @@ export async function runImport(
         fieldName: "C",
         rawValue: "",
         proposedValue: receivedDateForCase,
-        detail: `receivedDate is required by the schema but the sheet did not record one; the placeholder "${receivedDateForCase}" was written pending a real value. This placeholder is also the case's GSI2 sort key, so an unresolved row will sort to the front of partner listings.`,
+        detail: `receivedDate is required by the schema but the sheet did not record one; the placeholder "${receivedDateForCase}" was written pending a real value. This placeholder is also the case's GSI2 sort key, and partner listings are read newest-first, so an unresolved row sorts to the very END of its partner's listing -- on the busiest partner that is page 16 at the default page size of 50. It will not be found by scrolling; work it from this queue.`,
       });
     }
     if (travellerFullNameIsMissing) {

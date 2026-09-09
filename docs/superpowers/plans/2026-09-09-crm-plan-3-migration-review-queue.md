@@ -2083,7 +2083,7 @@ describeIfWorkbook("the real workbook", () => {
     // the 4 month-divider rows (7,161), and iterating `1..rowCount` instead of
     // `eachRow` admits the 391 blank rows (7,552).
     expect(extract.miniCrmRows.length).toBe(7156);
-    expect(extract.yearRows.length).toBe(6546);
+    expect(extract.yearRows.length).toBe(6545);
 
     const mappedRows = extract.miniCrmRows.map(mapRow);
     const rowsWithReview = mappedRows.filter((mappedRow) => mappedRow.reviewItems.length > 0);

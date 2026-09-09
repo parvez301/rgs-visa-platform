@@ -263,6 +263,21 @@ export async function buildObjectCellWorkbook(): Promise<Buffer> {
   return Buffer.from(arrayBuffer);
 }
 
+/**
+ * A workbook whose "2025 YEAR" sheet is missing -- renamed, re-cased or
+ * archived after the cutover. Reading it must be refused: the phone and
+ * tracking joins live only on that sheet, and an empty result is
+ * indistinguishable from a sheet that genuinely had no rows.
+ */
+export async function buildWorkbookWithoutYearSheet(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const miniCrmSheet = workbook.addWorksheet("Mini CRM");
+  miniCrmSheet.addRow(MINI_CRM_HEADER_ROW);
+
+  const arrayBuffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
 /** A workbook whose "Mini CRM" sheet is missing: reading it must be refused. */
 export async function buildWorkbookWithoutMiniCrmSheet(): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();

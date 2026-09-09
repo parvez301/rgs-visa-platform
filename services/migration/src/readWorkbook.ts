@@ -168,6 +168,14 @@ export async function readWorkbook(workbookPath: string): Promise<WorkbookExtrac
   if (miniCrmSheet === undefined) {
     throw new Error(`Workbook has no "${MINI_CRM_SHEET_NAME}" sheet`);
   }
+  // The year sheet was optional (`yearSheet?.eachRow`), so a workbook that had
+  // it renamed, re-cased or archived produced `yearRows: []` and a run that
+  // reported success while dropping 1,545 phone joins and 2,634 tracking
+  // numbers. Nothing downstream can tell that apart from a sheet that is
+  // genuinely empty. Both sheets are required, and their absence is stated.
+  if (yearSheet === undefined) {
+    throw new Error(`Workbook has no "${YEAR_SHEET_NAME}" sheet`);
+  }
 
   const miniCrmRows: RawMiniCrmRow[] = [];
   // eachRow skips blank rows inside the used range and reports the real 1-based
@@ -213,7 +221,7 @@ export async function readWorkbook(workbookPath: string): Promise<WorkbookExtrac
   });
 
   const yearRows: RawYearRow[] = [];
-  yearSheet?.eachRow((row, rowNumber) => {
+  yearSheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
     const cellAt = (columnNumber: number): unknown => row.getCell(columnNumber).value;
     const caseRef = normaliseRefNo(cellAt(2));

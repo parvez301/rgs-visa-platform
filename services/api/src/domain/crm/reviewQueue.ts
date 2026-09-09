@@ -2,7 +2,13 @@ import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import type { TableItem } from "../../lib/db";
-import { CorruptRecordError, conflict, corruptRecord, notFound } from "../../lib/errors";
+import {
+  CorruptRecordError,
+  badRequest,
+  conflict,
+  corruptRecord,
+  notFound,
+} from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import { REVIEW_ITEM_SORT_KEY, reviewItemPartitionKey, reviewQueueGsi1Pk } from "./keys";
 
@@ -54,7 +60,7 @@ export async function recordReviewItem(
   input: RecordReviewItemInput,
 ): Promise<crm.ReviewItem> {
   const createdAt = context.now().toISOString();
-  const reviewItem = crm.ReviewItemSchema.parse({
+  const reviewItem = parseNewReviewItem({
     tenantId,
     reviewItemId: newId("rev", context.now().getTime()),
     reason: input.reason,
@@ -75,6 +81,29 @@ export async function recordReviewItem(
 
   await writeReviewItem(context, reviewItem);
   return reviewItem;
+}
+
+/**
+ * The write-path parse, and the only place a caller's input becomes a
+ * ReviewItem.
+ *
+ * Raw, this was `crm.ReviewItemSchema.parse(...)`, so a value the schema
+ * refuses — `confidence: -0.2` from a pass-2 resolver is the live example,
+ * since nothing validates what a resolver returns — threw an untyped ZodError
+ * out of the middle of an import that had already written N cases. router.ts
+ * maps only ApiError, and the project constraint is that every rejected
+ * operation throws a typed error from lib/errors. A caller sending a value
+ * the schema refuses is a 400, and it now says which field.
+ */
+function parseNewReviewItem(candidateReviewItem: Record<string, unknown>): crm.ReviewItem {
+  try {
+    return crm.ReviewItemSchema.parse(candidateReviewItem);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw badRequest(`Review item ${describeFirstIssue(error)}`);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -157,7 +186,7 @@ export async function resolveReviewItem(
     );
   }
 
-  const resolvedItem = crm.ReviewItemSchema.parse({
+  const resolvedItem = parseNewReviewItem({
     ...existingItem,
     reviewStatus: resolution.reviewStatus,
     ...(resolution.resolvedValue !== undefined ? { resolvedValue: resolution.resolvedValue } : {}),

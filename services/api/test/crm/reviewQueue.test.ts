@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CorruptRecordError } from "../../src/lib/errors";
+import type { TableItem } from "../../src/lib/db";
 import {
   REVIEW_ITEM_SORT_KEY,
   reviewItemPartitionKey,
@@ -268,6 +269,19 @@ describe("crm review queue", () => {
     expect(truncated.reviewItems.map((reviewItem) => reviewItem.sourceRow)).toEqual([42, 43]);
   });
 
+  // --- N5: this used to be a bare ReviewItemSchema.parse, so a value the
+  // --- schema refuses threw an untyped ZodError. router.ts maps only
+  // --- ApiError, so it surfaced as a 500 from the API and as an unhandled
+  // --- abort from the middle of a 7,156-row import.
+  it("refuses an out-of-range confidence with a typed 400 rather than a raw ZodError", async () => {
+    const context = buildTestContext();
+    const write = recordReviewItem(context, "rgs", { ...baseInput, confidence: -0.2 });
+    await expect(write).rejects.toMatchObject({ statusCode: 400, code: "BAD_REQUEST" });
+    // The field has to be named, or the operator is told only that something
+    // was invalid about a row they cannot see.
+    await expect(write).rejects.toThrow("confidence");
+  });
+
   it("does not claim more when the last item exactly fills the page", async () => {
     const context = buildTestContext();
     for (const sourceRow of [42, 43]) {
@@ -280,6 +294,43 @@ describe("crm review queue", () => {
     const exactlyFull = await listReviewItems(context, "rgs", "OPEN", 2);
     expect(exactlyFull.reviewItems).toHaveLength(2);
     expect(exactlyFull.hasMore).toBe(false);
+  });
+
+  // N4: the tests prove a corrupt row is skipped; nothing proved that anything
+  // ELSE still propagates. Replacing the guard with `if (false) throw error`
+  // left the whole suite green, and a widened catch would render an
+  // infrastructure failure as a queue that is simply empty -- an operator
+  // would conclude the migration had nothing left to review.
+  it("lets a failure that is not a corrupt row propagate rather than skipping it", async () => {
+    const context = buildTestContext();
+    // A row whose own property access throws: the spread inside
+    // parseStoredReviewItem reads `reason`, so the failure happens inside the
+    // loop's try block, which is exactly where the guard has to hold. Not a
+    // ZodError, so it must not be mistaken for a corrupt row.
+    const explodingItem = {
+      PK: reviewItemPartitionKey("rgs", "rev_exploding"),
+      SK: REVIEW_ITEM_SORT_KEY,
+      GSI1PK: reviewQueueGsi1Pk("rgs", "OPEN"),
+      GSI1SK: "2026-07-23T10:00:00.000Z",
+      get reason(): string {
+        throw new Error("ProvisionedThroughputExceededException");
+      },
+    };
+    const contextOverExplodingRow = {
+      ...context,
+      table: {
+        get: (partitionKey: string, sortKey: string) => context.table.get(partitionKey, sortKey),
+        put: (item: TableItem) => context.table.put(item),
+        delete: (partitionKey: string, sortKey: string) =>
+          context.table.delete(partitionKey, sortKey),
+        query: (partitionKey: string) => context.table.query(partitionKey),
+        queryGsi: async () => [explodingItem as unknown as TableItem],
+      },
+    };
+
+    await expect(listReviewItems(contextOverExplodingRow, "rgs", "OPEN")).rejects.toThrow(
+      "ProvisionedThroughputExceededException",
+    );
   });
 
   // --- A stored review item that will not parse is a 409, never a raw 500. ---

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildTestContext } from "@rgs/api/test/helpers";
 import { readCase } from "@rgs/api/src/domain/crm/caseStore";
-import { listCaseRefsByStatus, listCasesByStatus } from "@rgs/api/src/domain/crm/cases";
+import {
+  listCaseRefsByStatus,
+  listCasesByPartner,
+  listCasesByStatus,
+} from "@rgs/api/src/domain/crm/cases";
 import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
 import { listPartners } from "@rgs/api/src/domain/crm/partners";
 import { getTravellerOrThrow } from "@rgs/api/src/domain/crm/travellers";
@@ -73,7 +77,7 @@ describe("runImport", () => {
     expect(secondSummary.casesCreated).toBe(0);
     expect(secondSummary.casesSkippedAlreadyImported).toBe(1);
     expect(secondSummary.partnersCreated).toBe(0);
-    expect(secondSummary.partnersReused).toBe(1);
+    expect(secondSummary.rowsMatchedToExistingPartner).toBe(1);
   });
 
   it("reuses one partner across spelling variants instead of creating two", async () => {
@@ -86,7 +90,7 @@ describe("runImport", () => {
       ],
     });
     expect(summary.partnersCreated).toBe(1);
-    expect(summary.partnersReused).toBe(1);
+    expect(summary.rowsMatchedToExistingPartner).toBe(1);
     expect((await listPartners(context, "rgs")).partners).toHaveLength(1);
   });
 
@@ -509,7 +513,7 @@ describe("runImport", () => {
     });
 
     expect(summary.partnersCreated).toBe(1);
-    expect(summary.partnersReused).toBe(2);
+    expect(summary.rowsMatchedToExistingPartner).toBe(2);
     expect((await listPartners(context, "rgs")).partners).toHaveLength(1);
   });
 
@@ -544,7 +548,7 @@ describe("runImport", () => {
     const summary = await runImport(countingContext, "rgs", { ...baseInput, mappedRows: rows });
 
     expect(summary.partnersCreated).toBe(1);
-    expect(summary.partnersReused).toBe(rowCount - 1);
+    expect(summary.rowsMatchedToExistingPartner).toBe(rowCount - 1);
     // Un-memoised, this would be >= rowCount (one findPartnerByName GSI1 query
     // per row). Memoised, it is a small constant: our own pre-check plus
     // createPartner's internal duplicate-name check, both on the first row only.
@@ -583,7 +587,7 @@ describe("runImport", () => {
     const summary = await runImport(countingContext, "rgs", { ...baseInput, mappedRows: rows });
 
     expect(summary.travellersCreated).toBe(1);
-    expect(summary.travellersReused).toBe(rowCount - 1);
+    expect(summary.rowsMatchedToExistingTraveller).toBe(rowCount - 1);
     // GSI2 and GSI3 are eventually consistent and cannot be read
     // consistently, so a per-row lookup is not merely wasteful: row n+1 can
     // miss the traveller row n just created and make a second record for one
@@ -615,7 +619,7 @@ describe("runImport", () => {
     // creates 2 -- on the real workbook, 7,156 against 5,534.
     expect(committedSummary.travellersCreated).toBe(2);
     expect(dryRunSummary.travellersCreated).toBe(committedSummary.travellersCreated);
-    expect(dryRunSummary.travellersReused).toBe(committedSummary.travellersReused);
+    expect(dryRunSummary.rowsMatchedToExistingTraveller).toBe(committedSummary.rowsMatchedToExistingTraveller);
   });
 
   // --- Ruling (task-9): partner names are passed RAW, not canonicalized ---
@@ -710,6 +714,41 @@ describe("runImport", () => {
     expect(missingFieldItem?.fieldName).toBe("C");
     expect(missingFieldItem?.rawValue).toBe("");
     expect(missingFieldItem?.proposedValue).toBe("1970-01-01");
+
+    // The detail text is the only thing telling a reviewer where to look for
+    // the row, so it has to be true. listCasesByPartner reads GSI2 with
+    // scanForward: false -- descending -- and 1970-01-01 is the GSI2 sort
+    // key, so a sentinel-dated case sorts LAST, not first. The shipped text
+    // said "front" and was false on all 225 of them.
+    expect(missingFieldItem?.detail).toContain("END");
+    expect(missingFieldItem?.detail).not.toContain("front");
+  });
+
+  it("puts a sentinel-dated case at the END of its partner's listing, as the review item claims", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [
+        buildMappedRow({
+          caseRef: "1",
+          sourceRow: 2,
+          caseDraft: { ...buildMappedRow().caseDraft, receivedDate: undefined },
+        }),
+        buildMappedRow({
+          caseRef: "2",
+          sourceRow: 3,
+          passportNumber: "X9999999",
+          caseDraft: { ...buildMappedRow().caseDraft, receivedDate: "2025-06-01" },
+        }),
+      ],
+    });
+    expect(summary.casesCreated).toBe(2);
+
+    const importedCases = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    const partnerListing = await listCasesByPartner(context, "rgs", importedCases!.partnerId);
+    // Newest first, so the 1970 placeholder is last -- which at the route's
+    // default page size of 50 is where it stops being reachable at all.
+    expect(partnerListing.cases.map((storedCase) => storedCase.caseRef)).toEqual(["2", "1"]);
   });
 
   it("substitutes a per-row sentinel travellerFullName when the name is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
@@ -814,6 +853,36 @@ describe("runImport", () => {
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     expect(importedCase!.caseStatus).toBe("SUBMITTED");
     expect((await listReviewItems(context, "rgs", "OPEN")).reviewItems).toHaveLength(0);
+  });
+
+  // N5: ReviewItemSchema requires confidence in [0, 1] and nothing validates
+  // what a resolver returns. Below the auto-apply threshold it lands on the
+  // review item, where a bare .parse() threw an untyped ZodError out of the
+  // middle of a run that had already written cases -- straight into C1.
+  it("does not let a resolver's out-of-range confidence abort the run", async () => {
+    const context = buildTestContext();
+    const misbehavingResolver: ResidueResolver = {
+      async resolve(): Promise<ResidueResolution[]> {
+        return [{ fieldName: "Status", proposedValue: "SUBMITTED", confidence: -0.2 }];
+      },
+    };
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      residueResolver: misbehavingResolver,
+      mappedRows: [
+        buildMappedRow({
+          reviewItems: [{ reason: "UNMAPPED_STATUS", fieldName: "Status", rawValue: "ONLINE SUB." }],
+        }),
+      ],
+    });
+    // The case is imported and the item is queued; only the unusable number
+    // is dropped, and the item says so rather than losing it silently.
+    expect(summary.casesCreated).toBe(1);
+    expect(summary.reviewItemsRecorded).toBe(1);
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    expect(open.reviewItems[0]!.proposedValue).toBe("SUBMITTED");
+    expect(open.reviewItems[0]!.confidence).toBeUndefined();
+    expect(open.reviewItems[0]!.detail).toContain("-0.2");
   });
 
   it("queues a low-confidence residue resolution with its proposed value and confidence attached", async () => {

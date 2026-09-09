@@ -87,7 +87,12 @@ export function proposeGroups(mappedRows: MappedRow[]): ProposedGroup[] {
             caseRefs: adjacentRun.map((runRow) => runRow.caseRef),
             partnerName: firstRowInRun.partnerName,
             destinationCountry: firstRowInRun.caseDraft.destinationCountry,
-            receivedDate: firstRowInRun.caseDraft.receivedDate ?? "",
+            // Not `?? ""`: every row in this bucket passed
+            // isPresentGroupingValue(receivedDate) above, so absence is not
+            // reachable here. A fallback that cannot fire reads as if a group
+            // could have a blank received date, which is the exact confusion
+            // the "absence never matches absence" ruling exists to prevent.
+            receivedDate: firstRowInRun.caseDraft.receivedDate!,
           });
         }
         runStartIndex = currentIndex;
