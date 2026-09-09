@@ -1,6 +1,6 @@
 import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
-import { badRequest, conflict } from "../../lib/errors";
+import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
@@ -140,7 +140,59 @@ export async function changeApplicantCustody(
     fromCustody: caseApplicant.custody,
     toCustody,
   });
+
+  // A case *becomes* CLOSED once every passport is back and the bill is
+  // settled — this is automatic (spec §5), not a manual gate.
+  const allApplicantCustodies = updatedApplicants.map((applicant) => applicant.custody);
+  if (crm.isCaseClosable(allApplicantCustodies, updatedCase.billingStatus)) {
+    return applyDerivedCaseStatusIfLegal(context, tenantId, updatedCase, "CLOSED", actorEmail);
+  }
   return updatedCase;
+}
+
+export async function changeApplicantOutcome(
+  context: AppContext,
+  tenantId: string,
+  caseId: string,
+  applicantRef: string,
+  nextOutcome: crm.ApplicantOutcome,
+  actorEmail: string,
+): Promise<crm.CrmCase> {
+  const currentCase = await readCaseOrThrow(context, tenantId, caseId);
+  const applicantIndex = currentCase.applicants.findIndex(
+    (applicant) => applicant.applicantRef === applicantRef,
+  );
+  const caseApplicant = currentCase.applicants[applicantIndex];
+  if (applicantIndex === -1 || !caseApplicant) {
+    throw notFound("Applicant");
+  }
+  if (!crm.APPLICANT_OUTCOMES.includes(nextOutcome)) {
+    throw badRequest(`Unknown applicant outcome ${nextOutcome}`);
+  }
+
+  const nowIso = context.now().toISOString();
+  const updatedApplicants = currentCase.applicants.map((applicant, index) =>
+    index === applicantIndex ? { ...applicant, outcome: nextOutcome } : applicant,
+  );
+  const updatedCase: crm.CrmCase = {
+    ...currentCase,
+    applicants: updatedApplicants,
+    updatedAt: nowIso,
+  };
+  await writeCase(context, updatedCase);
+  await recordCrmEvent(context, tenantId, caseId, "APPLICANT_OUTCOME_CHANGED", actorEmail, {
+    applicantRef,
+    fromOutcome: caseApplicant.outcome,
+    toOutcome: nextOutcome,
+  });
+
+  // A case *becomes* DECIDED once every applicant has a non-PENDING outcome —
+  // this is automatic (spec §5), not a manual gate.
+  const derivedCaseStatus = crm.deriveCaseStatusFromApplicants(
+    updatedCase.caseStatus,
+    updatedApplicants.map((applicant) => applicant.outcome),
+  );
+  return applyDerivedCaseStatusIfLegal(context, tenantId, updatedCase, derivedCaseStatus, actorEmail);
 }
 
 export async function changeBillingStatus(
@@ -165,6 +217,47 @@ export async function changeBillingStatus(
   await recordCrmEvent(context, tenantId, caseId, "BILLING_CHANGED", actorEmail, {
     fromBillingStatus: currentCase.billingStatus,
     toBillingStatus,
+  });
+
+  // A case *becomes* CLOSED once every passport is back and the bill is
+  // settled — this is automatic (spec §5), not a manual gate.
+  const allApplicantCustodies = updatedCase.applicants.map((applicant) => applicant.custody);
+  if (crm.isCaseClosable(allApplicantCustodies, updatedCase.billingStatus)) {
+    return applyDerivedCaseStatusIfLegal(context, tenantId, updatedCase, "CLOSED", actorEmail);
+  }
+  return updatedCase;
+}
+
+/**
+ * Applies a derived case-status transition (DECIDED from applicant outcomes,
+ * CLOSED from custody + billing) only when the shared machine allows it, and
+ * logs it as its own CASE_STATUS_CHANGED event. If the candidate status is
+ * unchanged or illegal (e.g. the case is already terminal), the case is left
+ * untouched — the mutation that triggered this check has already succeeded
+ * on its own axis, so this never throws.
+ */
+async function applyDerivedCaseStatusIfLegal(
+  context: AppContext,
+  tenantId: string,
+  crmCase: crm.CrmCase,
+  candidateCaseStatus: crm.CaseStatus,
+  actorEmail: string,
+): Promise<crm.CrmCase> {
+  if (
+    candidateCaseStatus === crmCase.caseStatus ||
+    !crm.canTransitionCaseStatus(crmCase.caseStatus, candidateCaseStatus)
+  ) {
+    return crmCase;
+  }
+  const updatedCase: crm.CrmCase = {
+    ...crmCase,
+    caseStatus: candidateCaseStatus,
+    updatedAt: context.now().toISOString(),
+  };
+  await writeCase(context, updatedCase);
+  await recordCrmEvent(context, tenantId, crmCase.caseId, "CASE_STATUS_CHANGED", actorEmail, {
+    fromStatus: crmCase.caseStatus,
+    toStatus: candidateCaseStatus,
   });
   return updatedCase;
 }

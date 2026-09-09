@@ -7,7 +7,8 @@ export type CrmEventType =
   | "CASE_STATUS_CHANGED"
   | "CUSTODY_CHANGED"
   | "BILLING_CHANGED"
-  | "CASE_UPDATED";
+  | "CASE_UPDATED"
+  | "APPLICANT_OUTCOME_CHANGED";
 
 export interface CrmEvent {
   eventId: string;
