@@ -95,6 +95,24 @@ describe.skipIf(!workbookIsPresent)(
       }
     }, 30_000);
 
+    // --- J1: the reader stopped at column 14, so four populated columns were
+    // --- never read at all. These are the exact cell counts, because the
+    // --- whole finding was that a wrong column position reads zero and looks
+    // --- like an empty column -- a band would hide precisely that.
+    it("reads all four columns past Additional Items, at their measured counts", async () => {
+      const extract = await readWorkbook(WORKBOOK_PATH);
+      const populated = (pick: (row: (typeof extract.miniCrmRows)[number]) => string): number =>
+        extract.miniCrmRows.filter((row) => pick(row).trim() !== "").length;
+
+      expect(populated((row) => row.remarks)).toBe(270);
+      expect(populated((row) => row.courierDateRaw)).toBe(256);
+      expect(populated((row) => row.paymentStatus)).toBe(34);
+      // c19, not c18: c18 is the sheet's own empty "Column 2" spacer, and
+      // reading it returns 0 while looking exactly like a column with nothing
+      // in it. 2,657 is what says the reader is on the right column.
+      expect(populated((row) => row.trackingNumber)).toBe(2657);
+    }, 30_000);
+
     // --- The plan's central promise: the sheet is LIVE, so a re-run is the
     // expected case, not the exception. A full 7,156-row run must be exactly
     // as idempotent as the small fixture-backed cases in importRun.test.ts --
@@ -122,7 +140,12 @@ describe.skipIf(!workbookIsPresent)(
       expect(firstRunSummary.casesSkippedAlreadyImported).toBe(0);
       expect(firstRunSummary.groupsProposed).toBe(importInput.proposedGroups.length);
 
-      // Measured (2026-09-09): 238 partners, 3,932 review items. Banded, not
+      // Measured 2026-09-09 after the whole-branch fix round: 238 partners,
+      // 3,980 review items (was 3,932 before the round -- +21 COLUMN_SHIFT_JUNK
+      // and +4 MISSING_REQUIRED_FIELD from the `No.` column, +22 DUPLICATE_REF
+      // from withheld contact details and "2025 YEAR" self-conflicts, +2
+      // UNMAPPED_STATUS from the payment column, -1 SUSPECT_PHONE now that a
+      // duplicated ref raises one phone item rather than two). Banded, not
       // exact -- the sheet is live and will keep gaining rows, and a band
       // here is more honest than freezing today's exact partner mix while
       // still catching the regressions that would blow well past it (e.g.
@@ -132,6 +155,10 @@ describe.skipIf(!workbookIsPresent)(
       expect(firstRunSummary.partnersCreated).toBeLessThan(320);
       expect(firstRunSummary.reviewItemsRecorded).toBeGreaterThan(3000);
       expect(firstRunSummary.reviewItemsRecorded).toBeLessThan(4500);
+      // Zero, exactly: a stored case the importer cannot read is a defect in
+      // the store, not a property of the sheet, so a first run against an
+      // empty table must never produce one.
+      expect(firstRunSummary.casesSkippedUnreadable).toBe(0);
 
       const secondRunSummary = await runImport(context, "rgs-rehearsal", importInput);
 
@@ -143,6 +170,7 @@ describe.skipIf(!workbookIsPresent)(
       expect(secondRunSummary.reviewItemsRecorded).toBe(0);
       expect(secondRunSummary.groupsProposed).toBe(0);
       expect(secondRunSummary.casesSkippedAlreadyImported).toBe(mappedRows.length);
+      expect(secondRunSummary.casesSkippedUnreadable).toBe(0);
     }, 60_000);
   },
 );
