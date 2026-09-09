@@ -499,6 +499,73 @@ describe("runImport", () => {
     expect(partnerListQueryCount).toBeLessThanOrEqual(3);
   });
 
+  // --- J5: the traveller lookup must be memoised the way the partner one is ---
+
+  it("looks a repeat traveller up once, not once per row", async () => {
+    const context = buildTestContext();
+    let travellerIndexQueryCount = 0;
+    const countingTable: TableClient = {
+      get: (partitionKey, sortKey, options) => context.table.get(partitionKey, sortKey, options),
+      put: (item) => context.table.put(item),
+      delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
+      query: (partitionKey, options) => context.table.query(partitionKey, options),
+      queryGsi: (indexName, partitionKey, options) => {
+        if (partitionKey.includes("#TRAVELLER_NAME#") || partitionKey.includes("#PASSPORT#")) {
+          travellerIndexQueryCount += 1;
+        }
+        return context.table.queryGsi(indexName, partitionKey, options);
+      },
+    };
+    const countingContext = { ...context, table: countingTable };
+
+    const rowCount = 20;
+    const rows = Array.from({ length: rowCount }, (_unused, rowIndex) =>
+      buildMappedRow({
+        caseRef: String(rowIndex + 1),
+        sourceRow: rowIndex + 2,
+        travellerFullName: "RAHUL SHARMA",
+        passportNumber: "R1234567",
+      }),
+    );
+
+    const summary = await runImport(countingContext, "rgs", { ...baseInput, mappedRows: rows });
+
+    expect(summary.travellersCreated).toBe(1);
+    expect(summary.travellersReused).toBe(rowCount - 1);
+    // GSI2 and GSI3 are eventually consistent and cannot be read
+    // consistently, so a per-row lookup is not merely wasteful: row n+1 can
+    // miss the traveller row n just created and make a second record for one
+    // person. Un-memoised this was >= rowCount; memoised it is the first
+    // row's two misses plus upsertTraveller's own internal passport check.
+    expect(travellerIndexQueryCount).toBeLessThanOrEqual(3);
+  });
+
+  it("reports the same traveller counts on a dry run as on a real one", async () => {
+    const rows = [
+      buildMappedRow({ caseRef: "1", sourceRow: 2, travellerFullName: "RAHUL SHARMA", passportNumber: "R1234567" }),
+      buildMappedRow({ caseRef: "2", sourceRow: 3, travellerFullName: "RAHUL SHARMA", passportNumber: "R1234567" }),
+      buildMappedRow({ caseRef: "3", sourceRow: 4, travellerFullName: "PRIYA DESAI", passportNumber: "P7654321" }),
+    ];
+
+    const dryRunSummary = await runImport(buildTestContext(), "rgs", {
+      ...baseInput,
+      mappedRows: rows,
+      dryRun: true,
+    });
+    const committedSummary = await runImport(buildTestContext(), "rgs", {
+      ...baseInput,
+      mappedRows: rows,
+    });
+
+    // The dry run is the operator's only pre-flight signal and the safety
+    // feature the CLI is built around. With nothing written every lookup
+    // missed, so it used to claim 3 travellers created where a real run
+    // creates 2 -- on the real workbook, 7,156 against 5,534.
+    expect(committedSummary.travellersCreated).toBe(2);
+    expect(dryRunSummary.travellersCreated).toBe(committedSummary.travellersCreated);
+    expect(dryRunSummary.travellersReused).toBe(committedSummary.travellersReused);
+  });
+
   // --- Ruling (task-9): partner names are passed RAW, not canonicalized ---
 
   it("passes the partner name to the API raw, preserving its exact casing", async () => {

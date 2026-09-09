@@ -15,6 +15,7 @@ import { createPartner, findPartnerByName } from "@rgs/api/src/domain/crm/partne
 import {
   findTravellerByName,
   findTravellerByPassport,
+  normalizeTravellerName,
   upsertTraveller,
 } from "@rgs/api/src/domain/crm/travellers";
 import { recordReviewItem } from "@rgs/api/src/domain/crm/reviewQueue";
@@ -513,6 +514,26 @@ async function resolvePartner(
  * The traveller's `phone` (from the `2025 YEAR` join) is recorded only when a
  * NEW traveller is created -- an existing traveller is returned as-is,
  * mirroring `upsertTraveller`'s own no-merge behaviour.
+ *
+ * Memoised per run on both lookup keys, the same way `resolvePartner` is, and
+ * for two separate reasons.
+ *
+ * Correctness in production: `findTravellerByPassport` reads GSI3 and
+ * `findTravellerByName` reads GSI2, and neither index can be read
+ * consistently. Row n creates traveller "RAHUL SHARMA"; row n+1, milliseconds
+ * later, queries GSI2 for the same normalized name, misses because
+ * replication has not landed, and creates a SECOND record for one person --
+ * splitting their case history and making the passport lookup return
+ * whichever propagated first. The in-run map answers before the index is
+ * asked, so the race has nowhere to happen.
+ *
+ * Honesty in the dry run: with nothing written, every lookup missed, so the
+ * dry run reported `travellersCreated 7156 / travellersReused 0` against the
+ * real `5534 / 1622` -- a 29% overstatement, in the one number the operator's
+ * only pre-flight check exists to give them.
+ *
+ * The order below is exactly the uncached order (passport, then name), so
+ * memoisation changes what is asked, never what is answered.
  */
 async function resolveTraveller(
   context: AppContext,
@@ -521,29 +542,50 @@ async function resolveTraveller(
   passportNumber: string | undefined,
   phone: string | undefined,
   dryRun: boolean,
+  travellerIdByLookupKey: Map<string, string>,
 ): Promise<TravellerResolution> {
-  if (passportNumber !== undefined) {
-    const existingByPassport = await findTravellerByPassport(context, tenantId, passportNumber);
+  // Prefixed so a passport that happens to read like a normalized name
+  // cannot collide with one.
+  const passportLookupKey = passportNumber === undefined ? undefined : `passport#${passportNumber}`;
+  const nameLookupKey = `name#${normalizeTravellerName(fullName)}`;
+
+  if (passportLookupKey !== undefined) {
+    const cachedByPassport = travellerIdByLookupKey.get(passportLookupKey);
+    if (cachedByPassport !== undefined) {
+      return { travellerId: cachedByPassport, created: false };
+    }
+    const existingByPassport = await findTravellerByPassport(context, tenantId, passportNumber!);
     if (existingByPassport !== undefined) {
+      travellerIdByLookupKey.set(passportLookupKey, existingByPassport.travellerId);
       return { travellerId: existingByPassport.travellerId, created: false };
     }
   }
 
+  const cachedByName = travellerIdByLookupKey.get(nameLookupKey);
+  if (cachedByName !== undefined) {
+    return { travellerId: cachedByName, created: false };
+  }
   const existingByName = await findTravellerByName(context, tenantId, fullName);
   if (existingByName !== undefined) {
+    travellerIdByLookupKey.set(nameLookupKey, existingByName.travellerId);
     return { travellerId: existingByName.travellerId, created: false };
   }
 
-  if (dryRun) {
-    return { travellerId: newId("trv", context.now().getTime()), created: true };
-  }
+  const travellerId = dryRun
+    ? newId("trv", context.now().getTime())
+    : (
+        await upsertTraveller(context, tenantId, {
+          fullName,
+          ...(passportNumber !== undefined ? { passportNumber } : {}),
+          ...(phone !== undefined ? { phone } : {}),
+        })
+      ).travellerId;
 
-  const createdTraveller = await upsertTraveller(context, tenantId, {
-    fullName,
-    ...(passportNumber !== undefined ? { passportNumber } : {}),
-    ...(phone !== undefined ? { phone } : {}),
-  });
-  return { travellerId: createdTraveller.travellerId, created: true };
+  travellerIdByLookupKey.set(nameLookupKey, travellerId);
+  if (passportLookupKey !== undefined) {
+    travellerIdByLookupKey.set(passportLookupKey, travellerId);
+  }
+  return { travellerId, created: true };
 }
 
 /**
@@ -678,6 +720,7 @@ export async function runImport(
   const alreadyImportedCaseRefs = alreadyImportedSweep.caseIdByCaseRef;
   const caseRefResolutionBySourceRow = resolveDuplicateCaseRefs(input.mappedRows);
   const partnerIdByCanonicalKey = new Map<string, string>();
+  const travellerIdByLookupKey = new Map<string, string>();
 
   const summary: ImportSummary = {
     rowsRead: input.mappedRows.length,
@@ -817,6 +860,7 @@ export async function runImport(
       mappedRow.passportNumber,
       contactDetailsForRow?.phone,
       input.dryRun,
+      travellerIdByLookupKey,
     );
     if (travellerResolution.created) {
       summary.travellersCreated += 1;
