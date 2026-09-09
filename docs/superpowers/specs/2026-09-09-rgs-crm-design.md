@@ -256,7 +256,7 @@ of its unit tests.
 | `Submitted`, `ONLINE SUBMITTED` | SUBMITTED | AT_EMBASSY | — |
 | `Approved` | DECIDED | — | APPROVED |
 | `Rejected` | DECIDED | — | REJECTED |
-| `SENT BACK` | DECIDED | — | SENT_BACK |
+| `SENT BACK` | SUBMITTED | — | SENT_BACK |
 | `Sent on Courier`, `SPEED POST`, `DTDC` | — | IN_TRANSIT | — |
 | `Handover`, `Delivered`, `Pickup`, `PORTER` | CLOSED | RETURNED | — |
 | `PASSPORT COLLECTION`, `PASSPORT ONLY` | — | WITH_RGS | — |
