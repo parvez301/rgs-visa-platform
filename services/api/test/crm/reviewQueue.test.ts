@@ -248,6 +248,40 @@ describe("crm review queue", () => {
     expect((await listReviewItems(context, "rgs", "OPEN")).reviewItems).toHaveLength(4);
   });
 
+  // --- Truncation the caller cannot see is the whole bug here. A real import
+  // --- parks thousands of items in one OPEN partition and the page caps at
+  // --- 200, so an operator who works what they can see has no way to learn
+  // --- that the rest exists.
+  it("says so when the partition holds more items than the page returned", async () => {
+    const context = buildTestContext();
+    for (const sourceRow of [42, 43, 44]) {
+      await recordReviewItem(context, "rgs", { ...baseInput, sourceRow });
+      // Distinct createdAt values, so the queue's oldest-first order is a
+      // property of the data rather than of the array the fake table happens
+      // to hold.
+      context.advanceClock(1000);
+    }
+
+    const truncated = await listReviewItems(context, "rgs", "OPEN", 2);
+    expect(truncated.hasMore).toBe(true);
+    // The extra row is a probe, not a result: it must not leak into the page.
+    expect(truncated.reviewItems.map((reviewItem) => reviewItem.sourceRow)).toEqual([42, 43]);
+  });
+
+  it("does not claim more when the last item exactly fills the page", async () => {
+    const context = buildTestContext();
+    for (const sourceRow of [42, 43]) {
+      await recordReviewItem(context, "rgs", { ...baseInput, sourceRow });
+    }
+
+    // The off-by-one that matters: a full final page is the end of the queue,
+    // and reporting hasMore here sends an operator hunting for rows that do
+    // not exist.
+    const exactlyFull = await listReviewItems(context, "rgs", "OPEN", 2);
+    expect(exactlyFull.reviewItems).toHaveLength(2);
+    expect(exactlyFull.hasMore).toBe(false);
+  });
+
   // --- A stored review item that will not parse is a 409, never a raw 500. ---
   describe("a stored review item that no longer parses", () => {
     it("surfaces as a typed 409 from the single read, naming the bad field", async () => {

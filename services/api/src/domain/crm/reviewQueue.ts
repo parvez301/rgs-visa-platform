@@ -34,6 +34,18 @@ export interface ReviewItemListing {
    * look like an item that was never imported.
    */
   unreadableReviewItemIds: string[];
+  /**
+   * True when the partition holds more items than this page returned.
+   *
+   * A real import puts 3,932 OPEN items into one GSI1 partition, of which
+   * this returns 200 — so 5.1% of the queue was reachable and nothing in the
+   * response said so. An operator works the 200 they can see, refreshes,
+   * sees another 200, and at some point concludes the migration is clean
+   * while 3,732 items (including every fabricated country and placeholder
+   * date) sit behind the cap. Truncation a caller cannot detect is worse
+   * than a smaller page.
+   */
+  hasMore: boolean;
 }
 
 export async function recordReviewItem(
@@ -83,11 +95,15 @@ export async function listReviewItems(
   reviewStatus: crm.ReviewStatus,
   limit = 200,
 ): Promise<ReviewItemListing> {
-  const storedItems = await context.table.queryGsi(
+  // One more than the page, then dropped: the extra row is how the caller
+  // learns the queue did not fit, and it costs one item's worth of read.
+  const storedItemsPlusOne = await context.table.queryGsi(
     "GSI1",
     reviewQueueGsi1Pk(tenantId, reviewStatus),
-    { limit, scanForward: true },
+    { limit: limit + 1, scanForward: true },
   );
+  const hasMore = storedItemsPlusOne.length > limit;
+  const storedItems = hasMore ? storedItemsPlusOne.slice(0, limit) : storedItemsPlusOne;
   const loadedReviewItems: crm.ReviewItem[] = [];
   const unreadableReviewItemIds: string[] = [];
   for (const storedItem of storedItems) {
@@ -101,7 +117,7 @@ export async function listReviewItems(
       );
     }
   }
-  return { reviewItems: loadedReviewItems, unreadableReviewItemIds };
+  return { reviewItems: loadedReviewItems, unreadableReviewItemIds, hasMore };
 }
 
 export async function getReviewItemOrThrow(

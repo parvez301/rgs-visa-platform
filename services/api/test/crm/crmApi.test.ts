@@ -780,6 +780,9 @@ describe("crm admin routes", () => {
     expect(listed.statusCode).toBe(200);
     expect(reviewItemIdsOf(listed.payload)).toEqual([recorded.reviewItemId]);
     expect(listed.payload.unreadableReviewItemIds).toEqual([]);
+    // The truncation flag has to survive the route, not just the domain call:
+    // the admin screen reads this response and nothing else.
+    expect(listed.payload.hasMore).toBe(false);
 
     const resolved = await call(
       router,

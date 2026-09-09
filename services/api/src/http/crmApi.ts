@@ -228,10 +228,14 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       if (parsedStatus === undefined) {
         throw badRequest(`Unknown review status ${requestedStatus}`);
       }
-      // { reviewItems, unreadableReviewItemIds } — a row that would not parse
-      // is named in the response rather than silently missing from it, exactly
-      // as the case and partner listings shape theirs. An item that vanishes
-      // from this queue is indistinguishable from one never imported.
+      // { reviewItems, unreadableReviewItemIds, hasMore } — a row that would
+      // not parse is named in the response rather than silently missing from
+      // it, exactly as the case and partner listings shape theirs. An item
+      // that vanishes from this queue is indistinguishable from one never
+      // imported. `hasMore` says the same thing about the page as a whole: a
+      // real import fills this queue with thousands of items and the page is
+      // capped, so a caller that cannot see the cap cannot know it is looking
+      // at 5% of the work.
       return listReviewItems(context, tenantId, parsedStatus);
     })
     .add("GET", "/api/v1/admin/crm/review/{reviewItemId}", async (requestContext) => {
