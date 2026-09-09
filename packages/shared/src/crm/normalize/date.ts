@@ -31,6 +31,13 @@ function isPlausibleYear(year: number): boolean {
   return year >= EARLIEST_PLAUSIBLE_YEAR && year <= LATEST_PLAUSIBLE_YEAR;
 }
 
+/**
+ * Accepts what a spreadsheet reader may hand us. NOTE: a raw numeric Excel
+ * serial date is NOT parsed — it falls through to needsReview. If the reader
+ * used by the migration emits serials rather than Date objects, convert them
+ * at the reader boundary or add a branch here with the correct epoch
+ * (1900 vs 1904); do not guess the epoch.
+ */
 export function normalizeExcelDate(
   rawInput: string | Date | number | null | undefined,
 ): DateNormalizationResult {

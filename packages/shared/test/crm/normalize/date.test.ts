@@ -53,4 +53,20 @@ describe("normalizeExcelDate", () => {
   it("preserves the original for the review queue", () => {
     expect(normalizeExcelDate("not a date").rawValue).toBe("not a date");
   });
+
+  it("rejects impossible calendar dates rather than rolling them over", () => {
+    // 31 February and 30 February do not exist. A naive parser would roll
+    // these into March; the round-trip check in isRealCalendarDate must not.
+    expect(normalizeExcelDate("31-02-2025").isoDate).toBeNull();
+    expect(normalizeExcelDate("31-02-2025").needsReview).toBe(true);
+    expect(normalizeExcelDate("30-02-2025").isoDate).toBeNull();
+    // 31 April likewise — and note neither reading (day-first nor
+    // month-first) is valid here, so it must fall through to review.
+    expect(normalizeExcelDate("31-04-2025").needsReview).toBe(true);
+  });
+
+  it("routes a raw numeric Excel serial to review rather than guessing an epoch", () => {
+    expect(normalizeExcelDate(45658).needsReview).toBe(true);
+    expect(normalizeExcelDate(45658).isoDate).toBeNull();
+  });
 });

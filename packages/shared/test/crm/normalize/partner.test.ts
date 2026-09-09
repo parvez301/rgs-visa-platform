@@ -34,6 +34,7 @@ describe("normalizePartnerName", () => {
       const result = normalizePartnerName(rawValue);
       expect(result.needsReview).toBe(true);
       expect(result.rawValue).toBe(rawValue);
+      expect(result.canonicalKey).toBe(rawValue.toUpperCase());
     }
   });
 
