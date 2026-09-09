@@ -118,4 +118,19 @@ describe("normalizeStatus — values that are not statuses", () => {
     expect(normalizeStatus("Visa Category: Short Stay").needsReview).toBe(true);
     expect(normalizeStatus("").needsReview).toBe(true);
   });
+
+  it("never throws on a non-string cell, routing it to review instead", () => {
+    expect(() => normalizeStatus(undefined)).not.toThrow();
+    expect(normalizeStatus(undefined).needsReview).toBe(true);
+    expect(normalizeStatus(undefined).rawValue).toBe("");
+
+    expect(() => normalizeStatus(null)).not.toThrow();
+    expect(normalizeStatus(null).needsReview).toBe(true);
+    expect(normalizeStatus(null).rawValue).toBe("");
+
+    expect(() => normalizeStatus(45658)).not.toThrow();
+    const numericResult = normalizeStatus(45658);
+    expect(numericResult.needsReview).toBe(true);
+    expect(numericResult.rawValue).toBe("45658");
+  });
 });

@@ -1,4 +1,5 @@
 import type { CaseType, VisaType } from "../statuses";
+import { buildLookupKey } from "./lookupKey";
 
 export interface VisaTypeNormalizationResult {
   caseType: CaseType | null;
@@ -46,8 +47,16 @@ const MAPPING_BY_VISA_TYPE: Record<string, VisaTypeMapping> = {
   "PASSPORT SUBMISSION": { caseType: "PASSPORT", visaType: null },
 };
 
-export function normalizeVisaType(rawValue: string): VisaTypeNormalizationResult {
-  const lookupKey = rawValue.trim().toUpperCase().replace(/\s+/g, " ");
+export function normalizeVisaType(rawValue: unknown): VisaTypeNormalizationResult {
+  if (typeof rawValue !== "string") {
+    return {
+      caseType: null,
+      visaType: null,
+      needsReview: true,
+      rawValue: rawValue == null ? "" : String(rawValue),
+    };
+  }
+  const lookupKey = buildLookupKey(rawValue);
   if (lookupKey.length === 0) {
     return { caseType: null, visaType: null, needsReview: true, rawValue };
   }

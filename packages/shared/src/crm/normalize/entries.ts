@@ -41,7 +41,16 @@ function detectValidity(tokenString: string): string | null {
 /** Values that appear in the Entries column but are not entry descriptions at all. */
 const COLUMN_SHIFT_JUNK = new Set(["BUSINESS", "ENTRIES"]);
 
-export function normalizeEntries(rawValue: string): EntriesNormalizationResult {
+export function normalizeEntries(rawValue: unknown): EntriesNormalizationResult {
+  if (typeof rawValue !== "string") {
+    return {
+      entryType: null,
+      processing: null,
+      validity: null,
+      needsReview: true,
+      rawValue: rawValue == null ? "" : String(rawValue),
+    };
+  }
   const tokenString = buildTokenString(rawValue);
   if (tokenString.length === 0 || COLUMN_SHIFT_JUNK.has(tokenString)) {
     return { entryType: null, processing: null, validity: null, needsReview: true, rawValue };

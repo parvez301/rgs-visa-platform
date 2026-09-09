@@ -6,7 +6,7 @@ export interface DateNormalizationResult {
 
 /**
  * The workbook's real business window. Rows outside it (one lands in 2006,
- * several in 2027-2030) are data-entry slips, not history.
+ * several in 2028-2030) are data-entry slips, not history.
  */
 const EARLIEST_PLAUSIBLE_YEAR = 2020;
 const LATEST_PLAUSIBLE_YEAR = 2027;
@@ -46,8 +46,11 @@ export function normalizeExcelDate(
   }
 
   if (rawInput instanceof Date) {
+    if (Number.isNaN(rawInput.getTime())) {
+      return { isoDate: null, needsReview: true, rawValue: "Invalid Date" };
+    }
     const rawValue = rawInput.toISOString();
-    if (Number.isNaN(rawInput.getTime()) || !isPlausibleYear(rawInput.getUTCFullYear())) {
+    if (!isPlausibleYear(rawInput.getUTCFullYear())) {
       return { isoDate: null, needsReview: true, rawValue };
     }
     return {

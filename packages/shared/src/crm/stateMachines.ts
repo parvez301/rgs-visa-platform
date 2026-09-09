@@ -7,11 +7,17 @@ import {
   type CustodyStatus,
 } from "./statuses";
 
+// DECIDED and CLOSED are reachable from every live status, not just their
+// happy-path predecessor: real e-visas are approved with no recorded
+// SUBMITTED step, and non-visa cases (ATTESTATION/APOSTILLE/PASSPORT) close
+// via custody + billing without ever earning a per-applicant outcome
+// (spec §5 line 229, §6 line 261; e.g. REF 31376, Status "Handover", no
+// prior DECIDED).
 const CASE_STATUS_FORWARD_TRANSITIONS: Record<CaseStatus, readonly CaseStatus[]> = {
-  NEW: ["IN_PROGRESS", "APPOINTMENT_SET", "SUBMITTED"],
-  IN_PROGRESS: ["APPOINTMENT_SET", "SUBMITTED"],
-  APPOINTMENT_SET: ["SUBMITTED"],
-  SUBMITTED: ["DECIDED"],
+  NEW: ["IN_PROGRESS", "APPOINTMENT_SET", "SUBMITTED", "DECIDED", "CLOSED"],
+  IN_PROGRESS: ["APPOINTMENT_SET", "SUBMITTED", "DECIDED", "CLOSED"],
+  APPOINTMENT_SET: ["SUBMITTED", "DECIDED", "CLOSED"],
+  SUBMITTED: ["DECIDED", "CLOSED"],
   DECIDED: ["CLOSED"],
   CLOSED: [],
   NOT_SUBMITTED: [],

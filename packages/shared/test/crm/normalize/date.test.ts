@@ -69,4 +69,13 @@ describe("normalizeExcelDate", () => {
     expect(normalizeExcelDate(45658).needsReview).toBe(true);
     expect(normalizeExcelDate(45658).isoDate).toBeNull();
   });
+
+  it("does not throw on an invalid Date object, routing it to review instead", () => {
+    const invalidDate = new Date("nonsense");
+    expect(() => normalizeExcelDate(invalidDate)).not.toThrow();
+    const result = normalizeExcelDate(invalidDate);
+    expect(result.isoDate).toBeNull();
+    expect(result.needsReview).toBe(true);
+    expect(result.rawValue).toBe("Invalid Date");
+  });
 });

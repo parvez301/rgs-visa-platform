@@ -42,4 +42,26 @@ describe("normalizePartnerName", () => {
     expect(normalizePartnerName("").needsReview).toBe(true);
     expect(normalizePartnerName("   ").canonicalKey).toBeNull();
   });
+
+  it("folds a curly apostrophe so it does not split one partner into two records", () => {
+    expect(normalizePartnerName("Ravi’s Travels").canonicalKey).toBe(
+      normalizePartnerName("Ravi's Travels").canonicalKey,
+    );
+    expect(normalizePartnerName("Ravi’s Travels").canonicalKey).toBe("RAVI'S TRAVELS");
+  });
+
+  it("never throws on a non-string cell, routing it to review instead", () => {
+    expect(() => normalizePartnerName(undefined)).not.toThrow();
+    expect(normalizePartnerName(undefined).needsReview).toBe(true);
+    expect(normalizePartnerName(undefined).rawValue).toBe("");
+
+    expect(() => normalizePartnerName(null)).not.toThrow();
+    expect(normalizePartnerName(null).needsReview).toBe(true);
+    expect(normalizePartnerName(null).rawValue).toBe("");
+
+    expect(() => normalizePartnerName(45658)).not.toThrow();
+    const numericResult = normalizePartnerName(45658);
+    expect(numericResult.needsReview).toBe(true);
+    expect(numericResult.rawValue).toBe("45658");
+  });
 });

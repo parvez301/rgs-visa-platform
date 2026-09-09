@@ -72,29 +72,17 @@ export const LineItemSchema = z.object({
 });
 export type LineItem = z.infer<typeof LineItemSchema>;
 
-export const CaseApplicantSchema = z
-  .object({
-    applicantRef: z.string().min(1),
-    travellerId: z.string().min(1),
-    passportNumber: z.string().optional(),
-    custody: z.enum(CUSTODY_STATUSES).default("NOT_HELD"),
-    custodySince: isoDateTime.optional(),
-    outcome: z.enum(APPLICANT_OUTCOMES).default("PENDING"),
-    courierMode: z.enum(COURIER_MODES).optional(),
-    trackingNumber: z.string().optional(),
-    visaResultKey: z.string().optional(),
-  })
-  .refine(
-    (applicant) =>
-      applicant.courierMode === undefined ||
-      applicant.courierMode === "HANDOVER" ||
-      applicant.courierMode === "PICKUP" ||
-      applicant.trackingNumber !== undefined,
-    {
-      message: "trackingNumber is required when the passport went out by courier",
-      path: ["trackingNumber"],
-    },
-  );
+export const CaseApplicantSchema = z.object({
+  applicantRef: z.string().min(1),
+  travellerId: z.string().min(1),
+  passportNumber: z.string().optional(),
+  custody: z.enum(CUSTODY_STATUSES).default("NOT_HELD"),
+  custodySince: isoDateTime.optional(),
+  outcome: z.enum(APPLICANT_OUTCOMES).default("PENDING"),
+  courierMode: z.enum(COURIER_MODES).optional(),
+  trackingNumber: z.string().optional(),
+  visaResultKey: z.string().optional(),
+});
 export type CaseApplicant = z.infer<typeof CaseApplicantSchema>;
 
 export const CrmCaseSchema = z
@@ -119,7 +107,7 @@ export const CrmCaseSchema = z
     lineItems: z.array(LineItemSchema).default([]),
     totalInr: z.number().int().nonnegative().default(0),
     applicants: z.array(CaseApplicantSchema).min(1, "a case needs at least one applicant"),
-    watchdogOverrides: z.record(z.string(), z.number().int().positive()).default({}),
+    watchdogOverrides: z.record(z.enum(WATCHDOG_RULE_IDS), z.number().int().positive()).default({}),
     mutedRules: z.array(z.enum(WATCHDOG_RULE_IDS)).default([]),
     snoozedUntil: isoDateTime.optional(),
     sourceSheet: z.string().optional(),

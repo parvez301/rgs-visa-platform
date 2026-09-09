@@ -58,4 +58,19 @@ describe("normalizeCountry", () => {
     expect(normalizeCountry("").needsReview).toBe(true);
     expect(normalizeCountry("   ").needsReview).toBe(true);
   });
+
+  it("never throws on a non-string cell, routing it to review instead", () => {
+    expect(() => normalizeCountry(undefined)).not.toThrow();
+    expect(normalizeCountry(undefined).needsReview).toBe(true);
+    expect(normalizeCountry(undefined).rawValue).toBe("");
+
+    expect(() => normalizeCountry(null)).not.toThrow();
+    expect(normalizeCountry(null).needsReview).toBe(true);
+    expect(normalizeCountry(null).rawValue).toBe("");
+
+    expect(() => normalizeCountry(45658)).not.toThrow();
+    const numericResult = normalizeCountry(45658);
+    expect(numericResult.needsReview).toBe(true);
+    expect(numericResult.rawValue).toBe("45658");
+  });
 });

@@ -5,6 +5,7 @@ import type {
   CourierMode,
   CustodyStatus,
 } from "../statuses";
+import { buildLookupKey } from "./lookupKey";
 
 export interface StatusNormalizationResult {
   caseStatus: CaseStatus | null;
@@ -72,8 +73,11 @@ const MAPPING_BY_STATUS: Record<string, StatusMapping> = {
   }),
 };
 
-export function normalizeStatus(rawValue: string): StatusNormalizationResult {
-  const lookupKey = rawValue.trim().toUpperCase().replace(/\s+/g, " ");
+export function normalizeStatus(rawValue: unknown): StatusNormalizationResult {
+  if (typeof rawValue !== "string") {
+    return { ...EMPTY_MAPPING, needsReview: true, rawValue: rawValue == null ? "" : String(rawValue) };
+  }
+  const lookupKey = buildLookupKey(rawValue);
   if (lookupKey.length === 0) {
     return { ...EMPTY_MAPPING, needsReview: true, rawValue };
   }

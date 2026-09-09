@@ -1,4 +1,5 @@
 import type { PartnerType } from "../statuses";
+import { buildLookupKey } from "./lookupKey";
 
 export interface PartnerNormalizationResult {
   canonicalKey: string | null;
@@ -24,8 +25,16 @@ const DIRECT_ACCOUNT_KEYS = new Set(["CUSTOMER A/C"]);
  */
 const AMBIGUOUS_ACCOUNT_KEYS = new Set(["MEHUL MEHUL", "MEHUL MANOJ", "SAMMY A/C"]);
 
-export function normalizePartnerName(rawValue: string): PartnerNormalizationResult {
-  const lookupKey = rawValue.trim().toUpperCase().replace(/\s+/g, " ");
+export function normalizePartnerName(rawValue: unknown): PartnerNormalizationResult {
+  if (typeof rawValue !== "string") {
+    return {
+      canonicalKey: null,
+      partnerType: "AGENCY",
+      needsReview: true,
+      rawValue: rawValue == null ? "" : String(rawValue),
+    };
+  }
+  const lookupKey = buildLookupKey(rawValue);
   if (lookupKey.length === 0) {
     return { canonicalKey: null, partnerType: "AGENCY", needsReview: true, rawValue };
   }

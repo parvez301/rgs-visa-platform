@@ -77,4 +77,21 @@ describe("normalizeVisaType — junk", () => {
   it("sends blank input to review", () => {
     expect(normalizeVisaType("").needsReview).toBe(true);
   });
+
+  it("never throws on a non-string cell, routing it to review instead", () => {
+    expect(() => normalizeVisaType(undefined)).not.toThrow();
+    expect(normalizeVisaType(undefined).needsReview).toBe(true);
+    expect(normalizeVisaType(undefined).rawValue).toBe("");
+
+    expect(() => normalizeVisaType(null)).not.toThrow();
+    expect(normalizeVisaType(null).needsReview).toBe(true);
+    expect(normalizeVisaType(null).rawValue).toBe("");
+
+    // The spec documents a date sitting in the Visa Type column.
+    const dateInVisaTypeColumn = new Date("2025-01-03");
+    expect(() => normalizeVisaType(dateInVisaTypeColumn)).not.toThrow();
+    const dateResult = normalizeVisaType(dateInVisaTypeColumn);
+    expect(dateResult.needsReview).toBe(true);
+    expect(dateResult.rawValue).toBe(String(dateInVisaTypeColumn));
+  });
 });

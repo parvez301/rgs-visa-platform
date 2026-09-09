@@ -1,18 +1,11 @@
 import type { VisaType } from "../statuses";
+import { buildLookupKey } from "./lookupKey";
 
 export interface CountryNormalizationResult {
   countryCode: string | null;
   visaTypeHint: VisaType | null;
   needsReview: boolean;
   rawValue: string;
-}
-
-/**
- * Lookup key: uppercased, curly apostrophes folded to straight, runs of
- * whitespace collapsed. Keeps "SRI LANKA ETA" distinct from "SRI LANKA".
- */
-function buildLookupKey(rawValue: string): string {
-  return rawValue.trim().toUpperCase().replace(/’/g, "'").replace(/\s+/g, " ");
 }
 
 /** Country spellings observed in the workbook, mapped to ISO-3166 alpha-2. */
@@ -50,7 +43,15 @@ const VISA_TYPE_HINT_BY_SPELLING: Record<string, { countryCode: string; visaType
   "SRI LANKA ETA": { countryCode: "LK", visaTypeHint: "E_VISA" },
 };
 
-export function normalizeCountry(rawValue: string): CountryNormalizationResult {
+export function normalizeCountry(rawValue: unknown): CountryNormalizationResult {
+  if (typeof rawValue !== "string") {
+    return {
+      countryCode: null,
+      visaTypeHint: null,
+      needsReview: true,
+      rawValue: rawValue == null ? "" : String(rawValue),
+    };
+  }
   const lookupKey = buildLookupKey(rawValue);
   if (lookupKey.length === 0) {
     return { countryCode: null, visaTypeHint: null, needsReview: true, rawValue };

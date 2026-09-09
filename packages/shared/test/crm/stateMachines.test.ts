@@ -38,6 +38,30 @@ describe("case status machine", () => {
       expect(canTransitionCaseStatus(liveStatus, "NOT_SUBMITTED")).toBe(true);
     }
   });
+
+  it("reaches DECIDED and CLOSED from any live status, since real rows skip steps", () => {
+    // REF 31376: Status "Handover" (-> CLOSED) with no prior DECIDED.
+    expect(canTransitionCaseStatus("IN_PROGRESS", "DECIDED")).toBe(true);
+    expect(canTransitionCaseStatus("IN_PROGRESS", "CLOSED")).toBe(true);
+    expect(canTransitionCaseStatus("SUBMITTED", "CLOSED")).toBe(true);
+    expect(canTransitionCaseStatus("NEW", "DECIDED")).toBe(true);
+    expect(canTransitionCaseStatus("NEW", "CLOSED")).toBe(true);
+    expect(canTransitionCaseStatus("APPOINTMENT_SET", "DECIDED")).toBe(true);
+    expect(canTransitionCaseStatus("APPOINTMENT_SET", "CLOSED")).toBe(true);
+  });
+
+  it("agrees with deriveCaseStatusFromApplicants once it reports DECIDED", () => {
+    const derivedStatus = deriveCaseStatusFromApplicants("IN_PROGRESS", ["APPROVED"]);
+    expect(derivedStatus).toBe("DECIDED");
+    expect(canTransitionCaseStatus("IN_PROGRESS", derivedStatus)).toBe(true);
+  });
+
+  it("still refuses to re-enter a terminal status even after widening DECIDED/CLOSED reachability", () => {
+    expect(canTransitionCaseStatus("WITHDRAWN", "IN_PROGRESS")).toBe(false);
+    expect(canTransitionCaseStatus("WITHDRAWN", "DECIDED")).toBe(false);
+    expect(canTransitionCaseStatus("WITHDRAWN", "CLOSED")).toBe(false);
+    expect(canTransitionCaseStatus("CLOSED", "DECIDED")).toBe(false);
+  });
 });
 
 describe("custody machine", () => {

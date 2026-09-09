@@ -78,6 +78,21 @@ describe("CrmCaseSchema", () => {
     expect(() => CrmCaseSchema.parse(attestationCase)).not.toThrow();
   });
 
+  it("rejects a typo'd watchdog rule id and accepts a valid one", () => {
+    expect(() =>
+      CrmCaseSchema.parse({
+        ...validCase,
+        watchdogOverrides: { custody_helD: 14, totally_made_up_rule: 99 },
+      }),
+    ).toThrow();
+    expect(() =>
+      CrmCaseSchema.parse({
+        ...validCase,
+        watchdogOverrides: { custody_held: 14 },
+      }),
+    ).not.toThrow();
+  });
+
   it("keeps migration provenance when present", () => {
     const migratedCase = {
       ...validCase,
@@ -102,10 +117,10 @@ describe("CaseApplicantSchema", () => {
     expect(parsed.custody).toBe("NOT_HELD");
   });
 
-  it("requires a tracking number once a courier is named", () => {
+  it("parses a couriered applicant without a tracking number, since the spec marks it optional", () => {
     expect(() =>
       CaseApplicantSchema.parse({ ...validApplicant, courierMode: "DTDC" }),
-    ).toThrow();
+    ).not.toThrow();
     expect(() =>
       CaseApplicantSchema.parse({
         ...validApplicant,

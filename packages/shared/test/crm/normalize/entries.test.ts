@@ -108,4 +108,19 @@ describe("normalizeEntries", () => {
       expect(result.entryType).toBeNull();
     }
   });
+
+  it("never throws on a non-string cell, routing it to review instead", () => {
+    expect(() => normalizeEntries(undefined)).not.toThrow();
+    expect(normalizeEntries(undefined).needsReview).toBe(true);
+    expect(normalizeEntries(undefined).rawValue).toBe("");
+
+    expect(() => normalizeEntries(null)).not.toThrow();
+    expect(normalizeEntries(null).needsReview).toBe(true);
+    expect(normalizeEntries(null).rawValue).toBe("");
+
+    expect(() => normalizeEntries(45658)).not.toThrow();
+    const numericResult = normalizeEntries(45658);
+    expect(numericResult.needsReview).toBe(true);
+    expect(numericResult.rawValue).toBe("45658");
+  });
 });
