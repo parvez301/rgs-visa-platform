@@ -1,5 +1,5 @@
 import { crm } from "@rgs/shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildTestContext, type TestContext } from "../helpers";
 import { CorruptRecordError } from "../../src/lib/errors";
 import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "../../src/domain/crm/keys";
@@ -117,7 +117,7 @@ describe("crm partners", () => {
     // second lookup.
     await expect(duplicateAttempt).rejects.toThrow(existing.partnerId);
 
-    const partners = await listPartners(context, "rgs");
+    const { partners } = await listPartners(context, "rgs");
     expect(partners.map((partner) => partner.partnerId)).toEqual([existing.partnerId]);
   });
 
@@ -131,7 +131,7 @@ describe("crm partners", () => {
       "ops@rgs.test",
     );
     expect(otherTenantPartner.tenantId).toBe("other-tenant");
-    expect(await listPartners(context, "other-tenant")).toHaveLength(1);
+    expect((await listPartners(context, "other-tenant")).partners).toHaveLength(1);
   });
 
   // Aliases were persisted and then never consulted: a partner recorded as
@@ -177,9 +177,9 @@ describe("crm partners", () => {
     await expect(
       createPartner(context, "rgs", { canonicalName: "Ozzy" }, "ops@rgs.test"),
     ).rejects.toMatchObject({ statusCode: 409 });
-    expect((await listPartners(context, "rgs")).map((partner) => partner.partnerId)).toEqual([
-      existing.partnerId,
-    ]);
+    expect((await listPartners(context, "rgs")).partners.map((partner) => partner.partnerId)).toEqual(
+      [existing.partnerId],
+    );
   });
 
   // An alias must never squat a partner's own name. findPartnerByName folded
@@ -289,9 +289,9 @@ describe("crm partners", () => {
     expect(partner.createdByEmail).toBe("ops@rgs.test");
     const reloaded = await getPartnerOrThrow(context, "rgs", partner.partnerId);
     expect(reloaded.createdByEmail).toBe("ops@rgs.test");
-    await expect(listPartners(context, "rgs")).resolves.toMatchObject([
-      { createdByEmail: "ops@rgs.test" },
-    ]);
+    await expect(listPartners(context, "rgs")).resolves.toMatchObject({
+      partners: [{ createdByEmail: "ops@rgs.test" }],
+    });
   });
 
   it("omits createdByEmail for an admin token that carries no email claim", async () => {
@@ -311,18 +311,22 @@ describe("crm partners", () => {
     const context = buildTestContext();
     await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "ops@rgs.test");
     await createPartner(context, "rgs", { canonicalName: "Luxe Escape" }, "ops@rgs.test");
-    const partners = await listPartners(context, "rgs");
-    expect(partners).toHaveLength(2);
-    expect(partners.map((partner) => partner.canonicalName).sort()).toEqual([
+    const listed = await listPartners(context, "rgs");
+    expect(listed.partners).toHaveLength(2);
+    expect(listed.partners.map((partner) => partner.canonicalName).sort()).toEqual([
       "Luxe Escape",
       "Ozzy Travels",
     ]);
+    expect(listed.unreadablePartnerIds).toEqual([]);
   });
 
   it("keeps one tenant's partners out of another's list", async () => {
     const context = buildTestContext();
     await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "ops@rgs.test");
-    expect(await listPartners(context, "other-tenant")).toEqual([]);
+    expect(await listPartners(context, "other-tenant")).toEqual({
+      partners: [],
+      unreadablePartnerIds: [],
+    });
   });
 
   // --- A stored partner that will not parse is a 409, never a raw 500. ---
@@ -380,6 +384,71 @@ describe("crm partners", () => {
         getPartnerOrThrow(context, "rgs", "prt_lost_its_id"),
       ).rejects.toThrow(partitionKey);
     });
+  });
+
+  // --- One corrupt partner row must not take the whole list down. ---
+  // The same blast radius the case queue was already fixed for: one bad
+  // partition 500'd GET /crm/cases?status=NEW for the entire tenant.
+  it("still lists the healthy partners when one stored row will not parse", async () => {
+    const context = buildTestContext();
+    const healthy = await createPartner(
+      context,
+      "rgs",
+      { canonicalName: "Luxe Escape" },
+      "ops@rgs.test",
+    );
+    const corruptPartnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
+
+    const listed = await listPartners(context, "rgs");
+    // The healthy partner is still served — the whole point.
+    expect(listed.partners.map((partner) => partner.partnerId)).toEqual([healthy.partnerId]);
+    expect(listed.partners[0]!.canonicalName).toBe("Luxe Escape");
+    // ...and the row that was skipped is named, not silently dropped. Without
+    // this the partner simply is not in the list and nothing says why.
+    expect(listed.unreadablePartnerIds).toEqual([corruptPartnerId]);
+  });
+
+  it("warns with the id of the partner row it had to skip", async () => {
+    const context = buildTestContext();
+    await createPartner(context, "rgs", { canonicalName: "Luxe Escape" }, "ops@rgs.test");
+    const corruptPartnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let warnedText = "";
+    try {
+      await listPartners(context, "rgs");
+      // Read the calls before restoring: mockRestore also clears them.
+      warnedText = warnSpy.mock.calls.map((warnArguments) => warnArguments.join(" ")).join("\n");
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(warnedText).toContain(corruptPartnerId);
+    // The failing field is what turns a log line into a repair instruction.
+    expect(warnedText).toContain("partnerType");
+  });
+
+  it("keeps listing when every row in the tenant is corrupt", async () => {
+    const context = buildTestContext();
+    const firstCorruptId = await seedUnparseablePartnerItem(
+      context,
+      "rgs",
+      "Ozzy Travels",
+      "prt_bad_one",
+    );
+    const secondCorruptId = await seedUnparseablePartnerItem(
+      context,
+      "rgs",
+      "Luxe Escape",
+      "prt_bad_two",
+    );
+
+    // Returning early on the first bad row would still satisfy a test that
+    // only seeds one, and would still hide the second from the operator.
+    const listed = await listPartners(context, "rgs");
+    expect(listed.partners).toEqual([]);
+    expect(listed.unreadablePartnerIds.sort()).toEqual(
+      [firstCorruptId, secondCorruptId].sort(),
+    );
   });
 
   it("throws a 404 for a partner that does not exist", async () => {

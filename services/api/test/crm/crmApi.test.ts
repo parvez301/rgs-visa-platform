@@ -1,3 +1,4 @@
+import { crm } from "@rgs/shared";
 import { describe, expect, it } from "vitest";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { buildTestContext } from "../helpers";
@@ -6,6 +7,8 @@ import { registerCrmRoutes } from "../../src/http/crmApi";
 import { writeCase } from "../../src/domain/crm/caseStore";
 import {
   META_SORT_KEY,
+  partnerListGsi1Pk,
+  partnerPartitionKey,
   passportGsi3Pk,
   travellerPartitionKey,
 } from "../../src/domain/crm/keys";
@@ -667,6 +670,35 @@ describe("crm admin routes", () => {
     );
     expect(broken.statusCode).toBe(409);
     expect(broken.payload.code).toBe("CORRUPT_RECORD");
+  });
+
+  // The partner list carries the same blast radius the case queue was fixed
+  // for: one bad row used to 500 the list for the whole tenant.
+  it("still serves the partner list, naming the row it skipped, when one stored partner will not parse", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const healthy = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Luxe Escape",
+    });
+    // Indexed into the partner list, but the body has lost its partnerType.
+    await context.table.put({
+      PK: partnerPartitionKey("rgs", "prt_half_written"),
+      SK: META_SORT_KEY,
+      GSI1PK: partnerListGsi1Pk("rgs"),
+      GSI1SK: crm.normalizePartnerName("Ozzy Travels").canonicalKey ?? "",
+      tenantId: "rgs",
+      partnerId: "prt_half_written",
+      canonicalName: "Ozzy Travels",
+      aliases: [],
+      createdAt: "2026-07-23T10:00:00.000Z",
+    });
+
+    const listed = await call(router, "GET", "/api/v1/admin/crm/partners");
+    expect(listed.statusCode).toBe(200);
+    expect(
+      listed.payload.partners.map((partner: { partnerId: string }) => partner.partnerId),
+    ).toEqual([healthy.payload.partnerId]);
+    expect(listed.payload.unreadablePartnerIds).toEqual(["prt_half_written"]);
   });
 
   // A stored traveller row that will not parse must reach the caller as a

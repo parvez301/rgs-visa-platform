@@ -76,7 +76,10 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
   return router
     .add("GET", "/api/v1/admin/crm/partners", async (requestContext) => {
       requireAdmin(requestContext);
-      return { partners: await listPartners(context, tenantId) };
+      // { partners, unreadablePartnerIds } — a row that would not parse is
+      // named in the response rather than silently missing from it, and never
+      // takes the whole tenant's partner list down with it.
+      return listPartners(context, tenantId);
     })
     .add("POST", "/api/v1/admin/crm/partners", async (requestContext) => {
       requireAdmin(requestContext);

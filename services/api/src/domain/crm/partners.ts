@@ -2,7 +2,13 @@ import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import type { TableItem } from "../../lib/db";
-import { badRequest, conflict, corruptRecord, notFound } from "../../lib/errors";
+import {
+  CorruptRecordError,
+  badRequest,
+  conflict,
+  corruptRecord,
+  notFound,
+} from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "./keys";
 
@@ -67,12 +73,46 @@ export async function createPartner(
   return partner;
 }
 
+export interface PartnerListing {
+  partners: crm.Partner[];
+  /**
+   * Rows the tenant has that could not be turned back into a Partner. Named
+   * rather than merely absent, so a partner vanishing from the list does not
+   * look like a partner that was never there.
+   */
+  unreadablePartnerIds: string[];
+}
+
+/**
+ * One corrupt partner row must not take the whole tenant's partner list down
+ * with it — the identical blast radius already fixed for the case queue, where
+ * one half-written partition 500'd the NEW queue for every operator. The bad
+ * row is skipped, warned about with the id that finds it, and named in
+ * `unreadablePartnerIds`. Only CorruptRecordError is swallowed; every other
+ * failure still propagates.
+ *
+ * This stops being hypothetical the moment the migration importer creates
+ * partners from 7,157 rows of free-text spreadsheet names.
+ */
 export async function listPartners(
   context: AppContext,
   tenantId: string,
-): Promise<crm.Partner[]> {
+): Promise<PartnerListing> {
   const partnerItems = await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
-  return partnerItems.map((partnerItem) => crm.PartnerSchema.parse(stripKeys(partnerItem)));
+  const loadedPartners: crm.Partner[] = [];
+  const unreadablePartnerIds: string[] = [];
+  for (const partnerItem of partnerItems) {
+    try {
+      loadedPartners.push(parseStoredPartner(partnerItem));
+    } catch (error) {
+      if (!(error instanceof CorruptRecordError)) throw error;
+      unreadablePartnerIds.push(error.recordId);
+      console.warn(
+        `Skipped unreadable CRM partner ${error.recordId} in tenant ${tenantId}: ${error.reason}`,
+      );
+    }
+  }
+  return { partners: loadedPartners, unreadablePartnerIds };
 }
 
 export async function getPartnerOrThrow(
