@@ -134,7 +134,7 @@ describe("billing machine", () => {
 });
 
 describe("deriveCaseStatusFromApplicants", () => {
-  it("becomes DECIDED once every applicant has an outcome", () => {
+  it("becomes DECIDED once every applicant is APPROVED or REJECTED", () => {
     expect(deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "REJECTED"])).toBe("DECIDED");
   });
 
@@ -183,8 +183,8 @@ describe("the embassy sends one file of three back for a corrected photo", () =>
     const outcomesAfterTheReturn = ["APPROVED", "APPROVED", "SENT_BACK"] as const;
 
     // The file is actively being re-worked, so the case must NOT read DECIDED —
-    // DECIDED's only successor is CLOSED, and the case would drop out of every
-    // live queue while ops is still working it.
+    // DECIDED cannot reach the off-ramps and only reopens to SUBMITTED, so the
+    // case would drop out of every live queue while ops is still working it.
     expect(deriveCaseStatusFromApplicants("SUBMITTED", outcomesAfterTheReturn)).toBe("SUBMITTED");
 
     // Ops fixes the photo and resubmits: the returned applicant goes back into

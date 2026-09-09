@@ -218,8 +218,9 @@ export async function changeApplicantOutcome(
     toOutcome: nextOutcome,
   });
 
-  // A case *becomes* DECIDED once every applicant has a non-PENDING outcome —
-  // this is automatic (spec §5), not a manual gate.
+  // A case *becomes* DECIDED once every applicant is APPROVED or REJECTED, and
+  // *reopens* to SUBMITTED when one of them is SENT_BACK or back to PENDING.
+  // Both directions are automatic (spec §5), not a manual gate.
   const derivedCaseStatus = crm.deriveCaseStatusFromApplicants(
     updatedCase.caseStatus,
     updatedApplicants.map((applicant) => applicant.outcome),

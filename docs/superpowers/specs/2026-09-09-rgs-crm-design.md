@@ -225,7 +225,7 @@ billingStatus UNBILLED → BILL_SENT → PAID | PART_PAID | WRITTEN_OFF
 ```
 
 Derived rules:
-- A case becomes `DECIDED` when every applicant has a non-`PENDING` outcome.
+- A case becomes `DECIDED` when every applicant is `APPROVED` or `REJECTED`; a `SENT_BACK` applicant is live work, so it returns a `DECIDED` case to `SUBMITTED`.
 - A case becomes `CLOSED` when every applicant is `RETURNED` **and**
   `billingStatus` is `PAID` or `WRITTEN_OFF`.
 
