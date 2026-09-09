@@ -92,6 +92,13 @@ export async function getPartnerOrThrow(
  * "Ozzy" a second partner beside "Ozzy Travels"; the migration importer
  * resolves partner names across every sheet row, so collapsing them here is the
  * whole point of recording them.
+ *
+ * Precedence is explicit and does not depend on the order the index returns
+ * rows in: a partner whose own canonical name matches always wins, and an alias
+ * is consulted only when no partner is actually called that. Folding both into
+ * one `.find` let "Aaa Travel", merely because it listed "Ozzy Travels" as an
+ * alias and sorts earlier, answer every lookup for the real Ozzy Travels — and
+ * squat any partner's name across all 7,157 importer lookups.
  */
 export async function findPartnerByName(
   context: AppContext,
@@ -103,13 +110,15 @@ export async function findPartnerByName(
   if (soughtCanonicalKey === null) return undefined;
   const partnerItems = await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
   // Match on the RAW item's GSI1SK. Parsing first would strip the key.
-  const matchingItem = partnerItems.find(
-    (partnerItem) =>
-      partnerItem.GSI1SK === soughtCanonicalKey ||
-      storedAliasesOf(partnerItem).some(
-        (alias) => crm.normalizePartnerName(alias).canonicalKey === soughtCanonicalKey,
-      ),
+  const canonicalNameMatch = partnerItems.find(
+    (partnerItem) => partnerItem.GSI1SK === soughtCanonicalKey,
   );
+  const aliasMatch = partnerItems.find((partnerItem) =>
+    storedAliasesOf(partnerItem).some(
+      (alias) => crm.normalizePartnerName(alias).canonicalKey === soughtCanonicalKey,
+    ),
+  );
+  const matchingItem = canonicalNameMatch ?? aliasMatch;
   return matchingItem ? crm.PartnerSchema.parse(stripKeys(matchingItem)) : undefined;
 }
 

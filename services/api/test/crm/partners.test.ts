@@ -1,11 +1,43 @@
+import { crm } from "@rgs/shared";
 import { describe, expect, it } from "vitest";
-import { buildTestContext } from "../helpers";
+import { buildTestContext, type TestContext } from "../helpers";
+import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "../../src/domain/crm/keys";
 import {
   createPartner,
   findPartnerByName,
   getPartnerOrThrow,
   listPartners,
 } from "../../src/domain/crm/partners";
+
+/**
+ * Writes a partner item exactly as createPartner does, but without its
+ * duplicate check. createPartner refuses — by design, and there is a test for
+ * it below — a canonical name that some existing partner already lists as an
+ * alias, so this is the only way to build the state where the alias holder was
+ * recorded first and the partner whose own name it squats came second.
+ */
+async function seedPartnerItemDirectly(
+  context: TestContext,
+  tenantId: string,
+  canonicalName: string,
+  aliases: string[] = [],
+): Promise<string> {
+  const partnerId = `prt_seeded_${canonicalName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+  const canonicalKey = crm.normalizePartnerName(canonicalName).canonicalKey;
+  await context.table.put({
+    PK: partnerPartitionKey(tenantId, partnerId),
+    SK: META_SORT_KEY,
+    GSI1PK: partnerListGsi1Pk(tenantId),
+    GSI1SK: canonicalKey ?? "",
+    tenantId,
+    partnerId,
+    canonicalName,
+    partnerType: "AGENCY",
+    aliases,
+    createdAt: "2026-07-23T10:00:00.000Z",
+  });
+  return partnerId;
+}
 
 describe("crm partners", () => {
   it("creates a partner with the type the shared normalizer inferred", async () => {
@@ -119,6 +151,90 @@ describe("crm partners", () => {
     expect((await listPartners(context, "rgs")).map((partner) => partner.partnerId)).toEqual([
       existing.partnerId,
     ]);
+  });
+
+  // An alias must never squat a partner's own name. findPartnerByName folded
+  // canonical names and aliases into one `.find` over the partner index, so
+  // whichever item the index happened to return first won — and that index is
+  // ordered by canonical key, which has nothing to do with intent. A partner
+  // "Aaa Travel" carrying the alias "Ozzy Travels" therefore answered a lookup
+  // for "Ozzy Travels". The importer resolves partner names across 7,157
+  // spreadsheet rows: every "VWI" case would attach to whoever happened to list
+  // "VWI" as an alias.
+  describe("an exact canonical name always beats another partner's alias", () => {
+    it("wins when the alias holder sorts ahead of it in the partner index", async () => {
+      const context = buildTestContext();
+      const ozzy = await createPartner(
+        context,
+        "rgs",
+        { canonicalName: "Ozzy Travels" },
+        "ops@rgs.test",
+      );
+      const aliasSquatter = await createPartner(
+        context,
+        "rgs",
+        { canonicalName: "Aaa Travel", aliases: ["Ozzy Travels"] },
+        "ops@rgs.test",
+      );
+
+      const found = await findPartnerByName(context, "rgs", "Ozzy Travels");
+      expect(found?.partnerId).toBe(ozzy.partnerId);
+      expect(found?.partnerId).not.toBe(aliasSquatter.partnerId);
+    });
+
+    it("wins when the alias holder sorts behind it in the partner index", async () => {
+      const context = buildTestContext();
+      const ozzy = await createPartner(
+        context,
+        "rgs",
+        { canonicalName: "Ozzy Travels" },
+        "ops@rgs.test",
+      );
+      // The mirror image of the case above: "Zzz Travel" sorts last, so a
+      // precedence rule that merely reads the index backwards would pass one
+      // of these two and fail the other.
+      const aliasSquatter = await createPartner(
+        context,
+        "rgs",
+        { canonicalName: "Zzz Travel", aliases: ["Ozzy Travels"] },
+        "ops@rgs.test",
+      );
+
+      const found = await findPartnerByName(context, "rgs", "Ozzy Travels");
+      expect(found?.partnerId).toBe(ozzy.partnerId);
+      expect(found?.partnerId).not.toBe(aliasSquatter.partnerId);
+    });
+
+    it("wins even when the alias holder was recorded first", async () => {
+      const context = buildTestContext();
+      const aliasSquatter = await createPartner(
+        context,
+        "rgs",
+        { canonicalName: "Aaa Travel", aliases: ["Ozzy Travels"] },
+        "ops@rgs.test",
+      );
+      // Seeded directly, because createPartner would (correctly) 409 on a name
+      // an existing partner already lists as an alias.
+      const ozzyPartnerId = await seedPartnerItemDirectly(context, "rgs", "Ozzy Travels");
+
+      const found = await findPartnerByName(context, "rgs", "Ozzy Travels");
+      expect(found?.partnerId).toBe(ozzyPartnerId);
+      expect(found?.partnerId).not.toBe(aliasSquatter.partnerId);
+    });
+
+    it("still falls back to the alias when no partner carries that canonical name", async () => {
+      const context = buildTestContext();
+      const aliasSquatter = await createPartner(
+        context,
+        "rgs",
+        { canonicalName: "Aaa Travel", aliases: ["Ozzy Travels"] },
+        "ops@rgs.test",
+      );
+      // Nothing is named "Ozzy Travels", so the alias is the only answer there
+      // is — canonical precedence must not turn alias matching off.
+      const found = await findPartnerByName(context, "rgs", "Ozzy Travels");
+      expect(found?.partnerId).toBe(aliasSquatter.partnerId);
+    });
   });
 
   it("keeps one tenant's aliases from matching another tenant's lookup", async () => {
