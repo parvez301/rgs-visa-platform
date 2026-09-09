@@ -1837,20 +1837,26 @@ describe("runImport", () => {
 
   it("imports every migrated case with UNKNOWN billing, never UNBILLED", async () => {
     const context = buildTestContext();
-    await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
-    const cases = await listReviewItems(context, "rgs", "OPEN");
-    expect(cases).toEqual([]); // clean row raises nothing
-    // Find the created case and assert its billing axis.
-    const created = await readCase(context, "rgs", (await listPartners(context, "rgs"))[0] ? "" : "");
-    expect(created === undefined || created.billingStatus === "UNKNOWN").toBe(true);
+    const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
+
+    const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    // Spec §5: migrated rows carry no billing evidence, and UNKNOWN is what
+    // the billing_overdue watchdog excludes. UNBILLED would nag on 7,161 cases.
+    expect(importedCase!.billingStatus).toBe("UNKNOWN");
   });
 
-  it("keeps provenance on every imported case", async () => {
+  it("keeps provenance on every imported case so any value traces back", async () => {
     const context = buildTestContext();
-    await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
-    // sourceSheet/sourceRow/legacyRaw round-trip through CrmCaseSchema.
-    // Asserted via the case read in the importRun report fixture.
-    expect(true).toBe(true);
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [buildMappedRow({ legacyRaw: { "Additional Items": "PHOTO, HOTEL" } })],
+    });
+
+    const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    expect(importedCase!.sourceSheet).toBe("Mini CRM");
+    expect(importedCase!.sourceRow).toBe(2);
+    expect(importedCase!.caseRef).toBe("31376");
+    expect(importedCase!.legacyRaw).toEqual({ "Additional Items": "PHOTO, HOTEL" });
   });
 
   it("records pass-1 review items in the queue", async () => {
@@ -1897,7 +1903,7 @@ describe("runImport", () => {
 });
 ```
 
-Replace the two placeholder assertions in the "UNKNOWN billing" and "provenance" tests with real reads once `runImport` returns the created case ids — extend `ImportSummary` with `createdCaseIds: string[]` if that is the cleanest way, and assert `billingStatus`, `sourceSheet`, `sourceRow` and `legacyRaw` directly off the read case. **Do not leave an `expect(true).toBe(true)` in the committed suite** — it asserts nothing and this branch has already shipped three tests that could not fail.
+Note that both the billing and provenance tests read the case back through `readCase` using `summary.createdCaseIds[0]`, so `ImportSummary` must carry `createdCaseIds` — it is in the interface for exactly this reason. Assert values against literals, never against a value re-read from the same call you are testing.
 
 - [ ] **Step 2: Run the test and watch it fail**
 
