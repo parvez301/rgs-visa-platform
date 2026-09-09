@@ -18,7 +18,12 @@ const CASE_STATUS_FORWARD_TRANSITIONS: Record<CaseStatus, readonly CaseStatus[]>
   IN_PROGRESS: ["APPOINTMENT_SET", "SUBMITTED", "DECIDED", "CLOSED"],
   APPOINTMENT_SET: ["SUBMITTED", "DECIDED", "CLOSED"],
   SUBMITTED: ["DECIDED", "CLOSED"],
-  DECIDED: ["CLOSED"],
+  // SUBMITTED is the reopen edge, not a step backwards for its own sake: a
+  // decided case whose embassy hands a passport back is live work again. Without
+  // it DECIDED absorbed the case — the off-ramps need a LIVE status, the
+  // derivation could not undo itself, and the only exit left was to CLOSE a file
+  // that had actually come back.
+  DECIDED: ["SUBMITTED", "CLOSED"],
   CLOSED: [],
   NOT_SUBMITTED: [],
   WITHDRAWN: [],
@@ -105,13 +110,19 @@ export function canTransitionBilling(
 }
 
 /**
- * A case becomes DECIDED once every applicant is APPROVED or REJECTED.
+ * A case becomes DECIDED once every applicant is APPROVED or REJECTED, and
+ * reopens to SUBMITTED the moment one of them is live again.
  *
  * SENT_BACK deliberately does NOT count as a decision. The embassy returning
  * one file for a corrected photo is that file going back into work, not a
- * verdict on it; counting it would flip the whole case to DECIDED, whose only
- * successor is CLOSED, and the case would drop out of the live queues while
- * ops is still working it.
+ * verdict on it.
+ *
+ * The reopen half matters as much as the decide half. This used to short-circuit
+ * on DECIDED, which meant a case marked decided — by hand via the status route,
+ * where the skip-ahead NEW -> DECIDED is legal and intended, or by an import —
+ * stayed decided while holding a SENT_BACK or PENDING applicant. Every off-ramp
+ * needs a LIVE status, so the only exit left was CLOSED: closing a file the
+ * embassy had actually handed back.
  *
  * Terminal cases are never dragged back — migrated rows keep the status the
  * import assigned them (spec §5).
@@ -123,13 +134,16 @@ export function deriveCaseStatusFromApplicants(
   if (TERMINAL_CASE_STATUSES.includes(currentCaseStatus)) {
     return currentCaseStatus;
   }
-  if (currentCaseStatus === "DECIDED" || applicantOutcomes.length === 0) {
+  if (applicantOutcomes.length === 0) {
     return currentCaseStatus;
   }
   const everyApplicantDecided = applicantOutcomes.every(
     (applicantOutcome) => applicantOutcome === "APPROVED" || applicantOutcome === "REJECTED",
   );
-  return everyApplicantDecided ? "DECIDED" : currentCaseStatus;
+  if (everyApplicantDecided) {
+    return "DECIDED";
+  }
+  return currentCaseStatus === "DECIDED" ? "SUBMITTED" : currentCaseStatus;
 }
 
 /**

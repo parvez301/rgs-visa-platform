@@ -220,6 +220,82 @@ describe("crm admin routes", () => {
     expect(illegal.statusCode).toBe(409);
   });
 
+  // The embassy hands a passport back after ops has already marked the case
+  // decided. All of these calls are legal — the NEW -> DECIDED skip-ahead is
+  // intended, real e-visas are approved with no recorded submission — and
+  // DECIDED used to absorb the case from there: every off-ramp requires a LIVE
+  // status and the derivation short-circuited on DECIDED, so a case holding a
+  // SENT_BACK applicant could only be got rid of by CLOSING a file the embassy
+  // had actually returned.
+  it("reopens a decided case when a passport comes back, then works and closes it normally", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId }],
+    });
+    expect(created.payload.caseStatus).toBe("NEW");
+    const caseId = created.payload.caseId;
+    const applicantPath = `/api/v1/admin/crm/cases/${caseId}/applicants/31377`;
+
+    const markedDecided = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
+      toStatus: "DECIDED",
+    });
+    expect(markedDecided.statusCode).toBe(200);
+    expect(markedDecided.payload.caseStatus).toBe("DECIDED");
+
+    // The embassy returns the passport for a correction.
+    const sentBack = await call(router, "PUT", `${applicantPath}/outcome`, {
+      toOutcome: "SENT_BACK",
+    });
+    expect(sentBack.statusCode).toBe(200);
+    expect(sentBack.payload.applicants[0].outcome).toBe("SENT_BACK");
+    // The case is live work again, not a decided file.
+    expect(sentBack.payload.caseStatus).toBe("SUBMITTED");
+
+    // ...which means it is back in a queue ops can see, and back within reach
+    // of the off-ramps, instead of being stranded.
+    const submittedQueue = await call(router, "GET", "/api/v1/admin/crm/cases", undefined, {
+      status: "SUBMITTED",
+    });
+    expect(submittedQueue.payload.cases.map((listedCase: any) => listedCase.caseId)).toEqual([
+      caseId,
+    ]);
+
+    // Ops corrects the file and resubmits it; the applicant goes back to PENDING.
+    const resubmitted = await call(router, "PUT", `${applicantPath}/outcome`, {
+      toOutcome: "PENDING",
+    });
+    expect(resubmitted.statusCode).toBe(200);
+    expect(resubmitted.payload.caseStatus).toBe("SUBMITTED");
+
+    // This time the embassy approves it, and the case decides again.
+    const approved = await call(router, "PUT", `${applicantPath}/outcome`, {
+      toOutcome: "APPROVED",
+    });
+    expect(approved.payload.caseStatus).toBe("DECIDED");
+
+    // Passport back with its owner and the bill settled: the case closes itself.
+    await call(router, "PUT", `${applicantPath}/custody`, { toCustody: "WITH_RGS" });
+    await call(router, "PUT", `${applicantPath}/custody`, { toCustody: "RETURNED" });
+    await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/billing`, {
+      toBillingStatus: "BILL_SENT",
+    });
+    const paid = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/billing`, {
+      toBillingStatus: "PAID",
+    });
+    expect(paid.payload.caseStatus).toBe("CLOSED");
+  });
+
   it("returns 400 for a body that fails validation", async () => {
     const context = buildTestContext();
     const router = buildRouter(context);

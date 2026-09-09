@@ -23,7 +23,26 @@ describe("case status machine", () => {
 
   it("refuses to move backwards", () => {
     expect(canTransitionCaseStatus("SUBMITTED", "IN_PROGRESS")).toBe(false);
-    expect(canTransitionCaseStatus("DECIDED", "SUBMITTED")).toBe(false);
+    expect(canTransitionCaseStatus("DECIDED", "IN_PROGRESS")).toBe(false);
+    expect(canTransitionCaseStatus("DECIDED", "APPOINTMENT_SET")).toBe(false);
+    expect(canTransitionCaseStatus("DECIDED", "NEW")).toBe(false);
+  });
+
+  // DECIDED used to be absorbing: its only successor was CLOSED, the off-ramps
+  // need a LIVE status, and the derivation short-circuited on it. A case marked
+  // decided that then had a passport handed back was stuck holding a live
+  // applicant, and the only way out was to CLOSE a file the embassy had
+  // actually returned.
+  it("reopens a decided case to SUBMITTED, the one step back that exists", () => {
+    expect(canTransitionCaseStatus("DECIDED", "SUBMITTED")).toBe(true);
+    // ...and from there the ordinary machine applies again, off-ramps included.
+    expect(canTransitionCaseStatus("SUBMITTED", "WITHDRAWN")).toBe(true);
+    expect(canTransitionCaseStatus("SUBMITTED", "DECIDED")).toBe(true);
+  });
+
+  it("still refuses to reopen a case that is genuinely over", () => {
+    expect(canTransitionCaseStatus("CLOSED", "SUBMITTED")).toBe(false);
+    expect(canTransitionCaseStatus("WITHDRAWN", "SUBMITTED")).toBe(false);
   });
 
   it("refuses to leave a terminal status", () => {
@@ -139,6 +158,22 @@ describe("deriveCaseStatusFromApplicants", () => {
       "SUBMITTED",
     );
   });
+
+  it("reopens a DECIDED case the moment an applicant is live again", () => {
+    // The case was marked decided — by hand, or by an import — and then the
+    // embassy sent one file back. Short-circuiting on DECIDED left the case
+    // decided while holding a SENT_BACK applicant, with no way out but CLOSED.
+    expect(deriveCaseStatusFromApplicants("DECIDED", ["APPROVED", "SENT_BACK"])).toBe("SUBMITTED");
+    expect(deriveCaseStatusFromApplicants("DECIDED", ["SENT_BACK"])).toBe("SUBMITTED");
+    // The resubmission puts that applicant back to PENDING; still not decided.
+    expect(deriveCaseStatusFromApplicants("DECIDED", ["APPROVED", "PENDING"])).toBe("SUBMITTED");
+  });
+
+  it("leaves a DECIDED case decided while every applicant really is decided", () => {
+    expect(deriveCaseStatusFromApplicants("DECIDED", ["APPROVED", "REJECTED"])).toBe("DECIDED");
+    // A decided case with no applicant rows at all is not evidence of anything.
+    expect(deriveCaseStatusFromApplicants("DECIDED", [])).toBe("DECIDED");
+  });
 });
 
 describe("the embassy sends one file of three back for a corrected photo", () => {
@@ -227,12 +262,11 @@ describe("outcome machine", () => {
     expect(canTransitionBilling("BILL_SENT", "BILL_SENT")).toBe(false);
   });
 
-  it("keeps every applicant a DECIDED case holds out of PENDING", () => {
-    // deriveCaseStatusFromApplicants short-circuits once a case is DECIDED, so
-    // an applicant slipping back to PENDING would leave a DECIDED case holding
-    // a pending applicant — the contradiction this machine exists to prevent.
-    // Only APPROVED and REJECTED can put a case in DECIDED, so only they are
-    // barred; SENT_BACK never decides a case, and must be able to go back.
+  it("keeps a decided applicant from being silently un-decided", () => {
+    // APPROVED and REJECTED are verdicts: the embassy has ruled, and the CRM
+    // has no edge that quietly unrules it. SENT_BACK is not a verdict — it is
+    // the file coming back for a correction — so it must be able to go back to
+    // PENDING, and a case that reads DECIDED reopens when it does.
     for (const decidedOutcome of ["APPROVED", "REJECTED"] as const) {
       expect(canTransitionOutcome(decidedOutcome, "PENDING")).toBe(false);
     }
