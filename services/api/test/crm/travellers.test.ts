@@ -74,12 +74,16 @@ describe("crm travellers", () => {
   });
 
   it("normalizes curly and straight apostrophes to the same value", () => {
-    // Curly apostrophe (U+2019)
-    const curlyApostrophe = "D'SOUZA";
-    // Straight apostrophe (U+0027)
-    const straightApostrophe = "D'SOUZA";
-    expect(normalizeTravellerName(curlyApostrophe)).toBe(
-      normalizeTravellerName(straightApostrophe),
+    // Written as escapes, not literal characters: an editor that silently flattens
+    // U+2019 to U+0027 would make both sides identical and the assertion vacuous.
+    const curlyApostropheName = "D\u2019SOUZA";
+    const straightApostropheName = "D\u0027SOUZA";
+
+    // Guard: if this ever fails, the inputs collapsed and the test below proves nothing.
+    expect(curlyApostropheName).not.toBe(straightApostropheName);
+
+    expect(normalizeTravellerName(curlyApostropheName)).toBe(
+      normalizeTravellerName(straightApostropheName),
     );
   });
 
