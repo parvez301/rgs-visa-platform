@@ -5,7 +5,12 @@ import { CorruptRecordError, badRequest, conflict, notFound } from "../../lib/er
 import { newId } from "../../lib/ids";
 import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
-import { CASE_META_SORT_KEY, caseStatusGsi1Pk, partnerCasesGsi2Pk } from "./keys";
+import {
+  CASE_META_SORT_KEY,
+  caseIdFromPartitionKey,
+  caseStatusGsi1Pk,
+  partnerCasesGsi2Pk,
+} from "./keys";
 import { getPartnerOrThrow } from "./partners";
 import { getTravellerOrThrow } from "./travellers";
 
@@ -347,10 +352,32 @@ async function loadCasesFromMetaItems(
   const unreadableCaseIds: string[] = [];
   for (const metaItem of metaItems) {
     if (metaItem["SK"] !== CASE_META_SORT_KEY) continue;
-    const caseId = String(metaItem["caseId"]);
+    const caseId = caseIdOfMetaItem(metaItem);
+    if (caseId === undefined) {
+      // Neither the body nor the partition key names a case. Report the raw key
+      // — it is all an operator has to find the row with, and String(undefined)
+      // used to turn this into the literal id "undefined", which reads back as
+      // no case at all and left the loop without a word.
+      const unidentifiableKey = String(metaItem["PK"] ?? "(no partition key)");
+      unreadableCaseIds.push(unidentifiableKey);
+      console.warn(
+        `Skipped an unidentifiable CRM case META item in tenant ${tenantId}: ${unidentifiableKey}`,
+      );
+      continue;
+    }
     try {
       const loadedCase = await readCase(context, tenantId, caseId);
-      if (loadedCase) loadedCases.push(loadedCase);
+      if (loadedCase) {
+        loadedCases.push(loadedCase);
+        continue;
+      }
+      // The index named a case whose partition holds no META item — a deleted
+      // case still in an eventually consistent GSI, or an index entry pointing
+      // at the wrong id. Dropping it here is what made the disappearance silent.
+      unreadableCaseIds.push(caseId);
+      console.warn(
+        `Skipped CRM case ${caseId} in tenant ${tenantId}: the status index names it but its partition holds no case`,
+      );
     } catch (error) {
       if (!(error instanceof CorruptRecordError)) throw error;
       unreadableCaseIds.push(error.recordId);
@@ -360,4 +387,18 @@ async function loadCasesFromMetaItems(
     }
   }
   return { cases: loadedCases, unreadableCaseIds };
+}
+
+/**
+ * The caseId a META item is stored under. The body carries it, but a
+ * half-written or hand-repaired item may not, and the partition key always
+ * does — so the key is the fallback rather than the string "undefined".
+ */
+function caseIdOfMetaItem(metaItem: Record<string, unknown>): string | undefined {
+  const caseIdFromBody = metaItem["caseId"];
+  if (typeof caseIdFromBody === "string" && caseIdFromBody.length > 0) {
+    return caseIdFromBody;
+  }
+  const partitionKey = metaItem["PK"];
+  return typeof partitionKey === "string" ? caseIdFromPartitionKey(partitionKey) : undefined;
 }

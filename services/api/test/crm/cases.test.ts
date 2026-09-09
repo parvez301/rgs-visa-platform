@@ -2,6 +2,7 @@ import { crm } from "@rgs/shared";
 import { describe, expect, it, vi } from "vitest";
 import { buildTestContext, type TestContext } from "../helpers";
 import { writeCase } from "../../src/domain/crm/caseStore";
+import { casePartitionKey, caseStatusGsi1Pk } from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
@@ -393,6 +394,74 @@ describe("crm cases", () => {
     const listed = await listCasesByPartner(context, "rgs", partnerId);
     expect(listed.cases).toHaveLength(1);
     expect(listed.unreadableCaseIds).toEqual([corruptedCase.caseId]);
+  });
+
+  it("reports a META item that lost its own caseId, instead of dropping it in silence", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const healthyCase = await seedCase(context, partnerId, "31377");
+    // A META item indexed under the NEW queue whose body has no caseId of its
+    // own. Naming it String(item.caseId) yields the literal id "undefined",
+    // which reads back as no case at all — the row was dropped before the
+    // reporting path ever saw it. The partition key still identifies it.
+    await context.table.put({
+      PK: casePartitionKey("rgs", "case_ghost"),
+      SK: "META",
+      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
+      GSI1SK: "2026-01-02T10:00:00.000Z",
+      tenantId: "rgs",
+      caseRef: "31379",
+    });
+
+    const listed = await listCasesByStatus(context, "rgs", "NEW");
+    expect(listed.cases.map((listedCase) => listedCase.caseId)).toEqual([healthyCase.caseId]);
+    expect(listed.unreadableCaseIds).toEqual(["case_ghost"]);
+  });
+
+  it("reports a status-index entry whose case partition holds nothing", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    // The indexed item names a caseId that lives in no partition — readCase
+    // returns undefined for it, which used to fall through the `if (loadedCase)`
+    // check and out of the loop without a word.
+    await context.table.put({
+      PK: casePartitionKey("rgs", "case_stale_index"),
+      SK: "META",
+      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
+      GSI1SK: "2026-01-02T10:00:00.000Z",
+      tenantId: "rgs",
+      caseId: "case_that_was_deleted",
+      caseRef: "31380",
+    });
+
+    const listed = await listCasesByStatus(context, "rgs", "NEW");
+    expect(listed.cases).toHaveLength(1);
+    expect(listed.unreadableCaseIds).toEqual(["case_that_was_deleted"]);
+  });
+
+  it("warns about a META item it could not even name", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    await context.table.put({
+      PK: casePartitionKey("rgs", "case_ghost"),
+      SK: "META",
+      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
+      GSI1SK: "2026-01-02T10:00:00.000Z",
+      tenantId: "rgs",
+      caseRef: "31379",
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let warnedText = "";
+    try {
+      await listCasesByStatus(context, "rgs", "NEW");
+      warnedText = warnSpy.mock.calls.map((warnArguments) => warnArguments.join(" ")).join("\n");
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(warnedText).toContain("case_ghost");
   });
 
   it("warns with the caseId of a case it had to skip", async () => {

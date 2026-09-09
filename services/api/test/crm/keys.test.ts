@@ -4,6 +4,7 @@ import {
   CASE_META_SORT_KEY,
   DEFAULT_TENANT_ID,
   applicantSortKey,
+  caseIdFromPartitionKey,
   casePartitionKey,
   caseStatusGsi1Pk,
   eventSortKey,
@@ -18,6 +19,13 @@ describe("crm keys", () => {
     expect(casePartitionKey("rgs", "case_1")).toBe("TENANT#rgs#CASE#case_1");
     expect(partnerPartitionKey("rgs", "p_1")).toBe("TENANT#rgs#PARTNER#p_1");
     expect(travellerPartitionKey("rgs", "t_1")).toBe("TENANT#rgs#TRAVELLER#t_1");
+  });
+
+  it("recovers the caseId a case partition key was built from", () => {
+    expect(caseIdFromPartitionKey(casePartitionKey("rgs", "case_1"))).toBe("case_1");
+    // Not a case partition, and a case partition naming no case: neither yields an id.
+    expect(caseIdFromPartitionKey(partnerPartitionKey("rgs", "p_1"))).toBeUndefined();
+    expect(caseIdFromPartitionKey("TENANT#rgs#CASE#")).toBeUndefined();
   });
 
   it("keeps tenants apart", () => {
