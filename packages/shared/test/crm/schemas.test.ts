@@ -93,6 +93,25 @@ describe("CrmCaseSchema", () => {
     ).not.toThrow();
   });
 
+  it("accepts a createdByEmail that is not an RFC-shaped address", () => {
+    // The value comes from the admin token's `email` claim, which the router
+    // does not guarantee; it is the only caller-derived value on the case that
+    // was validated strictly enough to turn a valid admin into a 400.
+    expect(() =>
+      CrmCaseSchema.parse({ ...validCase, createdByEmail: "ops" }),
+    ).not.toThrow();
+    expect(CrmCaseSchema.parse({ ...validCase, createdByEmail: "ops" }).createdByEmail).toBe(
+      "ops",
+    );
+  });
+
+  it("still refuses an empty createdByEmail, and still allows none at all", () => {
+    expect(() => CrmCaseSchema.parse({ ...validCase, createdByEmail: "" })).toThrow();
+    expect(() =>
+      CrmCaseSchema.parse({ ...validCase, createdByEmail: undefined }),
+    ).not.toThrow();
+  });
+
   it("keeps migration provenance when present", () => {
     const migratedCase = {
       ...validCase,

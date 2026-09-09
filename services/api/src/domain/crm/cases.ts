@@ -73,7 +73,9 @@ export async function createCase(
       })),
       createdAt: nowIso,
       updatedAt: nowIso,
-      createdByEmail: actorEmail,
+      // router.ts defaults a missing `email` claim to "", and an empty string
+      // is not an author — omit the field rather than record a blank one.
+      ...(actorEmail !== "" ? { createdByEmail: actorEmail } : {}),
     });
   } catch (error) {
     if (error instanceof ZodError) {

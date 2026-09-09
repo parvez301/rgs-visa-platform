@@ -103,6 +103,37 @@ describe("crm cases", () => {
     });
   });
 
+  it("creates a case for an admin whose token carries no email claim", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const travellerId = await seedTraveller(context, "Umesh Kumar Yadav");
+    // router.ts defaults a missing `email` claim to "". Every other admin route
+    // keeps working with that; case creation must too.
+    const created = await createCase(
+      context,
+      "rgs",
+      {
+        caseRef: "31377",
+        caseType: "VISA",
+        partnerId,
+        destinationCountry: "BH",
+        visaType: "EVISA_TOURIST",
+        receivedDate: "2026-01-02",
+        applicants: [{ applicantRef: "31377", travellerId }],
+      },
+      "",
+    );
+    expect(created.caseRef).toBe("31377");
+    // No email to record, so the field is absent rather than stored empty.
+    expect(created.createdByEmail).toBeUndefined();
+  });
+
+  it("records the caller's email on the case when the claim is present", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    expect(created.createdByEmail).toBe("ops@rgs.test");
+  });
+
   it("rejects a case whose traveller does not exist", async () => {
     const context = buildTestContext();
     const partnerId = await seedPartner(context);

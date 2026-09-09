@@ -115,7 +115,11 @@ export const CrmCaseSchema = z
     legacyRaw: z.record(z.string(), z.string()).optional(),
     createdAt: isoDateTime,
     updatedAt: isoDateTime,
-    createdByEmail: z.string().email().optional(),
+    // Derived from the admin token's `email` claim, which is not guaranteed —
+    // the API defaults it away when absent rather than storing an empty string.
+    // .email() here turned an admin whose token carries no email claim into a
+    // 400 on case creation while every other admin route kept working.
+    createdByEmail: z.string().min(1).optional(),
   })
   .refine(
     (crmCase) => crmCase.caseType !== "VISA" || crmCase.visaType !== undefined,

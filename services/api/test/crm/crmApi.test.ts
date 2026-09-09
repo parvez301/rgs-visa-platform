@@ -79,6 +79,39 @@ async function seedTraveller(router: Router, fullName: string): Promise<string> 
   return created.payload.travellerId;
 }
 
+/**
+ * An admin token that carries `sub` but no `email` claim — router.ts defaults
+ * callerEmail to "" for it, which is a real shape (apps/admin/src/lib/auth.tsx
+ * falls back for the same reason).
+ */
+function buildEventWithoutEmailClaim(
+  method: string,
+  path: string,
+  body?: unknown,
+): APIGatewayProxyEventV2 {
+  return {
+    rawPath: path,
+    requestContext: {
+      http: { method },
+      authorizer: { jwt: { claims: { sub: "admin_1" } } },
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  } as unknown as APIGatewayProxyEventV2;
+}
+
+async function callWithoutEmailClaim(
+  router: Router,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ statusCode: number; payload: any }> {
+  const response = (await router.dispatch(buildEventWithoutEmailClaim(method, path, body))) as {
+    statusCode: number;
+    body: string;
+  };
+  return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
+}
+
 describe("crm admin routes", () => {
   it("creates a partner then a case, and reads the case back", async () => {
     const context = buildTestContext();
@@ -467,6 +500,26 @@ describe("crm admin routes", () => {
       applicants: [{ applicantRef: "31377", travellerId: "trv_totally_made_up" }],
     });
     expect(missingTraveller.statusCode).toBe(404);
+  });
+
+  it("creates a case for an admin token that carries no email claim", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
+    const created = await callWithoutEmailClaim(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId }],
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.payload.caseRef).toBe("31377");
   });
 
   // --- One half-written case partition must not take the whole queue down. ---
