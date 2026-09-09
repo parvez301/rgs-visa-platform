@@ -1,0 +1,120 @@
+import { describe, expect, it } from "vitest";
+import { buildTestContext } from "../helpers";
+import { readCase, readCaseOrThrow, writeCase } from "../../src/domain/crm/caseStore";
+import { APPLICANT_SORT_KEY_PREFIX, casePartitionKey } from "../../src/domain/crm/keys";
+import type { crm } from "@rgs/shared";
+
+function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
+  return {
+    tenantId: "rgs",
+    caseId: "case_1",
+    caseRef: "31377",
+    caseType: "VISA",
+    partnerId: "partner_1",
+    destinationCountry: "BH",
+    visaType: "EVISA_TOURIST",
+    entryType: "SINGLE",
+    processing: "NORMAL",
+    caseStatus: "NEW",
+    billingStatus: "UNBILLED",
+    receivedDate: "2026-01-02",
+    lineItems: [],
+    totalInr: 0,
+    watchdogOverrides: {},
+    mutedRules: [],
+    applicants: [
+      { applicantRef: "31377", travellerId: "trv_1", custody: "NOT_HELD", outcome: "PENDING" },
+      { applicantRef: "31378", travellerId: "trv_2", custody: "NOT_HELD", outcome: "PENDING" },
+    ],
+    createdAt: "2026-01-02T10:00:00.000Z",
+    updatedAt: "2026-01-02T10:00:00.000Z",
+    ...overrides,
+  } as crm.CrmCase;
+}
+
+describe("caseStore", () => {
+  it("stores each applicant as its own item, not a nested array", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+
+    const partitionKey = casePartitionKey("rgs", "case_1");
+    const metaItem = await context.table.get(partitionKey, "META");
+    expect(metaItem).toBeDefined();
+    // The storage shape must NOT carry the applicants array.
+    expect(metaItem!["applicants"]).toBeUndefined();
+
+    const applicantItems = await context.table.query(partitionKey, {
+      skPrefix: APPLICANT_SORT_KEY_PREFIX,
+    });
+    expect(applicantItems).toHaveLength(2);
+    expect(applicantItems[0]!["applicantRef"]).toBe("31377");
+    expect(applicantItems[1]!["applicantRef"]).toBe("31378");
+  });
+
+  it("reassembles the domain shape on read", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+
+    const loaded = await readCase(context, "rgs", "case_1");
+    expect(loaded).toBeDefined();
+    expect(loaded!.applicants).toHaveLength(2);
+    expect(loaded!.applicants[0]!.applicantRef).toBe("31377");
+    expect(loaded!.caseRef).toBe("31377");
+    expect(loaded!.destinationCountry).toBe("BH");
+  });
+
+  it("round-trips without losing or inventing a field", async () => {
+    const context = buildTestContext();
+    const original = buildCase();
+    await writeCase(context, original);
+    const loaded = await readCase(context, "rgs", "case_1");
+    expect(loaded).toEqual(original);
+  });
+
+  it("removes applicant items that are no longer part of the case", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+
+    const shrunk = buildCase({
+      applicants: [
+        { applicantRef: "31377", travellerId: "trv_1", custody: "NOT_HELD", outcome: "PENDING" },
+      ],
+    } as Partial<crm.CrmCase>);
+    await writeCase(context, shrunk);
+
+    const loaded = await readCase(context, "rgs", "case_1");
+    // Without the delete pass, a ghost second applicant survives here.
+    expect(loaded!.applicants).toHaveLength(1);
+    const applicantItems = await context.table.query(casePartitionKey("rgs", "case_1"), {
+      skPrefix: APPLICANT_SORT_KEY_PREFIX,
+    });
+    expect(applicantItems).toHaveLength(1);
+  });
+
+  it("indexes the case by status and by partner", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+    const metaItem = await context.table.get(casePartitionKey("rgs", "case_1"), "META");
+    expect(metaItem!["GSI1PK"]).toBe("TENANT#rgs#CASE_STATUS#NEW");
+    expect(metaItem!["GSI2PK"]).toBe("TENANT#rgs#PARTNER#partner_1");
+    expect(metaItem!["GSI2SK"]).toBe("2026-01-02");
+  });
+
+  it("returns undefined for a case that does not exist", async () => {
+    const context = buildTestContext();
+    expect(await readCase(context, "rgs", "nope")).toBeUndefined();
+  });
+
+  it("does not leak a case across tenants", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase());
+    expect(await readCase(context, "other-tenant", "case_1")).toBeUndefined();
+  });
+
+  it("throws a 404 from readCaseOrThrow when missing", async () => {
+    const context = buildTestContext();
+    await expect(readCaseOrThrow(context, "rgs", "nope")).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+});
