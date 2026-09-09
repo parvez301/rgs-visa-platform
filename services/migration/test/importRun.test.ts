@@ -489,7 +489,10 @@ describe("runImport", () => {
     const partnerListing = await listPartners(context, "rgs");
     expect(partnerListing.partners).toHaveLength(1);
     expect(partnerListing.partners[0]!.canonicalName).toBe("(no referrer recorded)");
-    expect(partnerListing.partners[0]!.partnerType).toBe("DIRECT");
+    // UNRECORDED, not DIRECT: a blank REFRENCE cell says nothing about how
+    // the work arrived, and DIRECT would assert RGS's own walk-in business on
+    // 207 real cases -- a guess no partner-type report could tell from fact.
+    expect(partnerListing.partners[0]!.partnerType).toBe("UNRECORDED");
 
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     expect(importedCase!.partnerId).toBe(partnerListing.partners[0]!.partnerId);

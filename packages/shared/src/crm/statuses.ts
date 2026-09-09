@@ -92,7 +92,15 @@ export const COURIER_MODES = [
 ] as const;
 export type CourierMode = (typeof COURIER_MODES)[number];
 
-export const PARTNER_TYPES = ["AGENCY", "CORPORATE", "DIRECT"] as const;
+/**
+ * "UNRECORDED" is not a kind of business relationship -- it is the absence of
+ * one on file, and it exists because the migration has 207 cases whose
+ * REFRENCE cell was blank. They were filed under the sentinel partner as
+ * DIRECT, which asserts "RGS's own walk-in customer": a guess, indistinguish-
+ * able in any partner-type report from the real direct accounts. A blank cell
+ * says nothing about how the work arrived, so the type says nothing either.
+ */
+export const PARTNER_TYPES = ["AGENCY", "CORPORATE", "DIRECT", "UNRECORDED"] as const;
 export type PartnerType = (typeof PARTNER_TYPES)[number];
 
 export const LINE_ITEM_KINDS = ["SERVICE", "GOVT_FEE", "ADDON"] as const;

@@ -510,12 +510,14 @@ async function resolvePartner(
     tenantId,
     {
       canonicalName: partnerNameToResolve,
-      // Ruling (task-9): the sentinel's type is an explicit, one-off choice
-      // ("(no referrer recorded)" is RGS's own direct business, not an
-      // agency). Every other partner keeps `normalizePartnerName`'s own
-      // inference -- setting `partnerType` for those would duplicate the
-      // domain's own canonicalization logic and risk disagreeing with it.
-      ...(isUnnormalizable ? { partnerType: "DIRECT" as crm.PartnerType } : {}),
+      // The sentinel's type is an explicit, one-off choice, and UNRECORDED
+      // rather than DIRECT: a blank REFRENCE cell says nothing about how the
+      // work arrived, and DIRECT would assert RGS's own walk-in business on
+      // 207 cases, counted as fact by any partner-type report. Every other
+      // partner keeps `normalizePartnerName`'s own inference -- setting
+      // `partnerType` for those would duplicate the domain's own
+      // canonicalization logic and risk disagreeing with it.
+      ...(isUnnormalizable ? { partnerType: "UNRECORDED" as crm.PartnerType } : {}),
     },
     actorEmail,
   );
