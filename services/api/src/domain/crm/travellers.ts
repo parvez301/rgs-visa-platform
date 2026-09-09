@@ -1,6 +1,7 @@
 import { crm } from "@rgs/shared";
+import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import { notFound } from "../../lib/errors";
+import { badRequest, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import { passportGsi3Pk, travellerNameGsi2Pk, travellerPartitionKey } from "./keys";
 
@@ -30,16 +31,31 @@ export async function upsertTraveller(
     if (existing) return existing;
   }
 
-  const traveller = crm.CrmTravellerSchema.parse({
-    tenantId,
-    travellerId: newId("trv", context.now().getTime()),
-    fullName: input.fullName,
-    normalizedName: normalizeTravellerName(input.fullName),
-    ...(input.dateOfBirth !== undefined ? { dateOfBirth: input.dateOfBirth } : {}),
-    ...(input.phone !== undefined ? { phone: input.phone } : {}),
-    ...(input.passportNumber !== undefined ? { passportNumber: input.passportNumber } : {}),
-    createdAt: context.now().toISOString(),
-  });
+  // Unwrapped, a ZodError here is not an ApiError, and router.ts maps only
+  // ApiError subclasses — so "   " as a full name (which buildLookupKey trims
+  // to "") came back as a 500. Every case creation goes through this call, so
+  // it must fail the way the rest of the API fails: a typed 400.
+  let traveller: crm.CrmTraveller;
+  try {
+    traveller = crm.CrmTravellerSchema.parse({
+      tenantId,
+      travellerId: newId("trv", context.now().getTime()),
+      fullName: input.fullName,
+      normalizedName: normalizeTravellerName(input.fullName),
+      ...(input.dateOfBirth !== undefined ? { dateOfBirth: input.dateOfBirth } : {}),
+      ...(input.phone !== undefined ? { phone: input.phone } : {}),
+      ...(input.passportNumber !== undefined ? { passportNumber: input.passportNumber } : {}),
+      createdAt: context.now().toISOString(),
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const firstIssue = error.issues[0];
+      throw badRequest(
+        firstIssue ? `${firstIssue.path.join(".")}: ${firstIssue.message}` : "Invalid traveller",
+      );
+    }
+    throw error;
+  }
 
   await context.table.put({
     PK: travellerPartitionKey(tenantId, traveller.travellerId),

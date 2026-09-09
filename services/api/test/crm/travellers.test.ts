@@ -38,6 +38,16 @@ describe("crm travellers", () => {
     expect(second.createdAt).toBe(first.createdAt);
   });
 
+  it("rejects a whitespace-only name with a typed 400 rather than a raw ZodError", async () => {
+    const context = buildTestContext();
+    // buildLookupKey trims "   " to "", which no schema accepts. Unwrapped, the
+    // ZodError escapes the router's ApiError mapping and becomes a 500.
+    await expect(upsertTraveller(context, "rgs", { fullName: "   " })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BAD_REQUEST",
+    });
+  });
+
   it("creates separate travellers when the passport differs", async () => {
     const context = buildTestContext();
     const yadav = await upsertTraveller(context, "rgs", {

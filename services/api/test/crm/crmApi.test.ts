@@ -279,6 +279,21 @@ describe("crm admin routes", () => {
     expect(found.payload.travellerId).toBe(created.payload.travellerId);
   });
 
+  // A traveller is created for every case, so this route is on the critical
+  // path for case creation. `min(1)` accepts "   ", CrmTravellerSchema then
+  // trims it to "" and rejects it, and an unwrapped ZodError is not an
+  // ApiError — the router maps it to a 500. The status code is the assertion:
+  // `.rejects.toThrow()` passes for any error, including the 500 shape.
+  it("returns 400, not 500, for a traveller name that is only whitespace", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const blankName = await call(router, "POST", "/api/v1/admin/crm/travellers", {
+      fullName: "   ",
+    });
+    expect(blankName.statusCode).toBe(400);
+    expect(blankName.payload.code).toBe("BAD_REQUEST");
+  });
+
   it("returns 404 looking up a passport with no traveller", async () => {
     const context = buildTestContext();
     const router = buildRouter(context);
