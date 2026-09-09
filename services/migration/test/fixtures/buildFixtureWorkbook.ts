@@ -15,6 +15,14 @@ const MINI_CRM_HEADER_ROW = [
   "Visa Type",
   "Status",
   "Additional Items",
+  "Remarks",
+  "COURIER DATE",
+  "payment status",
+  // c18 and c20 are the sheet's own empty spacer columns. They are here so a
+  // fixture row's TRACKING NO. sits at c19, exactly where the real file puts
+  // it -- reading c18 by mistake would return this header's blank column.
+  "Column 2",
+  "TRACKING NO.",
 ];
 
 /** Column E's header really is "China" in the source file. */
@@ -44,11 +52,11 @@ export async function buildFixtureWorkbook(): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
 
   const miniCrm = workbook.addWorksheet("Mini CRM");
-  miniCrm.addRow(["C","REF NO.","APPLICANTS NAME","No.","REFRENCE","Country","DOB","Sub Date","Collection","Passport No.","Entries","Visa Type","Status","Additional Items"]);
+  miniCrm.addRow(MINI_CRM_HEADER_ROW);
   // Collection is a real Date object, which is how exceljs hands back 1,045 of
   // Mini CRM's Collection cells. Sub Date stays text: the column is mixed.
-  miniCrm.addRow(["30-12-2024", 31376, "AKSHAY JAIN", 3, "Sudiva Spinners Pvt Ltd", "Turkey", "", "12/31/2024", new Date(Date.UTC(2025, 9, 1)), "V2404480", "Single", "Business", "Handover", "PHOTO, HOTEL"]);
-  miniCrm.addRow(["02-01-2025", 31377, "MEERA IYER", 1, "VWI Mumbai", "Vietnam", "", "05/01/2025", "", "M1234567", "Multiple 1 Yr", "Tourist", "Approved", ""]);
+  miniCrm.addRow(["30-12-2024", 31376, "AKSHAY JAIN", 3, "Sudiva Spinners Pvt Ltd", "Turkey", "", "12/31/2024", new Date(Date.UTC(2025, 9, 1)), "V2404480", "Single", "Business", "Handover", "PHOTO, HOTEL", "REFUSE(DTDC)", new Date(Date.UTC(2025, 1, 1)), "Bill Sent", "", "8288303"]);
+  miniCrm.addRow(["02-01-2025", 31377, "MEERA IYER", 1, "VWI Mumbai", "Vietnam", "", "05/01/2025", "", "M1234567", "Multiple 1 Yr", "Tourist", "Approved", "", "", "15/01/2025", "In Cash", "", "QG46TQUVWY"]);
   miniCrm.addRow(["03-01-2025", 31378, "RAVI NAIR", 1, "VWI BOM", "Czech Group", "", "aposttile", "", "", "Business", "Attestation", "DEU/DEL/190126/", ""]);
 
   // Column E's header really is "China" in the source file.

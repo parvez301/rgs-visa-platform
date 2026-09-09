@@ -17,6 +17,10 @@ export interface RawMiniCrmRow {
   visaType: string;
   status: string;
   additionalItems: string;
+  remarks: string;
+  courierDateRaw: string;
+  paymentStatus: string;
+  trackingNumber: string;
 }
 
 export interface RawYearRow {
@@ -194,6 +198,17 @@ export async function readWorkbook(workbookPath: string): Promise<WorkbookExtrac
       visaType: normaliseCellText(cellAt(12)),
       status: normaliseCellText(cellAt(13)),
       additionalItems: normaliseCellText(cellAt(14)),
+      // c15-c19. The reader used to stop at c14, discarding 3,217 populated
+      // cells: "Remarks" 270, "COURIER DATE" 256, "payment status" 34 and
+      // "TRACKING NO." 2,657 (measured over these 7,156 importable rows).
+      // c18 and c20 are the sheet's own empty "Column 2"/"Column 3" spacers
+      // -- measured at 0 non-empty cells each -- so they carry nothing to
+      // read. One "payment status" cell is a {text, hyperlink} object, which
+      // normaliseCellText already unwraps.
+      remarks: normaliseCellText(cellAt(15)),
+      courierDateRaw: normaliseDateCell(cellAt(16)),
+      paymentStatus: normaliseCellText(cellAt(17)),
+      trackingNumber: normaliseCellText(cellAt(19)),
     });
   });
 

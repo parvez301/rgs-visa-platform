@@ -662,6 +662,67 @@ describe("runImport", () => {
     expect(secondSummary.groupsProposed).toBe(0);
   });
 
+  // --- J1: the four Mini CRM columns nothing used to read -------------------
+
+  it("prefers Mini CRM's own TRACKING NO. over the 2025 YEAR join", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [buildMappedRow({ trackingNumber: "8288303" })],
+      // The year sheet is a strict SUBSET of Mini CRM by REF NO, so it is the
+      // fallback, never the source: 31 tracking numbers exist only on Mini
+      // CRM and were lost outright while the join was the only source.
+      contactDetails: new Map([["31376", { trackingNumber: "STALE-YEAR-SHEET" }]]),
+    });
+
+    const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    expect(importedCase!.applicants[0]!.trackingNumber).toBe("8288303");
+  });
+
+  it("still falls back to the 2025 YEAR tracking number when Mini CRM has none", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [buildMappedRow()],
+      contactDetails: new Map([["31376", { trackingNumber: "25DEL3G0012679" }]]),
+    });
+
+    const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    expect(importedCase!.applicants[0]!.trackingNumber).toBe("25DEL3G0012679");
+  });
+
+  it("imports the billing status the payment column actually recorded", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [
+        buildMappedRow({
+          caseDraft: { ...buildMappedRow().caseDraft, billingStatus: "BILL_SENT" },
+        }),
+      ],
+    });
+
+    const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    // "Migrated rows carry no billing evidence" was false for 32 rows: the
+    // sheet's payment status column says it outright.
+    expect(importedCase!.billingStatus).toBe("BILL_SENT");
+  });
+
+  it("writes the courier date the sheet recorded onto the case", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [
+        buildMappedRow({
+          caseDraft: { ...buildMappedRow().caseDraft, courierDate: "2025-01-15" },
+        }),
+      ],
+    });
+
+    const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    expect(importedCase!.courierDate).toBe("2025-01-15");
+  });
+
   // --- C1/C2: what a non-transactional writeCase and a lagging GSI leave -----
   //
   // Every test below needs a table that can fail the way a real one does.

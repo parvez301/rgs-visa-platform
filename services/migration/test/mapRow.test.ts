@@ -19,6 +19,10 @@ function buildRawRow(overrides: Partial<RawMiniCrmRow> = {}): RawMiniCrmRow {
     visaType: "Business",
     status: "Handover",
     additionalItems: "",
+    remarks: "",
+    courierDateRaw: "",
+    paymentStatus: "",
+    trackingNumber: "",
     ...overrides,
   };
 }
@@ -204,5 +208,76 @@ describe("mapRow — pass 1", () => {
     expect(dateReview?.rawValue).toBe("travel@airbournetravels.com");
     expect(mapped.legacyRaw["C"]).toBe("travel@airbournetravels.com");
     expect(mapped.caseDraft.receivedDate).toBeUndefined();
+  });
+
+  // --- The four columns beyond "Additional Items" (3,217 populated cells) ---
+
+  it("keeps Remarks, COURIER DATE, payment status and TRACKING NO. in legacyRaw", () => {
+    const mapped = mapRow(
+      buildRawRow({
+        remarks: "REFUSE(DTDC)",
+        courierDateRaw: "15/01/2025",
+        paymentStatus: "Bill Sent",
+        trackingNumber: "QG46TQUVWY",
+      }),
+    );
+    expect(mapped.legacyRaw["Remarks"]).toBe("REFUSE(DTDC)");
+    expect(mapped.legacyRaw["COURIER DATE"]).toBe("15/01/2025");
+    expect(mapped.legacyRaw["payment status"]).toBe("Bill Sent");
+    expect(mapped.legacyRaw["TRACKING NO."]).toBe("QG46TQUVWY");
+  });
+
+  it("maps COURIER DATE onto the case's own courierDate field", () => {
+    const mapped = mapRow(buildRawRow({ courierDateRaw: "15/01/2025" }));
+    // Day-first, like every other date on this sheet: 15 January, not a
+    // month-15 failure.
+    expect(mapped.caseDraft.courierDate).toBe("2025-01-15");
+    expect(mapped.reviewItems).toEqual([]);
+  });
+
+  it("keeps a COURIER DATE courier note verbatim without calling it a broken date", () => {
+    // 180 of this column's 256 populated cells look like this: a consignment
+    // number and a date, or a free-text despatch note. Routing them through
+    // the date-column path would queue 180 UNPARSEABLE_DATE items for cells
+    // that are not dates at all and are not broken.
+    const mapped = mapRow(buildRawRow({ courierDateRaw: "20778883086 - 24/2/2025" }));
+    expect(mapped.caseDraft.courierDate).toBeUndefined();
+    expect(mapped.legacyRaw["COURIER DATE"]).toBe("20778883086 - 24/2/2025");
+    expect(mapped.reviewItems).toEqual([]);
+  });
+
+  it("carries TRACKING NO. off the row itself, not only off the year-sheet join", () => {
+    const mapped = mapRow(buildRawRow({ trackingNumber: "8288303" }));
+    expect(mapped.trackingNumber).toBe("8288303");
+  });
+
+  it("maps the unambiguous payment statuses onto billingStatus", () => {
+    expect(mapRow(buildRawRow({ paymentStatus: "Bill Sent" })).caseDraft.billingStatus).toBe(
+      "BILL_SENT",
+    );
+    expect(
+      mapRow(buildRawRow({ paymentStatus: "Recived In Cash/UPI" })).caseDraft.billingStatus,
+    ).toBe("PAID");
+    expect(mapRow(buildRawRow({ paymentStatus: "Payment Receive" })).caseDraft.billingStatus).toBe(
+      "PAID",
+    );
+  });
+
+  it("refuses to guess a payment status it cannot read, and queues it instead", () => {
+    // "In Cash" is a payment METHOD: it does not say whether the cash was
+    // received or is merely expected. Reading it as PAID would put a
+    // fabricated billing state on a real case.
+    const mapped = mapRow(buildRawRow({ paymentStatus: "In Cash" }));
+    expect(mapped.caseDraft.billingStatus).toBeUndefined();
+    const paymentReview = mapped.reviewItems.find((item) => item.fieldName === "payment status");
+    expect(paymentReview?.reason).toBe("UNMAPPED_STATUS");
+    expect(paymentReview?.rawValue).toBe("In Cash");
+    expect(mapped.legacyRaw["payment status"]).toBe("In Cash");
+  });
+
+  it("leaves billing unset, with no review item, when the payment column is blank", () => {
+    const mapped = mapRow(buildRawRow({ paymentStatus: "" }));
+    expect(mapped.caseDraft.billingStatus).toBeUndefined();
+    expect(mapped.reviewItems).toEqual([]);
   });
 });

@@ -56,6 +56,22 @@ describe("readWorkbook", () => {
     expect(normaliseRefNo("31376.0")).toBe("31376");
   });
 
+  it("reads the four Mini CRM columns that sit past Additional Items", () => {
+    // 3,217 populated cells lived beyond c14 and were read by nothing:
+    // Remarks 270, COURIER DATE 256, payment status 34, TRACKING NO. 2,657.
+    const firstRow = extract.miniCrmRows[0]!;
+    expect(firstRow.remarks).toBe("REFUSE(DTDC)");
+    expect(firstRow.paymentStatus).toBe("Bill Sent");
+    // c19, NOT c18 — the sheet keeps an empty "Column 2" spacer between the
+    // payment column and the tracking column, so an off-by-one here reads
+    // blanks on every row and looks like a column nobody ever filled in.
+    expect(firstRow.trackingNumber).toBe("8288303");
+    // COURIER DATE is mixed Date/text like every other date column here, so
+    // it goes through the same UTC rendering rather than String(value).
+    expect(firstRow.courierDateRaw).toBe("2025-02-01");
+    expect(extract.miniCrmRows[1]!.courierDateRaw).toBe("15/01/2025");
+  });
+
   it("passes Mini CRM text dates through untouched", () => {
     expect(extract.miniCrmRows[0]!.subDateRaw).toBe("12/31/2024");
   });

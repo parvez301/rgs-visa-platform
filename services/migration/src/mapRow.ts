@@ -20,7 +20,14 @@ export interface MappedCaseDraft {
   custody: crm.CustodyStatus;
   outcome: crm.ApplicantOutcome;
   courierMode?: crm.CourierMode;
+  /**
+   * From the sheet's own "payment status" column. Absent means the column
+   * said nothing, which is the overwhelming majority of rows — the importer
+   * turns that into `UNKNOWN`.
+   */
+  billingStatus?: crm.BillingStatus;
   receivedDate?: string;
+  courierDate?: string;
   submissionDate?: string;
   expectedCollectionDate?: string;
   note?: string;
@@ -33,6 +40,8 @@ export interface MappedRow {
   partnerName: string;
   travellerFullName: string;
   passportNumber?: string;
+  /** "Mini CRM" c19. The `2025 YEAR` join is the fallback, not the source. */
+  trackingNumber?: string;
   applicantCount: number;
   caseDraft: MappedCaseDraft;
   reviewItems: PendingReviewItem[];
@@ -97,6 +106,29 @@ function mapDateField(
   return normalizedDate.isoDate;
 }
 
+/**
+ * The sheet's "payment status" column, which the importer used to ignore
+ * entirely — along with the claim, in a comment beside `billingStatus:
+ * "UNKNOWN"`, that "migrated rows carry no billing evidence". 34 rows carry
+ * exactly that evidence.
+ *
+ * Only the unambiguous spellings are mapped. Measured on the real workbook:
+ * "Bill Sent" x18, "Recived In Cash/UPI" x7, "Payment Receive" x7 — each of
+ * which states plainly whether the bill went out or the money came in.
+ *
+ * Two values are deliberately NOT here. "In Cash" (x1) names a payment
+ * METHOD and does not say whether the cash was received or is merely
+ * expected; and one cell is a {text, hyperlink} object holding
+ * "MYANMAR - SALIL KUMAR SRIVASTAVA" plus a Drive link — a name, not a
+ * payment status. Both raise a review item instead. Guessing either would
+ * put a fabricated billing state on a real case.
+ */
+const BILLING_STATUS_BY_PAYMENT_STATUS_KEY: Record<string, crm.BillingStatus> = {
+  "BILL SENT": "BILL_SENT",
+  "RECIVED IN CASH/UPI": "PAID",
+  "PAYMENT RECEIVE": "PAID",
+};
+
 export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
   const reviewItems: PendingReviewItem[] = [];
   const legacyRaw: Record<string, string> = {};
@@ -155,6 +187,34 @@ export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
   if (!isBlank(rawRow.dateOfBirthRaw)) {
     legacyRaw["DOB"] = rawRow.dateOfBirthRaw;
   }
+  // The four columns the reader used to stop short of. Each keeps a verbatim
+  // copy here even where it also lands on a structured field, because the
+  // structured field holds a NORMALIZED value (an ISO date, a billing enum)
+  // and this is the only record of what the cell actually said.
+  if (!isBlank(rawRow.remarks)) {
+    legacyRaw["Remarks"] = rawRow.remarks;
+  }
+  if (!isBlank(rawRow.courierDateRaw)) {
+    legacyRaw["COURIER DATE"] = rawRow.courierDateRaw;
+  }
+  if (!isBlank(rawRow.paymentStatus)) {
+    legacyRaw["payment status"] = rawRow.paymentStatus;
+  }
+  if (!isBlank(rawRow.trackingNumber)) {
+    legacyRaw["TRACKING NO."] = rawRow.trackingNumber;
+  }
+
+  const billingStatus =
+    BILLING_STATUS_BY_PAYMENT_STATUS_KEY[crm.buildLookupKey(rawRow.paymentStatus)];
+  if (!isBlank(rawRow.paymentStatus) && billingStatus === undefined) {
+    reviewItems.push({
+      reason: "UNMAPPED_STATUS",
+      fieldName: "payment status",
+      rawValue: rawRow.paymentStatus,
+      detail:
+        "The payment status column holds a value that does not state whether the bill was sent or the money received, so billing was left UNKNOWN rather than guessed.",
+    });
+  }
 
   const parsedApplicantCount = Number(rawRow.applicantCount);
   const applicantCount =
@@ -178,6 +238,7 @@ export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
     outcome: statusResult.outcome ?? "PENDING",
     ...(statusResult.courierMode !== null ? { courierMode: statusResult.courierMode } : {}),
     ...(statusResult.note !== null ? { note: statusResult.note } : {}),
+    ...(billingStatus !== undefined ? { billingStatus } : {}),
   };
 
   const receivedDate = mapDateField(rawRow.receivedDateRaw, "C", reviewItems, legacyRaw);
@@ -186,6 +247,26 @@ export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
   if (submissionDate !== undefined) caseDraft.submissionDate = submissionDate;
   const collectionDate = mapDateField(rawRow.collectionRaw, "Collection", reviewItems, legacyRaw);
   if (collectionDate !== undefined) caseDraft.expectedCollectionDate = collectionDate;
+  // `CrmCaseSchema` carries a `courierDate` field of exactly this name, so a
+  // cell that IS a date goes there rather than only into legacyRaw.
+  //
+  // But this column is NOT the same shape as "C" / "Sub Date" / "Collection",
+  // and it deliberately does not use `mapDateField`. Measured over its 256
+  // populated cells: only 76 are a date. The other 180 are courier notes that
+  // happen to contain one — "20778883086 - 24/2/2025" (a consignment number
+  // and a date), "COURIER 09/07", "porter 31/08/2026", "PP CURRENT & OLD
+  // DISPACHED TO VARNI TRAVEL 02/09 BLUE DART". Those are not malformed
+  // dates, so calling them UNPARSEABLE_DATE would tell a reviewer that 70% of
+  // a working column is broken, and would put 180 items into a queue whose
+  // whole design premise (spec §6) is that it stays small enough to work
+  // through. Every one of them is already preserved verbatim in legacyRaw
+  // above, so nothing is discarded by not flagging them. Splitting the
+  // composites into number + date is real recovery, but it is guesswork about
+  // a format nobody documented -- Plan 5's job, with the raw text in hand.
+  if (!isBlank(rawRow.courierDateRaw)) {
+    const courierDate = crm.normalizeExcelDate(rawRow.courierDateRaw).isoDate;
+    if (courierDate !== null) caseDraft.courierDate = courierDate;
+  }
 
   return {
     caseRef: rawRow.caseRef,
@@ -194,6 +275,7 @@ export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
     partnerName: rawRow.partnerName,
     travellerFullName: rawRow.applicantsName,
     ...(isBlank(rawRow.passportNumber) ? {} : { passportNumber: rawRow.passportNumber }),
+    ...(isBlank(rawRow.trackingNumber) ? {} : { trackingNumber: rawRow.trackingNumber }),
     applicantCount,
     caseDraft,
     reviewItems,

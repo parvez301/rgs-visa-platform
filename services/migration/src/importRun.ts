@@ -790,6 +790,9 @@ export async function runImport(
       legacyRaw["No."] = String(mappedRow.applicantCount);
     }
 
+    const trackingNumberForApplicant =
+      mappedRow.trackingNumber ?? contactDetailsForRow?.trackingNumber;
+
     const destinationCountryIsMissing = resolvedCaseDraft.destinationCountry === "";
     const destinationCountryForCase = destinationCountryIsMissing
       ? UNKNOWN_DESTINATION_COUNTRY_SENTINEL
@@ -831,15 +834,25 @@ export async function runImport(
         ...(resolvedCaseDraft.processing !== undefined ? { processing: resolvedCaseDraft.processing } : {}),
         ...(resolvedCaseDraft.validity !== undefined ? { validity: resolvedCaseDraft.validity } : {}),
         caseStatus: resolvedCaseDraft.caseStatus,
-        // Ruling/brief: migrated rows carry no billing evidence. UNKNOWN,
-        // never UNBILLED -- the billing_overdue watchdog excludes UNKNOWN.
-        billingStatus: "UNKNOWN",
+        // Ruling/brief: a migrated row that says nothing about billing is
+        // UNKNOWN, never UNBILLED -- the billing_overdue watchdog excludes
+        // UNKNOWN, and UNBILLED would nag on thousands of imported cases.
+        //
+        // But "migrated rows carry no billing evidence", the reason this line
+        // used to give, is not true of all of them: the sheet's own "payment
+        // status" column states it outright on 32 rows (measured), and
+        // mapRow maps only the spellings that are unambiguous. The other two
+        // stay UNKNOWN and raise a review item rather than being guessed.
+        billingStatus: resolvedCaseDraft.billingStatus ?? "UNKNOWN",
         receivedDate: receivedDateForCase,
         ...(resolvedCaseDraft.submissionDate !== undefined
           ? { submissionDate: resolvedCaseDraft.submissionDate }
           : {}),
         ...(resolvedCaseDraft.expectedCollectionDate !== undefined
           ? { expectedCollectionDate: resolvedCaseDraft.expectedCollectionDate }
+          : {}),
+        ...(resolvedCaseDraft.courierDate !== undefined
+          ? { courierDate: resolvedCaseDraft.courierDate }
           : {}),
         applicants: [
           {
@@ -853,8 +866,13 @@ export async function runImport(
             ...(resolvedCaseDraft.courierMode !== undefined
               ? { courierMode: resolvedCaseDraft.courierMode }
               : {}),
-            ...(contactDetailsForRow?.trackingNumber !== undefined
-              ? { trackingNumber: contactDetailsForRow.trackingNumber }
+            // "Mini CRM" c19 first, the `2025 YEAR` join only as a fallback.
+            // Sourcing it from the year sheet alone loses 31 tracking numbers
+            // outright (measured): that sheet is a strict SUBSET of "Mini
+            // CRM" by REF NO, so a ref it does not carry has no row to join
+            // against, however good the join is.
+            ...(trackingNumberForApplicant !== undefined
+              ? { trackingNumber: trackingNumberForApplicant }
               : {}),
           },
         ],
