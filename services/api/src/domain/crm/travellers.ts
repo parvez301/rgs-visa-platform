@@ -1,7 +1,8 @@
 import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import { badRequest, notFound } from "../../lib/errors";
+import type { TableItem } from "../../lib/db";
+import { badRequest, corruptRecord, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import {
   META_SORT_KEY,
@@ -89,7 +90,7 @@ export async function findTravellerByPassport(
     { limit: 1 },
   );
   const firstMatch = matches[0];
-  return firstMatch ? crm.CrmTravellerSchema.parse(stripKeys(firstMatch)) : undefined;
+  return firstMatch ? parseStoredTraveller(firstMatch) : undefined;
 }
 
 /**
@@ -110,7 +111,7 @@ export async function findTravellerByName(
     { limit: 1 },
   );
   const firstMatch = matches[0];
-  return firstMatch ? crm.CrmTravellerSchema.parse(stripKeys(firstMatch)) : undefined;
+  return firstMatch ? parseStoredTraveller(firstMatch) : undefined;
 }
 
 export async function getTravellerOrThrow(
@@ -123,7 +124,51 @@ export async function getTravellerOrThrow(
     META_SORT_KEY,
   );
   if (!travellerItem) throw notFound("Traveller");
-  return crm.CrmTravellerSchema.parse(stripKeys(travellerItem));
+  return parseStoredTraveller(travellerItem);
+}
+
+/**
+ * The single place a stored traveller item becomes a domain CrmTraveller.
+ *
+ * Raw, a ZodError is not an ApiError and router.ts maps only ApiError
+ * subclasses — so a half-written traveller row escaped every read here as a
+ * 500. Typed as CorruptRecordError it answers 409, exactly as readCase already
+ * does for a case partition that will not reassemble.
+ */
+function parseStoredTraveller(travellerItem: TableItem): crm.CrmTraveller {
+  try {
+    return crm.CrmTravellerSchema.parse(stripKeys(travellerItem));
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw corruptRecord(
+        "Traveller",
+        travellerIdOfStoredItem(travellerItem),
+        describeFirstIssue(error),
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * The id that names a stored traveller row. The body carries it, but a row that
+ * lost it is exactly the kind of row this path exists for, and
+ * String(undefined) would report the literal id "undefined" — which finds
+ * nothing. The storage key always names the row, so it is the fallback.
+ */
+function travellerIdOfStoredItem(travellerItem: TableItem): string {
+  const storedTravellerId = travellerItem["travellerId"];
+  if (typeof storedTravellerId === "string" && storedTravellerId.length > 0) {
+    return storedTravellerId;
+  }
+  return travellerItem.PK;
+}
+
+function describeFirstIssue(error: ZodError): string {
+  const firstIssue = error.issues[0];
+  return firstIssue
+    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
+    : "the stored item failed schema validation";
 }
 
 function stripKeys(item: Record<string, unknown>): Record<string, unknown> {

@@ -4,6 +4,11 @@ import { buildTestContext } from "../helpers";
 import { Router } from "../../src/http/router";
 import { registerCrmRoutes } from "../../src/http/crmApi";
 import { writeCase } from "../../src/domain/crm/caseStore";
+import {
+  META_SORT_KEY,
+  passportGsi3Pk,
+  travellerPartitionKey,
+} from "../../src/domain/crm/keys";
 import type { AppContext } from "../../src/lib/context";
 
 function buildRouter(context: AppContext): Router {
@@ -662,6 +667,35 @@ describe("crm admin routes", () => {
     );
     expect(broken.statusCode).toBe(409);
     expect(broken.payload.code).toBe("CORRUPT_RECORD");
+  });
+
+  // A stored traveller row that will not parse must reach the caller as a
+  // typed 409 over HTTP, not a 500. Asserted on the real router response,
+  // because the status code is the part that was wrong.
+  it("answers 409 rather than 500 when a stored traveller record will not parse", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    // Indexed under its passport, but the body has lost its normalizedName —
+    // the shape a half-written row or an older importer leaves behind.
+    await context.table.put({
+      PK: travellerPartitionKey("rgs", "trv_half_written"),
+      SK: META_SORT_KEY,
+      GSI3PK: passportGsi3Pk("rgs", "Z6931368"),
+      GSI3SK: "trv_half_written",
+      tenantId: "rgs",
+      travellerId: "trv_half_written",
+      fullName: "Umesh Kumar Yadav",
+      passportNumber: "Z6931368",
+      createdAt: "2026-07-23T10:00:00.000Z",
+    });
+
+    const looked = await call(
+      router,
+      "GET",
+      "/api/v1/admin/crm/travellers/by-passport/Z6931368",
+    );
+    expect(looked.statusCode).toBe(409);
+    expect(looked.payload.code).toBe("CORRUPT_RECORD");
   });
 
   // requireAdmin(requestContext) is the first statement in every CRM route,

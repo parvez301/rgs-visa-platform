@@ -1,11 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { buildTestContext } from "../helpers";
+import { buildTestContext, type TestContext } from "../helpers";
+import { CorruptRecordError } from "../../src/lib/errors";
 import {
+  META_SORT_KEY,
+  passportGsi3Pk,
+  travellerNameGsi2Pk,
+  travellerPartitionKey,
+} from "../../src/domain/crm/keys";
+import {
+  findTravellerByName,
   findTravellerByPassport,
   getTravellerOrThrow,
   normalizeTravellerName,
   upsertTraveller,
 } from "../../src/domain/crm/travellers";
+
+/**
+ * Writes a traveller item that is indexed under every lookup a read goes
+ * through, but whose body no longer satisfies CrmTravellerSchema — here the
+ * normalizedName is gone. upsertTraveller cannot produce this; a half-written
+ * row, a hand-repair, or an importer writing an older shape can.
+ */
+async function seedUnparseableTravellerItem(
+  context: TestContext,
+  options: { travellerId: string; fullName: string; passportNumber: string },
+): Promise<void> {
+  await context.table.put({
+    PK: travellerPartitionKey("rgs", options.travellerId),
+    SK: META_SORT_KEY,
+    GSI2PK: travellerNameGsi2Pk("rgs", normalizeTravellerName(options.fullName)),
+    GSI2SK: options.travellerId,
+    GSI3PK: passportGsi3Pk("rgs", options.passportNumber),
+    GSI3SK: options.travellerId,
+    tenantId: "rgs",
+    travellerId: options.travellerId,
+    fullName: options.fullName,
+    passportNumber: options.passportNumber,
+    createdAt: "2026-07-23T10:00:00.000Z",
+  });
+}
 
 describe("crm travellers", () => {
   it("creates a traveller and indexes the passport", async () => {
@@ -125,6 +158,87 @@ describe("crm travellers", () => {
     expect(normalizeTravellerName(curlyApostropheName)).toBe(
       normalizeTravellerName(straightApostropheName),
     );
+  });
+
+  // --- A stored traveller that will not parse is a 409, never a raw 500. ---
+  // Raw, the ZodError is not an ApiError, and router.ts maps only ApiError
+  // subclasses — so every one of these reads answered 500. Each test asserts
+  // the status code, not merely that something was thrown: `.rejects.toThrow()`
+  // holds just as well for the ZodError this fix exists to remove.
+  describe("a stored traveller record that no longer parses", () => {
+    const CORRUPT_TRAVELLER_ID = "trv_half_written";
+
+    it("surfaces as a typed 409 from the passport lookup", async () => {
+      const context = buildTestContext();
+      await seedUnparseableTravellerItem(context, {
+        travellerId: CORRUPT_TRAVELLER_ID,
+        fullName: "Umesh Kumar Yadav",
+        passportNumber: "Z6931368",
+      });
+
+      const passportLookup = findTravellerByPassport(context, "rgs", "Z6931368");
+      await expect(passportLookup).rejects.toBeInstanceOf(CorruptRecordError);
+      await expect(passportLookup).rejects.toMatchObject({
+        statusCode: 409,
+        code: "CORRUPT_RECORD",
+      });
+      // The id is what an operator repairs the row with, so it must be in the message.
+      await expect(passportLookup).rejects.toThrow(CORRUPT_TRAVELLER_ID);
+    });
+
+    it("surfaces as a typed 409 from the fuzzy name lookup", async () => {
+      const context = buildTestContext();
+      await seedUnparseableTravellerItem(context, {
+        travellerId: CORRUPT_TRAVELLER_ID,
+        fullName: "Umesh Kumar Yadav",
+        passportNumber: "Z6931368",
+      });
+
+      const nameLookup = findTravellerByName(context, "rgs", "umesh kumar yadav");
+      await expect(nameLookup).rejects.toBeInstanceOf(CorruptRecordError);
+      await expect(nameLookup).rejects.toMatchObject({
+        statusCode: 409,
+        code: "CORRUPT_RECORD",
+      });
+      await expect(nameLookup).rejects.toThrow(CORRUPT_TRAVELLER_ID);
+    });
+
+    it("surfaces as a typed 409 from the single-traveller read, naming the bad field", async () => {
+      const context = buildTestContext();
+      await seedUnparseableTravellerItem(context, {
+        travellerId: CORRUPT_TRAVELLER_ID,
+        fullName: "Umesh Kumar Yadav",
+        passportNumber: "Z6931368",
+      });
+
+      const singleRead = getTravellerOrThrow(context, "rgs", CORRUPT_TRAVELLER_ID);
+      await expect(singleRead).rejects.toBeInstanceOf(CorruptRecordError);
+      await expect(singleRead).rejects.toMatchObject({
+        statusCode: 409,
+        code: "CORRUPT_RECORD",
+      });
+      // 409 and not 404: the record is on file, it is unreadable. A 404 would
+      // tell an operator to re-create a traveller that already exists.
+      await expect(singleRead).rejects.toThrow("normalizedName");
+    });
+
+    it("names an unreadable row by its storage key when the body lost its travellerId", async () => {
+      const context = buildTestContext();
+      const partitionKey = travellerPartitionKey("rgs", "trv_lost_its_id");
+      await context.table.put({
+        PK: partitionKey,
+        SK: META_SORT_KEY,
+        tenantId: "rgs",
+        fullName: "Umesh Kumar Yadav",
+        createdAt: "2026-07-23T10:00:00.000Z",
+      });
+
+      // String(item.travellerId) would report the literal id "undefined", which
+      // finds no row at all. The storage key is the handle that still works.
+      await expect(
+        getTravellerOrThrow(context, "rgs", "trv_lost_its_id"),
+      ).rejects.toThrow(partitionKey);
+    });
   });
 
   it("throws a 404 for a traveller that does not exist", async () => {
