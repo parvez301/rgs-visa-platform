@@ -1,6 +1,8 @@
 import { crm } from "@rgs/shared";
+import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import { badRequest, conflict, notFound } from "../../lib/errors";
+import type { TableItem } from "../../lib/db";
+import { badRequest, conflict, corruptRecord, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "./keys";
 
@@ -80,7 +82,7 @@ export async function getPartnerOrThrow(
 ): Promise<crm.Partner> {
   const partnerItem = await context.table.get(partnerPartitionKey(tenantId, partnerId), META_SORT_KEY);
   if (!partnerItem) throw notFound("Partner");
-  return crm.PartnerSchema.parse(stripKeys(partnerItem));
+  return parseStoredPartner(partnerItem);
 }
 
 /**
@@ -119,7 +121,48 @@ export async function findPartnerByName(
     ),
   );
   const matchingItem = canonicalNameMatch ?? aliasMatch;
-  return matchingItem ? crm.PartnerSchema.parse(stripKeys(matchingItem)) : undefined;
+  return matchingItem ? parseStoredPartner(matchingItem) : undefined;
+}
+
+/**
+ * The single place a stored partner item becomes a domain Partner.
+ *
+ * Raw, a ZodError is not an ApiError and router.ts maps only ApiError
+ * subclasses — so a partner row that no longer satisfies PartnerSchema answered
+ * 500 from every read. Typed as CorruptRecordError it answers 409, exactly as
+ * readCase already does for a case partition that will not reassemble, and
+ * listPartners can then catch precisely this and let everything else propagate.
+ */
+function parseStoredPartner(partnerItem: TableItem): crm.Partner {
+  try {
+    return crm.PartnerSchema.parse(stripKeys(partnerItem));
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw corruptRecord("Partner", partnerIdOfStoredItem(partnerItem), describeFirstIssue(error));
+    }
+    throw error;
+  }
+}
+
+/**
+ * The id that names a stored partner row. The body carries it, but a row that
+ * lost it is exactly the kind of row this path exists for, and
+ * String(undefined) would report the literal id "undefined" — which finds
+ * nothing. The storage key always names the row, so it is the fallback.
+ */
+function partnerIdOfStoredItem(partnerItem: TableItem): string {
+  const storedPartnerId = partnerItem["partnerId"];
+  if (typeof storedPartnerId === "string" && storedPartnerId.length > 0) {
+    return storedPartnerId;
+  }
+  return partnerItem.PK;
+}
+
+function describeFirstIssue(error: ZodError): string {
+  const firstIssue = error.issues[0];
+  return firstIssue
+    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
+    : "the stored item failed schema validation";
 }
 
 /** The aliases on a raw stored item, ignoring anything that is not a string. */

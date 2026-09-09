@@ -1,6 +1,7 @@
 import { crm } from "@rgs/shared";
 import { describe, expect, it } from "vitest";
 import { buildTestContext, type TestContext } from "../helpers";
+import { CorruptRecordError } from "../../src/lib/errors";
 import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "../../src/domain/crm/keys";
 import {
   createPartner,
@@ -34,6 +35,34 @@ async function seedPartnerItemDirectly(
     canonicalName,
     partnerType: "AGENCY",
     aliases,
+    createdAt: "2026-07-23T10:00:00.000Z",
+  });
+  return partnerId;
+}
+
+/**
+ * Writes a partner row that is indexed exactly like a real one — the list and
+ * the name lookup both reach it — but whose body no longer satisfies
+ * PartnerSchema: partnerType is gone. createPartner cannot produce this; a
+ * half-written row, a hand-repair, or an importer writing an older shape can,
+ * and the migration importer is about to create partners from 7,157 rows of
+ * free-text spreadsheet names.
+ */
+async function seedUnparseablePartnerItem(
+  context: TestContext,
+  tenantId: string,
+  canonicalName: string,
+  partnerId = "prt_half_written",
+): Promise<string> {
+  await context.table.put({
+    PK: partnerPartitionKey(tenantId, partnerId),
+    SK: META_SORT_KEY,
+    GSI1PK: partnerListGsi1Pk(tenantId),
+    GSI1SK: crm.normalizePartnerName(canonicalName).canonicalKey ?? "",
+    tenantId,
+    partnerId,
+    canonicalName,
+    aliases: [],
     createdAt: "2026-07-23T10:00:00.000Z",
   });
   return partnerId;
@@ -294,6 +323,63 @@ describe("crm partners", () => {
     const context = buildTestContext();
     await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "ops@rgs.test");
     expect(await listPartners(context, "other-tenant")).toEqual([]);
+  });
+
+  // --- A stored partner that will not parse is a 409, never a raw 500. ---
+  // Raw, the ZodError is not an ApiError, and router.ts maps only ApiError
+  // subclasses. Each test asserts the status code rather than that something
+  // threw: `.rejects.toThrow()` holds just as well for the ZodError being
+  // removed here, which is how this class of bug stayed hidden twice already.
+  describe("a stored partner record that no longer parses", () => {
+    it("surfaces as a typed 409 from the name lookup, naming the bad field", async () => {
+      const context = buildTestContext();
+      const partnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
+
+      const nameLookup = findPartnerByName(context, "rgs", "Ozzy Travels");
+      await expect(nameLookup).rejects.toBeInstanceOf(CorruptRecordError);
+      await expect(nameLookup).rejects.toMatchObject({
+        statusCode: 409,
+        code: "CORRUPT_RECORD",
+      });
+      // The id and the field are what an operator repairs the row with.
+      await expect(nameLookup).rejects.toThrow(partnerId);
+      await expect(nameLookup).rejects.toThrow("partnerType");
+    });
+
+    it("surfaces as a typed 409 from the single-partner read", async () => {
+      const context = buildTestContext();
+      const partnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
+
+      const singleRead = getPartnerOrThrow(context, "rgs", partnerId);
+      await expect(singleRead).rejects.toBeInstanceOf(CorruptRecordError);
+      // 409 and not 404: the partner is on file, it is unreadable. A 404 would
+      // tell an operator to re-create a partner that already exists, which
+      // splits that partner's cases, volume and revenue across two records.
+      await expect(singleRead).rejects.toMatchObject({
+        statusCode: 409,
+        code: "CORRUPT_RECORD",
+      });
+    });
+
+    it("names an unreadable row by its storage key when the body lost its partnerId", async () => {
+      const context = buildTestContext();
+      const partitionKey = partnerPartitionKey("rgs", "prt_lost_its_id");
+      await context.table.put({
+        PK: partitionKey,
+        SK: META_SORT_KEY,
+        GSI1PK: partnerListGsi1Pk("rgs"),
+        GSI1SK: crm.normalizePartnerName("Ozzy Travels").canonicalKey ?? "",
+        tenantId: "rgs",
+        canonicalName: "Ozzy Travels",
+        createdAt: "2026-07-23T10:00:00.000Z",
+      });
+
+      // String(item.partnerId) would report the literal id "undefined", which
+      // finds no row at all. The storage key is the handle that still works.
+      await expect(
+        getPartnerOrThrow(context, "rgs", "prt_lost_its_id"),
+      ).rejects.toThrow(partitionKey);
+    });
   });
 
   it("throws a 404 for a partner that does not exist", async () => {
