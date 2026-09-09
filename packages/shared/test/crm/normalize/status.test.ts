@@ -43,6 +43,25 @@ describe("normalizeStatus — outcomes", () => {
     expect(normalizeStatus("Rejected").outcome).toBe("REJECTED");
     expect(normalizeStatus("SENT BACK").outcome).toBe("SENT_BACK");
   });
+
+  it("imports a rejection as a decided case", () => {
+    expect(normalizeStatus("Rejected").caseStatus).toBe("DECIDED");
+  });
+
+  // 30 rows of the workbook carry `SENT BACK`. Importing each of them as
+  // DECIDED would have manufactured, thirty times over, the exact state the
+  // reopen fix exists to prevent: a decided case holding a live applicant, cut
+  // off from every off-ramp, whose only exit is to CLOSE a file the embassy had
+  // handed back. A sent-back file is with RGS and still live work.
+  it("imports the 30 SENT BACK rows as live work, not as decided cases", () => {
+    const sentBack = normalizeStatus("SENT BACK");
+    expect(sentBack.caseStatus).toBe("SUBMITTED");
+    expect(sentBack.outcome).toBe("SENT_BACK");
+    // Custody stays unmapped: the sheet says the file came back, not where the
+    // passport physically is, and inventing a custody value is a guess.
+    expect(sentBack.custody).toBeNull();
+    expect(sentBack.needsReview).toBe(false);
+  });
 });
 
 describe("normalizeStatus — custody and courier", () => {

@@ -45,7 +45,13 @@ const MAPPING_BY_STATUS: Record<string, StatusMapping> = {
   "ONLINE SUBMITTED": mapping({ caseStatus: "SUBMITTED", custody: "AT_EMBASSY" }),
   APPROVED: mapping({ caseStatus: "DECIDED", outcome: "APPROVED" }),
   REJECTED: mapping({ caseStatus: "DECIDED", outcome: "REJECTED" }),
-  "SENT BACK": mapping({ caseStatus: "DECIDED", outcome: "SENT_BACK" }),
+  // Not DECIDED: the embassy has handed the file back to RGS for a correction,
+  // which is live work, not a verdict. 30 workbook rows carry this value, and
+  // importing them as DECIDED would have created 30 cases holding a SENT_BACK
+  // applicant with no off-ramp out — see deriveCaseStatusFromApplicants.
+  // Custody is deliberately left unmapped: the sheet says the file came back,
+  // not where the passport is.
+  "SENT BACK": mapping({ caseStatus: "SUBMITTED", outcome: "SENT_BACK" }),
 
   "SENT ON COURIER": mapping({ custody: "IN_TRANSIT" }),
   DTDC: mapping({ custody: "IN_TRANSIT", courierMode: "DTDC" }),
