@@ -6,7 +6,13 @@ import { BestEffortEmailSender, SesEmailSender } from "../lib/email";
 import { buildAdminRouter } from "./adminApi";
 import { buildUserRouter } from "./userApi";
 
-function buildProductionContext(): AppContext {
+/**
+ * Exported so `services/migration/src/cli.ts` can reuse the exact same
+ * production wiring rather than assembling a second `AppContext` builder by
+ * hand. The migration CLI points at the same real DynamoDB table this
+ * Lambda does, so it must be configured (and fail closed) the same way.
+ */
+export function buildProductionContext(): AppContext {
   const tableName = process.env["TABLE_NAME"];
   const documentsBucket = process.env["DOCUMENTS_BUCKET"];
   const senderAddress = process.env["EMAIL_SENDER"];

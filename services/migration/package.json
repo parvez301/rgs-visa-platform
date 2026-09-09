@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "import": "node --experimental-strip-types src/cli.ts"
+    "import": "tsx src/cli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",
@@ -15,6 +15,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   }

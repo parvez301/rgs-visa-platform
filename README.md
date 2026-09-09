@@ -86,7 +86,8 @@ rgs/
 │   ├── portal/         # Traveller SPA
 │   └── admin/          # Admin/ops SPA
 ├── services/
-│   └── api/            # Lambda handlers, domain logic (ports-and-adapters)
+│   ├── api/            # Lambda handlers, domain logic (ports-and-adapters)
+│   └── migration/      # One-off legacy-workbook importer CLI — not part of the deployed stack
 ├── packages/
 │   └── shared/         # @rgs/shared — Zod schemas, status machine, country catalog seed
 ├── infra/              # AWS CDK app (single stack per environment)
