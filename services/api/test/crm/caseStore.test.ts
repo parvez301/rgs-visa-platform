@@ -117,4 +117,29 @@ describe("caseStore", () => {
       statusCode: 404,
     });
   });
+
+  it("preserves applicant order across the single/double-digit boundary", async () => {
+    const context = buildTestContext();
+    // Build a case with 11 applicants to cross the APPLICANT#09 / APPLICANT#10 boundary.
+    // Each applicant has a unique passportNumber so position is identifiable.
+    const applicantsWithDistinctIds = Array.from({ length: 11 }, (_, i) => ({
+      applicantRef: String(30000 + i),
+      travellerId: `trv_${i}`,
+      custody: "NOT_HELD" as const,
+      outcome: "PENDING" as const,
+      passportNumber: `PASSPORT_${String(i).padStart(2, "0")}`,
+    }));
+
+    const original = buildCase({
+      applicants: applicantsWithDistinctIds,
+    } as Partial<crm.CrmCase>);
+
+    await writeCase(context, original);
+    const loaded = await readCase(context, "rgs", "case_1");
+
+    // Deeply equal array assertion catches order mismatches.
+    // Without 2-digit padding, APPLICANT#10 would sort before APPLICANT#09,
+    // and loaded.applicants would be reordered, failing this assertion.
+    expect(loaded!.applicants).toEqual(original.applicants);
+  });
 });
