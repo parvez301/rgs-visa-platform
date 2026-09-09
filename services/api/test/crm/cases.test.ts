@@ -2,7 +2,11 @@ import { crm } from "@rgs/shared";
 import { describe, expect, it, vi } from "vitest";
 import { buildTestContext, type TestContext } from "../helpers";
 import { writeCase } from "../../src/domain/crm/caseStore";
-import { casePartitionKey, caseStatusGsi1Pk } from "../../src/domain/crm/keys";
+import {
+  casePartitionKey,
+  caseStatusGsi1Pk,
+  travellerPartitionKey,
+} from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
@@ -440,18 +444,42 @@ describe("crm cases", () => {
     expect(listed.unreadableCaseIds).toEqual(["case_that_was_deleted"]);
   });
 
-  it("warns about a META item it could not even name", async () => {
-    const context = buildTestContext();
-    const partnerId = await seedPartner(context);
-    await seedCase(context, partnerId, "31377");
+  // The one shape where nothing names a case: the body has no caseId AND the
+  // partition key is not a case partition either, so the caseId fallback has
+  // nothing to recover. A row hand-repaired into the wrong partition looks
+  // exactly like this. The previous test for it used a real case partition key,
+  // which the fallback resolves — it went down the corrupt-record path instead
+  // and left this guard unexercised.
+  const HAND_REPAIRED_META_PARTITION_KEY = travellerPartitionKey("rgs", "t_hand_repaired");
+
+  async function putUnidentifiableMetaItem(context: TestContext): Promise<void> {
     await context.table.put({
-      PK: casePartitionKey("rgs", "case_ghost"),
+      PK: HAND_REPAIRED_META_PARTITION_KEY,
       SK: "META",
       GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
       GSI1SK: "2026-01-02T10:00:00.000Z",
       tenantId: "rgs",
-      caseRef: "31379",
+      caseRef: "31381",
     });
+  }
+
+  it("reports a META item that neither its body nor its key names a case for", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const healthyCase = await seedCase(context, partnerId, "31377");
+    await putUnidentifiableMetaItem(context);
+
+    const listed = await listCasesByStatus(context, "rgs", "NEW");
+    expect(listed.cases.map((listedCase) => listedCase.caseId)).toEqual([healthyCase.caseId]);
+    // The storage key is the only handle an operator has on a row like this.
+    expect(listed.unreadableCaseIds).toEqual([HAND_REPAIRED_META_PARTITION_KEY]);
+  });
+
+  it("warns about a META item it could not even name", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    await putUnidentifiableMetaItem(context);
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     let warnedText = "";
@@ -461,7 +489,7 @@ describe("crm cases", () => {
     } finally {
       warnSpy.mockRestore();
     }
-    expect(warnedText).toContain("case_ghost");
+    expect(warnedText).toContain(HAND_REPAIRED_META_PARTITION_KEY);
   });
 
   it("warns with the caseId of a case it had to skip", async () => {

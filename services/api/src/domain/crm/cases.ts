@@ -1,6 +1,7 @@
 import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
+import type { TableItem } from "../../lib/db";
 import { CorruptRecordError, badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
@@ -347,7 +348,7 @@ export async function listCasesByPartner(
 async function loadCasesFromMetaItems(
   context: AppContext,
   tenantId: string,
-  metaItems: Array<Record<string, unknown>>,
+  metaItems: TableItem[],
 ): Promise<CaseListing> {
   const loadedCases: crm.CrmCase[] = [];
   const unreadableCaseIds: string[] = [];
@@ -355,14 +356,14 @@ async function loadCasesFromMetaItems(
     if (metaItem["SK"] !== META_SORT_KEY) continue;
     const caseId = caseIdOfMetaItem(metaItem);
     if (caseId === undefined) {
-      // Neither the body nor the partition key names a case. Report the raw key
-      // — it is all an operator has to find the row with, and String(undefined)
-      // used to turn this into the literal id "undefined", which reads back as
-      // no case at all and left the loop without a word.
-      const unidentifiableKey = String(metaItem["PK"] ?? "(no partition key)");
-      unreadableCaseIds.push(unidentifiableKey);
+      // Neither the body nor the partition key names a case — a row repaired
+      // into a partition that is not a case partition at all looks like this.
+      // Report the storage key: it is all an operator has to find the row with,
+      // and String(undefined) used to turn this into the literal id
+      // "undefined", which reads back as no case and left the loop wordless.
+      unreadableCaseIds.push(metaItem.PK);
       console.warn(
-        `Skipped an unidentifiable CRM case META item in tenant ${tenantId}: ${unidentifiableKey}`,
+        `Skipped an unidentifiable CRM case META item in tenant ${tenantId}: ${metaItem.PK}`,
       );
       continue;
     }
@@ -395,11 +396,10 @@ async function loadCasesFromMetaItems(
  * half-written or hand-repaired item may not, and the partition key always
  * does — so the key is the fallback rather than the string "undefined".
  */
-function caseIdOfMetaItem(metaItem: Record<string, unknown>): string | undefined {
+function caseIdOfMetaItem(metaItem: TableItem): string | undefined {
   const caseIdFromBody = metaItem["caseId"];
   if (typeof caseIdFromBody === "string" && caseIdFromBody.length > 0) {
     return caseIdFromBody;
   }
-  const partitionKey = metaItem["PK"];
-  return typeof partitionKey === "string" ? caseIdFromPartitionKey(partitionKey) : undefined;
+  return caseIdFromPartitionKey(metaItem.PK);
 }
