@@ -33,8 +33,9 @@ describe("normalizeCountry", () => {
   });
 
   it("handles the apostrophe in Cote d'Ivoire", () => {
+    expect(normalizeCountry("Cote d’Ivoire (Ivory Coast)").countryCode).toBe("CI");
     expect(normalizeCountry("Cote d'Ivoire (Ivory Coast)").countryCode).toBe("CI");
-    expect(normalizeCountry("Cote d'Ivoire (Ivory Coast)").countryCode).toBe("CI");
+    expect("Cote d’Ivoire (Ivory Coast)").not.toBe("Cote d'Ivoire (Ivory Coast)");
   });
 
   it("carries the product hint out of 'Sri Lanka ETA'", () => {

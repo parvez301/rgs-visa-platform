@@ -12,7 +12,7 @@ export interface CountryNormalizationResult {
  * whitespace collapsed. Keeps "SRI LANKA ETA" distinct from "SRI LANKA".
  */
 function buildLookupKey(rawValue: string): string {
-  return rawValue.trim().toUpperCase().replace(/'/g, "'").replace(/\s+/g, " ");
+  return rawValue.trim().toUpperCase().replace(/’/g, "'").replace(/\s+/g, " ");
 }
 
 /** Country spellings observed in the workbook, mapped to ISO-3166 alpha-2. */
