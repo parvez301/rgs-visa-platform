@@ -178,6 +178,20 @@ describe("mapRow — pass 1", () => {
     expect(mapped.reviewItems).toEqual([]);
   });
 
+  // The gate is `caseTypeFromColumns === null`, not `visaType === null`, and
+  // the two differ exactly here: Status says the case is not a visa at all
+  // while Visa Type is blank and the country still whispers "ETA". A hint
+  // derived from the country text must not overrule a case type the Status
+  // column stated outright -- that fabricates a visa product on a case the
+  // sheet says is a payment.
+  it("drops the country's visaTypeHint when the Status column already named the case type", () => {
+    const mapped = mapRow(
+      buildRawRow({ country: "Sri Lanka ETA", visaType: "", status: "Payment Only" }),
+    );
+    expect(mapped.caseDraft.caseType).toBe("OTHER");
+    expect(mapped.caseDraft.visaType).toBeUndefined();
+  });
+
   // --- Controller ruling (task-7-ruling-date-seam.md): the reader/normalizer
   // date seam. Every date fixture above is dd-mm-yyyy, which is exactly the
   // vacuous-coverage shape the ruling warns about — it would all pass while

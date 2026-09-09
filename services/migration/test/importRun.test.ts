@@ -106,6 +106,50 @@ describe("runImport", () => {
     expect(importedCase!.legacyRaw).toEqual({ "Additional Items": "PHOTO, HOTEL" });
   });
 
+  // CrmCaseSchema refines that only a VISA case may carry a visaType, and
+  // `mapRow` reads caseType (from Status) and visaType (from the Visa Type
+  // column) independently -- so the two disagree on 16 of the 7,156 real
+  // rows, always an OTHER from "Payment Only" alongside a real Visa Type.
+  // The structured field has to go, or the parse aborts the whole run. The
+  // value must not go with it: legacyRaw is the only place it survives.
+  it("keeps a dropped visa type in legacyRaw when the case type says it cannot be structured", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [
+        buildMappedRow({
+          caseDraft: {
+            caseType: "OTHER",
+            destinationCountry: "TR",
+            visaType: "BUSINESS",
+            caseStatus: "CLOSED",
+            custody: "RETURNED",
+            outcome: "APPROVED",
+            receivedDate: "2025-01-02",
+          },
+        }),
+      ],
+    });
+    expect(summary.casesCreated).toBe(1);
+
+    const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    expect(importedCase!.caseType).toBe("OTHER");
+    expect(importedCase!.visaType).toBeUndefined();
+    expect(importedCase!.legacyRaw["Visa Type"]).toBe("BUSINESS");
+  });
+
+  // The other side of the same branch: a VISA case keeps its visa type in the
+  // structured field and must NOT also duplicate it into legacyRaw, or every
+  // one of the 7,140 well-formed rows grows a redundant provenance key.
+  it("does not copy a visa type into legacyRaw when the structured field keeps it", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
+
+    const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    expect(importedCase!.visaType).toBe("BUSINESS");
+    expect(importedCase!.legacyRaw["Visa Type"]).toBeUndefined();
+  });
+
   it("records pass-1 review items in the queue", async () => {
     const context = buildTestContext();
     const summary = await runImport(context, "rgs", {
