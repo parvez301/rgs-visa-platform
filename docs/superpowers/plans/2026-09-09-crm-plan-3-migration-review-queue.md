@@ -1732,3 +1732,383 @@ git commit -m "feat(migration): add the pass-2 seam, phone join and group propos
 ```
 
 ---
+
+### Task 9: The import run — idempotent orchestration
+
+**Files:**
+- Create: `services/migration/src/importRun.ts`
+- Test: `services/migration/test/importRun.test.ts`
+
+**Interfaces:**
+- Consumes: `MappedRow` from `./mapRow`; `JoinedContactDetails` from `./joinPhones`; `ProposedGroup` from `./groupCases`; `ResidueResolver` from `./residueResolver`; `writeCase`, `readCase` from `@rgs/api` domain `caseStore`; `createPartner`, `findPartnerByName` from `partners`; `upsertTraveller`, `findTravellerByPassport`, `findTravellerByName` from `travellers`; `recordReviewItem` from `reviewQueue`; `newId` from `lib/ids`.
+- Produces:
+  - `interface ImportSummary { rowsRead: number; casesCreated: number; casesSkippedAlreadyImported: number; partnersCreated: number; partnersReused: number; travellersCreated: number; travellersReused: number; reviewItemsRecorded: number; groupsProposed: number }`
+  - `runImport(context: AppContext, tenantId: string, input: RunImportInput): Promise<ImportSummary>`
+  - `interface RunImportInput { mappedRows: MappedRow[]; contactDetails: Map<string, JoinedContactDetails>; proposedGroups: ProposedGroup[]; residueResolver: ResidueResolver; actorEmail: string; dryRun: boolean }`
+
+**Context for the implementer:** This is the only file in the package that writes. Four rules govern it, and each one has bitten a real migration:
+
+1. **Idempotency is keyed on `caseRef`.** Before creating a case, look for an existing one with the same `caseRef` and skip it. The spec calls for a re-runnable script — running it twice must not double the ledger. Because `caseRef` has no index yet (a known gap carried from Plan 2), maintain an in-run `Set` of already-imported refs seeded from a `listCasesByStatus` sweep, and document that a `caseRef` index is Plan 5's job. **Do not add an index in this task** — it is a storage-format change that belongs with the screen that needs it.
+
+2. **Write cases through `caseStore.writeCase` directly, never through the Plan 2 mutators.** `changeCaseStatus` / `changeApplicantCustody` / `changeBillingStatus` / `changeApplicantOutcome` all fire the derived-status rules, and spec §5 is explicit that migrated cases keep the status the import assigned and are never retroactively reopened. Going through the mutators would drag almost every historical case out of `CLOSED`, because the sheet fills payment status on 0.5% of rows.
+
+3. **`billingStatus` is `UNKNOWN` for every migrated case.** Spec §5: migrated rows with no billing evidence import as `UNKNOWN`, which the `billing_overdue` watchdog excludes. Never default them to `UNBILLED`.
+
+4. **Partners are found before they are created.** `createPartner` throws `conflict` on a duplicate canonical key (Plan 2 fix round), so calling it blindly would abort the run on the second row from the same agency. Call `findPartnerByName` first and reuse. Same shape for travellers: passport first, then name, then create.
+
+`dryRun` performs every lookup and every mapping but no write, and returns the same summary. That is how the run is rehearsed against staging before it touches anything.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, expect, it } from "vitest";
+import { buildTestContext } from "@rgs/api/test/helpers";
+import { readCase } from "@rgs/api/src/domain/crm/caseStore";
+import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
+import { listPartners } from "@rgs/api/src/domain/crm/partners";
+import { runImport } from "../src/importRun";
+import { passthroughResidueResolver } from "../src/residueResolver";
+import type { MappedRow } from "../src/mapRow";
+
+function buildMappedRow(overrides: Partial<MappedRow> = {}): MappedRow {
+  return {
+    caseRef: "31376",
+    sourceSheet: "Mini CRM",
+    sourceRow: 2,
+    partnerName: "VWI Mumbai",
+    travellerFullName: "AKSHAY JAIN",
+    passportNumber: "V2404480",
+    applicantCount: 1,
+    caseDraft: {
+      caseType: "VISA",
+      destinationCountry: "TR",
+      visaType: "BUSINESS",
+      caseStatus: "CLOSED",
+      custody: "RETURNED",
+      outcome: "APPROVED",
+    },
+    reviewItems: [],
+    legacyRaw: {},
+    ...overrides,
+  } as MappedRow;
+}
+
+const baseInput = {
+  contactDetails: new Map(),
+  proposedGroups: [],
+  residueResolver: passthroughResidueResolver,
+  actorEmail: "ops@rgs.test",
+  dryRun: false,
+};
+
+describe("runImport", () => {
+  it("imports a row into a case, partner and traveller", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
+    expect(summary.casesCreated).toBe(1);
+    expect(summary.partnersCreated).toBe(1);
+    expect(summary.travellersCreated).toBe(1);
+  });
+
+  it("is idempotent: a second run creates nothing", async () => {
+    const context = buildTestContext();
+    const rows = [buildMappedRow()];
+    await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+    const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+    expect(secondSummary.casesCreated).toBe(0);
+    expect(secondSummary.casesSkippedAlreadyImported).toBe(1);
+    expect(secondSummary.partnersCreated).toBe(0);
+    expect(secondSummary.partnersReused).toBe(1);
+  });
+
+  it("reuses one partner across spelling variants instead of creating two", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [
+        buildMappedRow({ caseRef: "1", partnerName: "VWI Mumbai" }),
+        buildMappedRow({ caseRef: "2", partnerName: "VWI BOM", passportNumber: "X9999999" }),
+      ],
+    });
+    expect(summary.partnersCreated).toBe(1);
+    expect(summary.partnersReused).toBe(1);
+    expect(await listPartners(context, "rgs")).toHaveLength(1);
+  });
+
+  it("imports every migrated case with UNKNOWN billing, never UNBILLED", async () => {
+    const context = buildTestContext();
+    await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
+    const cases = await listReviewItems(context, "rgs", "OPEN");
+    expect(cases).toEqual([]); // clean row raises nothing
+    // Find the created case and assert its billing axis.
+    const created = await readCase(context, "rgs", (await listPartners(context, "rgs"))[0] ? "" : "");
+    expect(created === undefined || created.billingStatus === "UNKNOWN").toBe(true);
+  });
+
+  it("keeps provenance on every imported case", async () => {
+    const context = buildTestContext();
+    await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
+    // sourceSheet/sourceRow/legacyRaw round-trip through CrmCaseSchema.
+    // Asserted via the case read in the importRun report fixture.
+    expect(true).toBe(true);
+  });
+
+  it("records pass-1 review items in the queue", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [
+        buildMappedRow({
+          reviewItems: [{ reason: "UNMAPPED_STATUS", fieldName: "Status", rawValue: "DEU/DEL/190126/" }],
+        }),
+      ],
+    });
+    expect(summary.reviewItemsRecorded).toBe(1);
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    expect(open[0]!.rawValue).toBe("DEU/DEL/190126/");
+    expect(open[0]!.sourceRow).toBe(2);
+  });
+
+  it("records proposed groups as review items rather than applying them", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [buildMappedRow()],
+      proposedGroups: [
+        { caseRefs: ["31376", "31377"], partnerName: "VWI Mumbai", destinationCountry: "TR", receivedDate: "2025-01-02" },
+      ],
+    });
+    expect(summary.groupsProposed).toBe(1);
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    expect(open.some((item) => item.reason === "PROPOSED_GROUP")).toBe(true);
+  });
+
+  it("writes nothing on a dry run but still reports what it would do", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [buildMappedRow()],
+      dryRun: true,
+    });
+    expect(summary.casesCreated).toBe(1);
+    expect(await listPartners(context, "rgs")).toHaveLength(0);
+    expect(await listReviewItems(context, "rgs", "OPEN")).toHaveLength(0);
+  });
+});
+```
+
+Replace the two placeholder assertions in the "UNKNOWN billing" and "provenance" tests with real reads once `runImport` returns the created case ids — extend `ImportSummary` with `createdCaseIds: string[]` if that is the cleanest way, and assert `billingStatus`, `sourceSheet`, `sourceRow` and `legacyRaw` directly off the read case. **Do not leave an `expect(true).toBe(true)` in the committed suite** — it asserts nothing and this branch has already shipped three tests that could not fail.
+
+- [ ] **Step 2: Run the test and watch it fail**
+
+Run: `pnpm --filter @rgs/migration test importRun`
+Expected: FAIL — `Failed to load url ../src/importRun`.
+
+- [ ] **Step 3: Write the implementation**
+
+Key shape — the implementer fills in the body following the rules above:
+
+```ts
+export interface ImportSummary {
+  rowsRead: number;
+  casesCreated: number;
+  casesSkippedAlreadyImported: number;
+  partnersCreated: number;
+  partnersReused: number;
+  travellersCreated: number;
+  travellersReused: number;
+  reviewItemsRecorded: number;
+  groupsProposed: number;
+  createdCaseIds: string[];
+}
+
+export async function runImport(
+  context: AppContext,
+  tenantId: string,
+  input: RunImportInput,
+): Promise<ImportSummary> {
+  // 1. Seed the already-imported set from existing cases (idempotency on caseRef).
+  // 2. For each mapped row, in order:
+  //    a. skip if caseRef already imported;
+  //    b. resolve the partner: findPartnerByName -> reuse, else createPartner;
+  //    c. resolve the traveller: findTravellerByPassport -> findTravellerByName -> upsertTraveller;
+  //    d. offer the row's pending review items to input.residueResolver; a
+  //       resolution with confidence >= 0.9 is applied to the draft, anything
+  //       lower becomes a review item carrying proposedValue and confidence;
+  //    e. build the CrmCase with billingStatus "UNKNOWN", sourceSheet,
+  //       sourceRow and legacyRaw, and write it with caseStore.writeCase;
+  //    f. record every remaining review item.
+  // 3. Record each proposed group as a PROPOSED_GROUP review item.
+  // 4. When input.dryRun is true, perform every lookup and mapping but no put.
+}
+```
+
+Every write in the loop is guarded by `if (!input.dryRun)`. The counters increment regardless, so a dry run reports exactly what a real run would do.
+
+- [ ] **Step 4: Run the test and watch it pass**
+
+Run: `pnpm --filter @rgs/migration test importRun` — PASS, 8 tests.
+Then `pnpm -r typecheck`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add services/migration/src/importRun.ts services/migration/test/importRun.test.ts
+git commit -m "feat(migration): add the idempotent import run"
+```
+
+---
+
+### Task 10: CLI, full-workbook rehearsal, and the green gate
+
+**Files:**
+- Create: `services/migration/src/cli.ts`
+- Create: `services/migration/README.md`
+- Modify: `README.md`
+- Test: `services/migration/test/fullWorkbook.test.ts` (skipped unless the workbook is present)
+
+**Interfaces:**
+- Consumes: everything from Tasks 5-9.
+- Produces: nothing consumed by later tasks. This is the merge gate.
+
+**Context for the implementer:** The CLI is the operator's entry point. It must default to `--dry-run` — an import that writes to a real table on a mistyped command is exactly the accident this guard prevents. Writing requires an explicit `--commit`.
+
+The full-workbook test is the one that matters: it runs all 7,161 rows through `readWorkbook` + `mapRow` and asserts the review-queue rate is in the expected band. It **skips** rather than fails when the workbook is absent, because the file lives outside the repo (`/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx`) and CI will not have it.
+
+- [ ] **Step 1: Write the CLI**
+
+```ts
+#!/usr/bin/env node
+import { parseArgs } from "node:util";
+import { readWorkbook } from "./readWorkbook";
+import { mapRow } from "./mapRow";
+import { joinPhones } from "./joinPhones";
+import { proposeGroups } from "./groupCases";
+import { passthroughResidueResolver } from "./residueResolver";
+import { runImport } from "./importRun";
+
+const { values } = parseArgs({
+  options: {
+    workbook: { type: "string" },
+    tenant: { type: "string", default: "rgs" },
+    actor: { type: "string", default: "migration@rgs.local" },
+    commit: { type: "boolean", default: false },
+  },
+});
+
+if (values.workbook === undefined) {
+  console.error("usage: pnpm --filter @rgs/migration import --workbook <path.xlsx> [--commit]");
+  process.exit(1);
+}
+
+// Writing is opt-in. A mistyped command must never touch a real table.
+const dryRun = !values.commit;
+console.log(dryRun ? "DRY RUN — nothing will be written. Pass --commit to write." : "COMMITTING to the table.");
+
+const extract = await readWorkbook(values.workbook);
+const mappedRows = extract.miniCrmRows.map(mapRow);
+const summary = await runImport(buildProductionContext(), values.tenant, {
+  mappedRows,
+  contactDetails: joinPhones(mappedRows, extract.yearRows),
+  proposedGroups: proposeGroups(mappedRows),
+  residueResolver: passthroughResidueResolver,
+  actorEmail: values.actor,
+  dryRun,
+});
+
+console.table(summary);
+```
+
+`buildProductionContext()` builds an `AppContext` around `DynamoTableClient` using `TABLE_NAME` from the environment — follow how the Lambda handler in `services/api/src/` constructs its context and reuse that, rather than assembling a second one by hand.
+
+- [ ] **Step 2: Write the full-workbook rehearsal test**
+
+```ts
+import { existsSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { readWorkbook } from "../src/readWorkbook";
+import { mapRow } from "../src/mapRow";
+
+const WORKBOOK_PATH = "/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx";
+const describeIfWorkbook = existsSync(WORKBOOK_PATH) ? describe : describe.skip;
+
+describeIfWorkbook("the real workbook", () => {
+  it("maps every row without throwing, and queues a plausible fraction", async () => {
+    const extract = await readWorkbook(WORKBOOK_PATH);
+    expect(extract.miniCrmRows.length).toBeGreaterThan(7000);
+
+    const mappedRows = extract.miniCrmRows.map(mapRow);
+    const rowsWithReview = mappedRows.filter((mappedRow) => mappedRow.reviewItems.length > 0);
+    const reviewRate = rowsWithReview.length / mappedRows.length;
+
+    // Blank = not recorded, so the queue must stay near the measured 14.2%,
+    // not the 64.9% that treating blanks as review items would produce.
+    expect(reviewRate).toBeLessThan(0.30);
+    expect(reviewRate).toBeGreaterThan(0.02);
+  });
+
+  it("never emits a review item for a blank source cell", async () => {
+    const extract = await readWorkbook(WORKBOOK_PATH);
+    for (const rawRow of extract.miniCrmRows) {
+      for (const pending of mapRow(rawRow).reviewItems) {
+        expect(pending.rawValue.trim()).not.toBe("");
+      }
+    }
+  });
+});
+```
+
+- [ ] **Step 3: Run every gate**
+
+```bash
+pnpm -r typecheck
+pnpm --filter @rgs/shared test
+pnpm --filter @rgs/api test
+pnpm --filter @rgs/migration test
+pnpm --filter @rgs/admin build
+pnpm --filter @rgs/portal build
+pnpm --filter @rgs/marketing build
+```
+
+All must pass. Record the actual numbers in the commit message. Do not commit a red gate.
+
+- [ ] **Step 4: Confirm no infrastructure change is needed**
+
+```bash
+grep -n '"PATCH"' services/api/src/http/crmApi.ts
+```
+
+Expected: no matches. The review routes are GET/GET/PUT, all covered by the existing `/api/v1/admin/{proxy+}`.
+
+- [ ] **Step 5: Document the importer**
+
+Write `services/migration/README.md` covering: what the package does, why it is a separate package (`exceljs` stays out of the Lambda bundle), the dry-run default, the exact command to rehearse and to commit, and the fact that the Excel epoch was determined empirically and must not be changed without re-running the cross-sheet check.
+
+Add one sentence to the root `README.md` repository-layout table: a `services/migration` row describing it as the one-off workbook importer, not part of the deployed stack.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add services/migration README.md
+git commit -m "feat(migration): add the import CLI, full-workbook rehearsal and docs"
+```
+
+---
+
+## Self-Review
+
+**1. Spec coverage.** §9's three passes: pass 1 is Task 7; pass 2 is the `ResidueResolver` seam in Task 8, deliberately deferred to Plan 4 and wired in Task 9; pass 3 is Tasks 1-4. §9's standing rules: `sourceRow`/`sourceSheet` on every record (Tasks 7, 9); nothing discarded — `legacyRaw` (Task 7); phone recovery by REF NO join (Task 8); group detection proposed not applied (Tasks 8, 9); re-runnable and idempotent on REF NO (Task 9). §5's "migrated cases keep the status the import assigned" is enforced in Task 9 by writing through `caseStore` rather than the mutators, and `billingStatus: UNKNOWN` is asserted there. §6's blank-cell rule is enforced in Task 7 and re-asserted against the real workbook in Task 10.
+
+**2. Known gaps, stated rather than hidden.** `caseRef` still has no index — Task 9 works around it with an in-run set and names Plan 5 as the owner. The `REQURIED INFORMATION` and `CHECKLIST` sheets are not imported; neither carries case data. Pass 2 resolves nothing until Plan 4, so the review queue in this plan is larger than it will eventually be — that is expected, and Task 10's band (2%-30%) is set accordingly rather than to the eventual steady state.
+
+**3. Type consistency.** `MappedRow`, `MappedCaseDraft` and `PendingReviewItem` are defined once in Task 7 and consumed unchanged in Tasks 8-10. `RecordReviewItemInput` (Task 3) accepts exactly the fields `PendingReviewItem` carries plus provenance, so Task 9 maps one to the other without a shape mismatch. `ReviewItem`'s `confidence` is optional in Task 1 precisely so Task 8's resolver can populate it later without a schema change.
+
+---
+
+## Execution Handoff
+
+Plan complete. Two execution options:
+
+**1. Subagent-Driven (recommended)** — a fresh subagent per task, spec-compliance and quality review after each, fast iteration.
+
+**2. Inline Execution** — executed in this session with checkpoints.
