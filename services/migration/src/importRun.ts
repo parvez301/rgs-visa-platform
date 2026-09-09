@@ -74,14 +74,21 @@ const PRIMARY_APPLICANT_REF = "1";
  * cells, 245 present-but-unmapped) and 225 leave `receivedDate` unset (blank
  * or unparseable "C" cells). Unhandled, either would abort the run at
  * `CrmCaseSchema.parse` the same way the blank-partner defect would have --
- * it just was not named in the controller's ruling. Both are substituted
- * SILENTLY (no review item): spec §6 already treats "blank" as "not
- * recorded, not a defect", and a placeholder forced by the schema is not new
- * information for a human -- the country/date column's own review item (when
- * one exists, e.g. a present-but-unmapped country) already surfaces the real
- * problem. Sentinels are chosen to be unmistakably synthetic:
- * "ZZ" is ISO-3166's reserved user-assigned "unknown" code; "1970-01-01"
- * predates RGS's operation entirely.
+ * it just was not named in the controller's ruling.
+ *
+ * Fix-round-1 ruling: this is NOT the "blank means not recorded" case (spec
+ * §6) -- that rule covers an OPTIONAL field simply staying absent. These
+ * fields are REQUIRED by the schema, so a value is fabricated, not omitted.
+ * Fabrication is categorically different from absence and is never silent:
+ * every substitution raises a `MISSING_REQUIRED_FIELD` review item carrying
+ * the sentinel on `proposedValue`, so a human sees exactly which of the 452 /
+ * 225 rows carry a placeholder instead of a real value. "1970-01-01" is the
+ * most important of these to flag, since it is also `GSI2SK` -- an unflagged
+ * placeholder date would sort 225 cases to the front of every partner
+ * listing looking like the firm's oldest work. Sentinels are still chosen to
+ * be self-describing where possible: "ZZ" is ISO-3166's reserved
+ * user-assigned "unknown" code; "1970-01-01" predates RGS's operation
+ * entirely, but only the review item makes that legible.
  */
 const UNKNOWN_DESTINATION_COUNTRY_SENTINEL = "ZZ";
 const UNKNOWN_RECEIVED_DATE_SENTINEL = "1970-01-01";
@@ -104,10 +111,10 @@ const UNKNOWN_RECEIVED_DATE_SENTINEL = "1970-01-01";
  * gets its OWN placeholder, keyed on `sourceRow` (stable and unique within
  * "Mini CRM", so idempotent across a re-run without merging anyone).
  *
- * No review item: like the country/date sentinels above, this is a
- * mechanical schema-satisfaction step, not new information -- the
- * placeholder itself is unmistakably synthetic and visible on the case's
- * own traveller field, the same way "ZZ" or "1970-01-01" are.
+ * Fix-round-1 ruling: like the country/date sentinels above, this fabricates
+ * a value for a required field, so it also raises a `MISSING_REQUIRED_FIELD`
+ * review item -- fabrication is never silent, even though the placeholder
+ * text is self-describing.
  */
 function unknownTravellerFullNameSentinel(sourceRow: number): string {
   return `(name not recorded, row ${sourceRow})`;
@@ -452,7 +459,7 @@ export async function runImport(
     travellersCreated: 0,
     travellersReused: 0,
     reviewItemsRecorded: 0,
-    groupsProposed: input.proposedGroups.length,
+    groupsProposed: 0,
     createdCaseIds: [],
   };
 
@@ -506,7 +513,8 @@ export async function runImport(
     // throughout -- not the effective (duplicate-safe) ref.
     const contactDetailsForRow = input.contactDetails.get(mappedRow.caseRef);
 
-    const travellerFullNameForCase = isBlankTravellerFullName(mappedRow.travellerFullName)
+    const travellerFullNameIsMissing = isBlankTravellerFullName(mappedRow.travellerFullName);
+    const travellerFullNameForCase = travellerFullNameIsMissing
       ? unknownTravellerFullNameSentinel(mappedRow.sourceRow)
       : mappedRow.travellerFullName;
     const travellerResolution = await resolveTraveller(
@@ -540,10 +548,11 @@ export async function runImport(
       legacyRaw["No."] = String(mappedRow.applicantCount);
     }
 
-    const destinationCountryForCase =
-      resolvedCaseDraft.destinationCountry === ""
-        ? UNKNOWN_DESTINATION_COUNTRY_SENTINEL
-        : resolvedCaseDraft.destinationCountry;
+    const destinationCountryIsMissing = resolvedCaseDraft.destinationCountry === "";
+    const destinationCountryForCase = destinationCountryIsMissing
+      ? UNKNOWN_DESTINATION_COUNTRY_SENTINEL
+      : resolvedCaseDraft.destinationCountry;
+    const receivedDateIsMissing = resolvedCaseDraft.receivedDate === undefined;
     const receivedDateForCase = resolvedCaseDraft.receivedDate ?? UNKNOWN_RECEIVED_DATE_SENTINEL;
 
     // `CrmCaseSchema` refines that only a VISA case may carry a visaType.
@@ -690,14 +699,73 @@ export async function runImport(
         detail: `"2025 YEAR" Phone column value is not a plausible Indian mobile number.`,
       });
     }
+
+    // Fix-round-1 ruling: fabricating a value for a schema-required field is
+    // never silent, even when spec §6 would treat the same blank as a
+    // harmless absence on an OPTIONAL field. One MISSING_REQUIRED_FIELD
+    // review item per fabrication, naming the workbook's own column header.
+    if (destinationCountryIsMissing) {
+      await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
+        reason: "MISSING_REQUIRED_FIELD",
+        sourceSheet: mappedRow.sourceSheet,
+        sourceRow: mappedRow.sourceRow,
+        caseRef: mappedRow.caseRef,
+        fieldName: "Country",
+        rawValue: "",
+        proposedValue: destinationCountryForCase,
+        detail: `destinationCountry is required by the schema but the sheet did not record one; the placeholder "${destinationCountryForCase}" was written pending a real value.`,
+      });
+    }
+    if (receivedDateIsMissing) {
+      await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
+        reason: "MISSING_REQUIRED_FIELD",
+        sourceSheet: mappedRow.sourceSheet,
+        sourceRow: mappedRow.sourceRow,
+        caseRef: mappedRow.caseRef,
+        fieldName: "C",
+        rawValue: "",
+        proposedValue: receivedDateForCase,
+        detail: `receivedDate is required by the schema but the sheet did not record one; the placeholder "${receivedDateForCase}" was written pending a real value. This placeholder is also the case's GSI2 sort key, so an unresolved row will sort to the front of partner listings.`,
+      });
+    }
+    if (travellerFullNameIsMissing) {
+      await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
+        reason: "MISSING_REQUIRED_FIELD",
+        sourceSheet: mappedRow.sourceSheet,
+        sourceRow: mappedRow.sourceRow,
+        caseRef: mappedRow.caseRef,
+        fieldName: "APPLICANTS NAME",
+        rawValue: "",
+        proposedValue: travellerFullNameForCase,
+        detail: `The traveller's full name is required by the schema but the sheet did not record one; the placeholder "${travellerFullNameForCase}" was written pending a real name.`,
+      });
+    }
   }
 
+  // Fix-round-1 ruling: the sheet is live, so a re-run is the expected case,
+  // not the exception -- re-runnability is the entire reason idempotency was
+  // required. Cases and partners are idempotent; recording a PROPOSED_GROUP
+  // unconditionally on every call is not: a static re-run would re-queue the
+  // same proposal every time (measured: 1,476 duplicates on a second real
+  // full-workbook run). A group is only re-proposed when it has actually
+  // changed -- i.e. when at least one of its member caseRefs was NOT already
+  // imported as of this run's sweep. A no-change re-run then proposes
+  // nothing; a run that adds a case adjacent to an existing group re-proposes
+  // just that group, correctly. Checked against `alreadyImportedCaseRefs`
+  // (already in hand from the sweep) rather than a per-item review-queue
+  // read, which would be one more read per group on a path that already has
+  // enough of them, and would not notice a group whose membership changed.
   for (const proposedGroup of input.proposedGroups) {
     const firstCaseRefInGroup = proposedGroup.caseRefs[0];
     // ProposedGroup.caseRefs is never empty in practice (proposeGroups only
     // emits runs of >= 2), but the type does not say so -- skip rather than
     // record a review item with no caseRef to name.
     if (firstCaseRefInGroup === undefined) continue;
+
+    const hasNotYetImportedMember = proposedGroup.caseRefs.some(
+      (memberCaseRef) => !alreadyImportedCaseRefs.has(memberCaseRef),
+    );
+    if (!hasNotYetImportedMember) continue;
 
     const earliestRow = earliestMappedRowForCaseRefs(input.mappedRows, proposedGroup.caseRefs);
     await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
@@ -709,6 +777,7 @@ export async function runImport(
       rawValue: proposedGroup.caseRefs.join(", "),
       detail: `Adjacent REF NOs ${proposedGroup.caseRefs.join(", ")} share partner "${proposedGroup.partnerName}", country ${proposedGroup.destinationCountry}, received ${proposedGroup.receivedDate}. Review for merge.`,
     });
+    summary.groupsProposed += 1;
   }
 
   return summary;

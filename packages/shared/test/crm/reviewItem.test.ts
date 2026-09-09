@@ -32,6 +32,19 @@ describe("ReviewItemSchema", () => {
     expect(() => ReviewItemSchema.parse({ ...validItem, reason: "VIBES" })).toThrow();
   });
 
+  it("accepts MISSING_REQUIRED_FIELD with a fabricated proposedValue and an empty rawValue", () => {
+    const parsed = ReviewItemSchema.parse({
+      ...validItem,
+      reason: "MISSING_REQUIRED_FIELD",
+      fieldName: "C",
+      rawValue: "",
+      proposedValue: "1970-01-01",
+    });
+    expect(parsed.reason).toBe("MISSING_REQUIRED_FIELD");
+    expect(parsed.rawValue).toBe("");
+    expect(parsed.proposedValue).toBe("1970-01-01");
+  });
+
   it("rejects a confidence outside 0..1", () => {
     expect(() => ReviewItemSchema.parse({ ...validItem, confidence: 1.4 })).toThrow();
   });

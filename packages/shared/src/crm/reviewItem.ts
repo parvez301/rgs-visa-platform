@@ -12,6 +12,16 @@ export const REVIEW_REASONS = [
   "SUSPECT_PHONE",
   "PROPOSED_GROUP",
   "DUPLICATE_REF",
+  /**
+   * The schema requires this field but the sheet did not record one. Distinct
+   * from the UNMAPPED_* reasons above: those name a value that was PRESENT
+   * but could not be understood; this one names a value that was fabricated
+   * because the target schema has no "absent" representation for it (a
+   * required field cannot simply stay unset). The fabricated placeholder
+   * lands on `proposedValue`; `rawValue` is the empty string the sheet
+   * actually held.
+   */
+  "MISSING_REQUIRED_FIELD",
 ] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
 

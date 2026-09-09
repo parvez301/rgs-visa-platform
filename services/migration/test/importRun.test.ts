@@ -28,6 +28,11 @@ function buildMappedRow(overrides: Partial<MappedRow> = {}): MappedRow {
       caseStatus: "CLOSED",
       custody: "RETURNED",
       outcome: "APPROVED",
+      // Present by default so tests unrelated to the missing-required-field
+      // fix (pass-1 review items, residue resolution) don't incidentally
+      // also trip the receivedDate MISSING_REQUIRED_FIELD item. Tests that
+      // specifically exercise a blank receivedDate override this.
+      receivedDate: "2025-01-02",
     },
     reviewItems: [],
     legacyRaw: {},
@@ -129,6 +134,75 @@ describe("runImport", () => {
     expect(summary.groupsProposed).toBe(1);
     const open = await listReviewItems(context, "rgs", "OPEN");
     expect(open.reviewItems.some((item) => item.reason === "PROPOSED_GROUP")).toBe(true);
+  });
+
+  it("does not re-record a PROPOSED_GROUP on an unchanged second run, once every member case is already imported", async () => {
+    const context = buildTestContext();
+    const input = {
+      ...baseInput,
+      mappedRows: [
+        buildMappedRow({ caseRef: "40001", sourceRow: 10 }),
+        buildMappedRow({ caseRef: "40002", sourceRow: 11, passportNumber: "X1111111" }),
+      ],
+      proposedGroups: [
+        {
+          caseRefs: ["40001", "40002"],
+          partnerName: "VWI Mumbai",
+          destinationCountry: "TR",
+          receivedDate: "2025-01-02",
+        },
+      ],
+    };
+
+    const firstSummary = await runImport(context, "rgs", input);
+    expect(firstSummary.casesCreated).toBe(2);
+    expect(firstSummary.groupsProposed).toBe(1);
+    const afterFirstRun = await listReviewItems(context, "rgs", "OPEN");
+    expect(afterFirstRun.reviewItems.filter((item) => item.reason === "PROPOSED_GROUP")).toHaveLength(1);
+
+    // SAME input, second call. A store that merely started empty and stayed
+    // empty would prove nothing -- run 1 above populated the store for real,
+    // so this is testing that run 2 recognizes the group as already fully
+    // imported and adds nothing more, not that an empty store stays empty.
+    const secondSummary = await runImport(context, "rgs", input);
+    expect(secondSummary.casesCreated).toBe(0);
+    expect(secondSummary.groupsProposed).toBe(0);
+    const afterSecondRun = await listReviewItems(context, "rgs", "OPEN");
+    expect(afterSecondRun.reviewItems.filter((item) => item.reason === "PROPOSED_GROUP")).toHaveLength(1);
+  });
+
+  it("re-records a PROPOSED_GROUP when a new row extends an already-imported group", async () => {
+    const context = buildTestContext();
+    const proposedGroups = [
+      {
+        caseRefs: ["50001", "50002"],
+        partnerName: "VWI Mumbai",
+        destinationCountry: "TR",
+        receivedDate: "2025-01-02",
+      },
+    ];
+
+    const firstSummary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [buildMappedRow({ caseRef: "50001", sourceRow: 20 })],
+      proposedGroups,
+    });
+    expect(firstSummary.groupsProposed).toBe(1);
+
+    // The group now has a second member the first run never saw. The group
+    // has genuinely changed, so it must be re-proposed even though it was
+    // already recorded once -- this is what tells the dedup guard apart from
+    // a guard that just suppresses PROPOSED_GROUP forever after its first run.
+    const secondSummary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [
+        buildMappedRow({ caseRef: "50001", sourceRow: 20 }),
+        buildMappedRow({ caseRef: "50002", sourceRow: 21, passportNumber: "X2222222" }),
+      ],
+      proposedGroups,
+    });
+    expect(secondSummary.casesCreated).toBe(1);
+    expect(secondSummary.groupsProposed).toBe(1);
   });
 
   it("writes nothing on a dry run but still reports what it would do", async () => {
@@ -340,36 +414,54 @@ describe("runImport", () => {
 
   // --- Schema-required fields the workbook does not always supply --------
 
-  it("substitutes a sentinel destinationCountry when the country is blank, without a new review item", async () => {
+  it("substitutes a sentinel destinationCountry when the country is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
     const context = buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ caseDraft: { ...buildMappedRow().caseDraft, destinationCountry: "" } })],
     });
-    expect(summary.reviewItemsRecorded).toBe(0);
+    expect(summary.reviewItemsRecorded).toBe(1);
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     expect(importedCase!.destinationCountry).toBe("ZZ");
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    const missingFieldItem = open.reviewItems.find((item) => item.reason === "MISSING_REQUIRED_FIELD");
+    expect(missingFieldItem?.fieldName).toBe("Country");
+    expect(missingFieldItem?.rawValue).toBe("");
+    expect(missingFieldItem?.proposedValue).toBe("ZZ");
   });
 
-  it("substitutes a sentinel receivedDate when the date is blank, without a new review item", async () => {
+  it("substitutes a sentinel receivedDate when the date is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
     const context = buildTestContext();
-    const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
-    expect(summary.reviewItemsRecorded).toBe(0);
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [buildMappedRow({ caseDraft: { ...buildMappedRow().caseDraft, receivedDate: undefined } })],
+    });
+    expect(summary.reviewItemsRecorded).toBe(1);
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     expect(importedCase!.receivedDate).toBe("1970-01-01");
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    const missingFieldItem = open.reviewItems.find((item) => item.reason === "MISSING_REQUIRED_FIELD");
+    expect(missingFieldItem?.fieldName).toBe("C");
+    expect(missingFieldItem?.rawValue).toBe("");
+    expect(missingFieldItem?.proposedValue).toBe("1970-01-01");
   });
 
-  it("substitutes a per-row sentinel travellerFullName when the name is blank, without a new review item", async () => {
+  it("substitutes a per-row sentinel travellerFullName when the name is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
     const context = buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ travellerFullName: "  ", passportNumber: undefined, sourceRow: 4435 })],
     });
-    expect(summary.reviewItemsRecorded).toBe(0);
+    expect(summary.reviewItemsRecorded).toBe(1);
     expect(summary.casesCreated).toBe(1);
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     const traveller = await getTravellerOrThrow(context, "rgs", importedCase!.applicants[0]!.travellerId);
     expect(traveller.fullName).toBe("(name not recorded, row 4435)");
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    const missingFieldItem = open.reviewItems.find((item) => item.reason === "MISSING_REQUIRED_FIELD");
+    expect(missingFieldItem?.fieldName).toBe("APPLICANTS NAME");
+    expect(missingFieldItem?.rawValue).toBe("");
+    expect(missingFieldItem?.proposedValue).toBe("(name not recorded, row 4435)");
   });
 
   it("does not merge two different blank-name rows onto the same traveller", async () => {
