@@ -5,7 +5,15 @@ import { listCaseRefsByStatus, listCasesByStatus } from "@rgs/api/src/domain/crm
 import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
 import { listPartners } from "@rgs/api/src/domain/crm/partners";
 import { getTravellerOrThrow } from "@rgs/api/src/domain/crm/travellers";
-import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "@rgs/api/src/domain/crm/keys";
+import {
+  META_SORT_KEY,
+  applicantSortKey,
+  caseRefIndexPartitionKey,
+  casePartitionKey,
+  partnerListGsi1Pk,
+  partnerPartitionKey,
+} from "@rgs/api/src/domain/crm/keys";
+import { CorruptRecordError } from "@rgs/api/src/lib/errors";
 import { runImport } from "../src/importRun";
 import { passthroughResidueResolver } from "../src/residueResolver";
 import type { ResidueResolution, ResidueResolver } from "../src/residueResolver";
@@ -135,7 +143,7 @@ describe("runImport", () => {
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     expect(importedCase!.caseType).toBe("OTHER");
     expect(importedCase!.visaType).toBeUndefined();
-    expect(importedCase!.legacyRaw["Visa Type"]).toBe("BUSINESS");
+    expect(importedCase!.legacyRaw).toEqual({ "Visa Type": "BUSINESS" });
   });
 
   // The other side of the same branch: a VISA case keeps its visa type in the
@@ -147,7 +155,7 @@ describe("runImport", () => {
 
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     expect(importedCase!.visaType).toBe("BUSINESS");
-    expect(importedCase!.legacyRaw["Visa Type"]).toBeUndefined();
+    expect(importedCase!.legacyRaw).toEqual({});
   });
 
   it("records pass-1 review items in the queue", async () => {
@@ -1064,6 +1072,42 @@ describe("runImport", () => {
     const thirdSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
     expect(thirdSummary.casesCreated).toBe(0);
     expect(thirdSummary.casesSkippedUnreadable).toBe(1);
+  });
+
+  // The legacy shape of the same bug, and the one the reservation index
+  // cannot answer: a case imported by a build that had no reservations, whose
+  // applicants have since been lost. There is no reservation to consult, so
+  // the status sweep is the only thing standing between this ref and a second
+  // case under it. The sweep reads `caseRef` straight off the raw META item
+  // for exactly this reason -- a Zod parse of the case would fail here, which
+  // is what used to make the ref invisible and the duplicate permanent.
+  it("never re-imports a ref held by a pre-reservation case whose applicants are gone", async () => {
+    const context = buildTestContext();
+    const rows = [buildMappedRow()];
+    const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+    const caseId = firstSummary.createdCaseIds[0]!;
+
+    // Delete the reservation, so the ref looks like one imported before the
+    // reservation index existed, and the applicant item, so the case no
+    // longer reassembles.
+    await context.table.delete(caseRefIndexPartitionKey("rgs", "31376"), META_SORT_KEY);
+    await context.table.delete(casePartitionKey("rgs", caseId), applicantSortKey(0));
+    expect(await readCase(context, "rgs", caseId).catch((error: Error) => error)).toBeInstanceOf(
+      CorruptRecordError,
+    );
+
+    const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+    expect(secondSummary.casesCreated).toBe(0);
+    expect(secondSummary.casesSkippedUnreadable).toBe(1);
+    // One case under REF 31376, not two.
+    expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual(["31376"]);
+
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    const unreadableItems = open.reviewItems.filter(
+      (item) => item.reason === "UNREADABLE_STORED_CASE",
+    );
+    expect(unreadableItems).toHaveLength(1);
+    expect(unreadableItems[0]!.rawValue).toBe("31376");
   });
 
   it("repairs a ref that was reserved before a run died, under the reserved caseId", async () => {
