@@ -167,6 +167,11 @@ interface DuplicateCaseRefResolution {
   effectiveCaseRef: string;
   /** `sourceRow`s of every OTHER row claiming the same raw `caseRef`. */
   otherSourceRows: number[];
+  /**
+   * True for the one claimant that keeps the bare `caseRef`. Anything joined
+   * on the raw ref -- phone, tracking number -- belongs to this row only.
+   */
+  isFirstClaimant: boolean;
 }
 
 /**
@@ -184,15 +189,45 @@ interface ResidueApplicationResult {
 }
 
 /**
+ * Orders the rows claiming one `caseRef` by their own CONTENT, so the order
+ * cannot move when the sheet does.
+ *
+ * The suffix used to come from `sourceRow`, which is a POSITION. The whole
+ * premise of this plan is that the workbook is still being edited: insert one
+ * row above `Mini CRM` 1302 and every later `sourceRow` shifts by one, so
+ * `32669-R1302` becomes `32669-R1303`, the sweep recognises neither, and the
+ * next run creates a second case for that row -- up to 18 of them per
+ * insertion, compounding on every insertion after that.
+ *
+ * Traveller name, then passport, then partner. If all three tie the rows are
+ * indistinguishable by content, so `sourceRow` breaks the tie: at that point
+ * a shift between them cannot change which case is which, because nothing
+ * else distinguishes them either.
+ */
+function compareDuplicateClaimants(leftRow: MappedRow, rightRow: MappedRow): number {
+  const byTravellerName = leftRow.travellerFullName.localeCompare(rightRow.travellerFullName);
+  if (byTravellerName !== 0) return byTravellerName;
+  const byPassport = (leftRow.passportNumber ?? "").localeCompare(rightRow.passportNumber ?? "");
+  if (byPassport !== 0) return byPassport;
+  const byPartner = leftRow.partnerName.localeCompare(rightRow.partnerName);
+  if (byPartner !== 0) return byPartner;
+  return leftRow.sourceRow - rightRow.sourceRow;
+}
+
+/**
  * Ruling (task-9): `caseRef` is not unique -- 18 of 7,156 real refs are
- * duplicated, 14 spanning two different partners. Identity is `caseRef` for
- * the row with the lowest `sourceRow`; every later claimant imports under
- * the derived ref `${caseRef}-R${sourceRow}` instead of overwriting. Both the
- * first and every later row also carry the OTHER rows' source rows, so the
- * importer can raise one `DUPLICATE_REF` review item per row.
+ * duplicated, 14 spanning two different partners. One claimant keeps the bare
+ * `caseRef`; every other imports under `${caseRef}-2`, `-3`, ... instead of
+ * overwriting it. Both the first and every later row also carry the OTHER
+ * rows' source rows, so the importer can raise one `DUPLICATE_REF` review
+ * item per row.
+ *
+ * Which claimant keeps the bare ref is decided by `compareDuplicateClaimants`
+ * -- by content, never by position. See its comment.
  *
  * Keyed by `sourceRow` rather than the `MappedRow` object itself: sourceRow
  * is the workbook's own unique row number, a plain, comparable, storable key.
+ * That is a lookup key for this run only; it never reaches a stored ref.
  */
 function resolveDuplicateCaseRefs(mappedRows: readonly MappedRow[]): Map<number, DuplicateCaseRefResolution> {
   const rowsByRawCaseRef = new Map<string, MappedRow[]>();
@@ -207,19 +242,18 @@ function resolveDuplicateCaseRefs(mappedRows: readonly MappedRow[]): Map<number,
 
   const resolutionBySourceRow = new Map<number, DuplicateCaseRefResolution>();
   for (const rowsForRef of rowsByRawCaseRef.values()) {
-    const rowsSortedBySourceRow = [...rowsForRef].sort(
-      (earlierRow, laterRow) => earlierRow.sourceRow - laterRow.sourceRow,
-    );
-    const firstClaimingRow = rowsSortedBySourceRow[0]!;
-    for (const claimingRow of rowsSortedBySourceRow) {
-      const otherSourceRows = rowsSortedBySourceRow
+    const rowsSortedByContent = [...rowsForRef].sort(compareDuplicateClaimants);
+    for (const [claimantIndex, claimingRow] of rowsSortedByContent.entries()) {
+      const otherSourceRows = rowsSortedByContent
         .filter((otherRow) => otherRow.sourceRow !== claimingRow.sourceRow)
         .map((otherRow) => otherRow.sourceRow);
       const effectiveCaseRef =
-        claimingRow.sourceRow === firstClaimingRow.sourceRow
-          ? claimingRow.caseRef
-          : `${claimingRow.caseRef}-R${claimingRow.sourceRow}`;
-      resolutionBySourceRow.set(claimingRow.sourceRow, { effectiveCaseRef, otherSourceRows });
+        claimantIndex === 0 ? claimingRow.caseRef : `${claimingRow.caseRef}-${claimantIndex + 1}`;
+      resolutionBySourceRow.set(claimingRow.sourceRow, {
+        effectiveCaseRef,
+        otherSourceRows,
+        isFirstClaimant: claimantIndex === 0,
+      });
     }
   }
   return resolutionBySourceRow;
@@ -751,9 +785,26 @@ export async function runImport(
       });
     }
 
-    // `joinPhones` keys its result by the RAW caseRef, same as pass 1 uses it
-    // throughout -- not the effective (duplicate-safe) ref.
-    const contactDetailsForRow = input.contactDetails.get(mappedRow.caseRef);
+    // `joinPhones` keys its result by the RAW caseRef, so on a duplicated ref
+    // every claimant matches the same record -- and the duplicate-ref ruling
+    // protected the case while leaving the join hanging off it untouched.
+    // Measured: 7 of the 18 duplicated refs carry a joined phone and/or
+    // tracking number and 5 of those span two partners, so REF 32669 put
+    // phone 9872668866 on a traveller at PARADISE TOURS *and* on a different
+    // traveller at Ozzy Travels. `upsertTraveller` then stores that number on
+    // a person it does not belong to: one agency's client's mobile, on a
+    // rival agency's client's record, sourced from our own import.
+    //
+    // The ref names one case, so the contact record can only be attributed to
+    // one claimant -- the one that keeps the bare ref. Every other claimant
+    // gets nothing and a review item saying so.
+    //
+    // The row's OWN `trackingNumber` (Mini CRM c19) is not affected: it is
+    // read off this row, not joined on the ref, so it is never ambiguous.
+    const joinedContactDetails = input.contactDetails.get(mappedRow.caseRef);
+    const contactDetailsForRow = caseRefResolution.isFirstClaimant ? joinedContactDetails : undefined;
+    const contactDetailsWereWithheld =
+      !caseRefResolution.isFirstClaimant && joinedContactDetails !== undefined;
 
     const travellerFullNameIsMissing = isBlankTravellerFullName(mappedRow.travellerFullName);
     const travellerFullNameForCase = travellerFullNameIsMissing
@@ -941,6 +992,21 @@ export async function runImport(
       });
     }
 
+    // The other half of the same defect: the phone and tracking number joined
+    // on this ref could not be attributed to this row, so they were withheld
+    // rather than copied onto a traveller they may not belong to.
+    if (contactDetailsWereWithheld) {
+      await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
+        reason: "DUPLICATE_REF",
+        sourceSheet: mappedRow.sourceSheet,
+        sourceRow: mappedRow.sourceRow,
+        caseRef: mappedRow.caseRef,
+        fieldName: "Phone",
+        rawValue: joinedContactDetails?.phone ?? joinedContactDetails?.flaggedPhoneRaw ?? "",
+        detail: `"2025 YEAR" holds contact details against REF NO. ${mappedRow.caseRef}, which source row(s) ${caseRefResolution.otherSourceRows.join(", ")} also claim. They were attached to the first claimant only and withheld here: attaching them to both would put one traveller's phone or tracking number on another traveller, at a different partner. Confirm who they belong to.`,
+      });
+    }
+
     // Ruling (task-9, blank-partner blocker): every case attached to the
     // sentinel partner also raises a review item so all 207 (measured) are
     // visible and reassignable by a human.
@@ -953,6 +1019,22 @@ export async function runImport(
         fieldName: "REFRENCE",
         rawValue: mappedRow.partnerName,
         detail: `Partner was not recorded; case filed under the sentinel partner "${SENTINEL_PARTNER_CANONICAL_NAME}" pending reassignment.`,
+      });
+    }
+
+    // `2025 YEAR` duplicates 18 refs of its own, and a later row can carry a
+    // different phone or tracking number for the same ref. The first value
+    // wins (see `joinPhones`), and the ones that lost are named here rather
+    // than being overwritten out of existence.
+    if (contactDetailsForRow?.conflictingValues !== undefined) {
+      await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
+        reason: "DUPLICATE_REF",
+        sourceSheet: mappedRow.sourceSheet,
+        sourceRow: mappedRow.sourceRow,
+        caseRef: mappedRow.caseRef,
+        fieldName: "Phone",
+        rawValue: contactDetailsForRow.conflictingValues.join("; "),
+        detail: `More than one "2025 YEAR" row carries REF NO. ${mappedRow.caseRef} with different contact details. The first was imported; these disagree with it and were not: ${contactDetailsForRow.conflictingValues.join("; ")}.`,
       });
     }
 

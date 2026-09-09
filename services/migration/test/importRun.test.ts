@@ -235,7 +235,7 @@ describe("runImport", () => {
     const firstCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
     const secondCase = await readCase(context, "rgs", summary.createdCaseIds[1]!);
     expect(firstCase!.caseRef).toBe("32669");
-    expect(secondCase!.caseRef).toBe("32669-R1302");
+    expect(secondCase!.caseRef).toBe("32669-2");
 
     const open = await listReviewItems(context, "rgs", "OPEN");
     const duplicateItems = open.reviewItems.filter((item) => item.reason === "DUPLICATE_REF");
@@ -261,7 +261,7 @@ describe("runImport", () => {
     const firstCaseAfterRerun = await readCase(context, "rgs", firstSummary.createdCaseIds[0]!);
     const secondCaseAfterRerun = await readCase(context, "rgs", firstSummary.createdCaseIds[1]!);
     expect(firstCaseAfterRerun!.caseRef).toBe("32669");
-    expect(secondCaseAfterRerun!.caseRef).toBe("32669-R1302");
+    expect(secondCaseAfterRerun!.caseRef).toBe("32669-2");
 
     const closedCasesAfterRerun = await listCasesByStatus(context, "rgs", "CLOSED", 1000);
     expect(closedCasesAfterRerun.cases).toHaveLength(2);
@@ -269,6 +269,153 @@ describe("runImport", () => {
     const openAfterRerun = await listReviewItems(context, "rgs", "OPEN");
     // Re-running must not have doubled the DUPLICATE_REF review items either.
     expect(openAfterRerun.reviewItems.filter((item) => item.reason === "DUPLICATE_REF")).toHaveLength(2);
+  });
+
+  it("derives the same refs for duplicate claimants however the sheet's rows shift", async () => {
+    // The suffix used to be `-R${sourceRow}`, so inserting one row anywhere
+    // above them renumbered both cases, the sweep recognised neither, and the
+    // next run created a second case for each -- compounding on every
+    // insertion into a sheet the whole plan insists is still being edited.
+    async function importedRefsFor(rowOffset: number): Promise<string[]> {
+      const context = buildTestContext();
+      const summary = await runImport(context, "rgs", {
+        ...baseInput,
+        mappedRows: [
+          buildMappedRow({
+            caseRef: "32669",
+            sourceRow: 1203 + rowOffset,
+            travellerFullName: "ATEMA ALIABBAS TINWALA",
+            partnerName: "PARADISE TOURS",
+            passportNumber: "P1111111",
+          }),
+          buildMappedRow({
+            caseRef: "32669",
+            sourceRow: 1302 + rowOffset,
+            travellerFullName: "KUSHMEET SINGH BAWA",
+            partnerName: "Ozzy Travels",
+            passportNumber: "P2222222",
+          }),
+        ],
+      });
+      const importedCases = await Promise.all(
+        summary.createdCaseIds.map((caseId) => readCase(context, "rgs", caseId)),
+      );
+      return importedCases.map((importedCase) => importedCase!.caseRef).sort();
+    }
+
+    expect(await importedRefsFor(0)).toEqual(["32669", "32669-2"]);
+    // Eleven rows inserted above them. Same two travellers, same two refs.
+    expect(await importedRefsFor(11)).toEqual(["32669", "32669-2"]);
+  });
+
+  it("orders duplicate claimants by content, so the same traveller keeps the bare ref", async () => {
+    const context = buildTestContext();
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [
+        // Later in the sheet, but first by traveller name.
+        buildMappedRow({
+          caseRef: "32669",
+          sourceRow: 1302,
+          travellerFullName: "ATEMA ALIABBAS TINWALA",
+          partnerName: "PARADISE TOURS",
+          passportNumber: "P1111111",
+        }),
+        buildMappedRow({
+          caseRef: "32669",
+          sourceRow: 1203,
+          travellerFullName: "KUSHMEET SINGH BAWA",
+          partnerName: "Ozzy Travels",
+          passportNumber: "P2222222",
+        }),
+      ],
+    });
+
+    const atemasCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    const kushmeetsCase = await readCase(context, "rgs", summary.createdCaseIds[1]!);
+    expect(atemasCase!.caseRef).toBe("32669");
+    expect(kushmeetsCase!.caseRef).toBe("32669-2");
+  });
+
+  it("gives a duplicated ref's joined phone to one claimant only, and flags the other", async () => {
+    const context = buildTestContext();
+    // REF 32669 on the real sheet: phone 9872668866, claimed by ATEMA
+    // ALIABBAS TINWALA at PARADISE TOURS and KUSHMEET SINGH BAWA at Ozzy
+    // Travels -- two travellers at rival agencies. Both used to receive it.
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [
+        buildMappedRow({
+          caseRef: "32669",
+          sourceRow: 1203,
+          travellerFullName: "ATEMA ALIABBAS TINWALA",
+          partnerName: "PARADISE TOURS",
+          passportNumber: "P1111111",
+        }),
+        buildMappedRow({
+          caseRef: "32669",
+          sourceRow: 1302,
+          travellerFullName: "KUSHMEET SINGH BAWA",
+          partnerName: "Ozzy Travels",
+          passportNumber: "P2222222",
+        }),
+      ],
+      contactDetails: new Map([
+        ["32669", { phone: "9872668866", trackingNumber: "25DEL3G0012679" }],
+      ]),
+    });
+
+    const firstClaimantsCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
+    const otherClaimantsCase = await readCase(context, "rgs", summary.createdCaseIds[1]!);
+    expect(firstClaimantsCase!.applicants[0]!.trackingNumber).toBe("25DEL3G0012679");
+    expect(otherClaimantsCase!.applicants[0]!.trackingNumber).toBeUndefined();
+
+    const firstClaimantsTraveller = await getTravellerOrThrow(
+      context,
+      "rgs",
+      firstClaimantsCase!.applicants[0]!.travellerId,
+    );
+    const otherClaimantsTraveller = await getTravellerOrThrow(
+      context,
+      "rgs",
+      otherClaimantsCase!.applicants[0]!.travellerId,
+    );
+    expect(firstClaimantsTraveller.phone).toBe("9872668866");
+    // The PII disclosure this exists to prevent: one agency's client's mobile
+    // stored on a rival agency's client's record.
+    expect(otherClaimantsTraveller.phone).toBeUndefined();
+
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    const withheldItem = open.reviewItems.find(
+      (item) => item.reason === "DUPLICATE_REF" && item.fieldName === "Phone",
+    );
+    expect(withheldItem).toBeDefined();
+    expect(withheldItem!.sourceRow).toBe(1302);
+    expect(withheldItem!.detail).toMatch(/withheld here/);
+  });
+
+  it("records the 2025 YEAR contact details that lost a same-ref conflict", async () => {
+    const context = buildTestContext();
+    await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [buildMappedRow({ caseRef: "33356" })],
+      contactDetails: new Map([
+        [
+          "33356",
+          {
+            phone: "9844544233",
+            conflictingValues: ['Phone 9891842385 ("2025 YEAR" row 2176)'],
+          },
+        ],
+      ]),
+    });
+
+    const open = await listReviewItems(context, "rgs", "OPEN");
+    const conflictItem = open.reviewItems.find(
+      (item) => item.reason === "DUPLICATE_REF" && item.fieldName === "Phone",
+    );
+    expect(conflictItem).toBeDefined();
+    expect(conflictItem!.rawValue).toBe('Phone 9891842385 ("2025 YEAR" row 2176)');
   });
 
   // --- Ruling (task-9): blank partner name --------------------------------

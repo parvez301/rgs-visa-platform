@@ -38,4 +38,59 @@ describe("joinPhones", () => {
     expect(joined.get("31376")?.phone).toBeUndefined();
     expect(joined.get("31376")?.flaggedPhoneRaw).toBe("Mukesh Kumar");
   });
+
+  // "2025 YEAR" duplicates 18 refs of its own. Building a fresh object per
+  // row and `set`ting it unconditionally meant a later blank cell overwrote
+  // an earlier real value -- measured, that lost data on 4 refs.
+  it("does not let a later blank row overwrite a tracking number an earlier one had", () => {
+    const joined = joinPhones(
+      [rowFor("31140")],
+      [
+        { sourceRow: 61, caseRef: "31140", phoneRaw: "", trackingNumber: "25DEL3G0001287" },
+        { sourceRow: 105, caseRef: "31140", phoneRaw: "", trackingNumber: "" },
+      ],
+    );
+    expect(joined.get("31140")?.trackingNumber).toBe("25DEL3G0001287");
+  });
+
+  it("fills each field from the first row that has it, across duplicate refs", () => {
+    const joined = joinPhones(
+      [rowFor("35206")],
+      [
+        { sourceRow: 3829, caseRef: "35206", phoneRaw: "", trackingNumber: "DEL438907SA13542025" },
+        { sourceRow: 3830, caseRef: "35206", phoneRaw: "9812345670", trackingNumber: "" },
+      ],
+    );
+    expect(joined.get("35206")).toEqual({
+      trackingNumber: "DEL438907SA13542025",
+      phone: "9812345670",
+    });
+  });
+
+  it("records a disagreeing value from a duplicate ref rather than dropping it", () => {
+    // Ref 33356 on the real sheet: row 1989 carries phone 9844544233, row
+    // 2176 carries 9891842385. One of them has to lose; neither may vanish.
+    const joined = joinPhones(
+      [rowFor("33356")],
+      [
+        { sourceRow: 1989, caseRef: "33356", phoneRaw: "9844544233", trackingNumber: "" },
+        { sourceRow: 2176, caseRef: "33356", phoneRaw: "9891842385", trackingNumber: "" },
+      ],
+    );
+    expect(joined.get("33356")?.phone).toBe("9844544233");
+    expect(joined.get("33356")?.conflictingValues).toEqual([
+      'Phone 9891842385 ("2025 YEAR" row 2176)',
+    ]);
+  });
+
+  it("does not call two rows agreeing a conflict", () => {
+    const joined = joinPhones(
+      [rowFor("31376")],
+      [
+        { sourceRow: 2, caseRef: "31376", phoneRaw: "9812345670", trackingNumber: "" },
+        { sourceRow: 3, caseRef: "31376", phoneRaw: "9812345670", trackingNumber: "" },
+      ],
+    );
+    expect(joined.get("31376")?.conflictingValues).toBeUndefined();
+  });
 });
