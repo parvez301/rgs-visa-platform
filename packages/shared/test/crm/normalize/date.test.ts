@@ -81,14 +81,44 @@ describe("normalizeExcelDate", () => {
     });
   });
 
-  it("sends an ISO date outside the sane window to review", () => {
-    expect(normalizeExcelDate("2019-06-12").needsReview).toBe(true);
-    expect(normalizeExcelDate("2019-06-12").isoDate).toBeNull();
+  it("sends an ISO date outside the sane window to review, while accepting one just inside it", () => {
+    // Review round 1, Minor 4: asserting only the rejection is vacuous — an
+    // ISO-shaped string can NEVER match the dd-mm-yyyy branch's pattern
+    // (that branch requires a 4-digit group LAST, not first), so deleting
+    // the entire ISO branch also sends "2019-06-12" to review, for the
+    // unrelated reason that nothing matched at all. Pairing the rejection
+    // with the boundary-year acceptance in the same test means deleting the
+    // whole branch turns "2020-06-12" into a rejection too, which fails the
+    // acceptance assertion below — that is what makes this test prove the
+    // branch exists, not just that this one input is rejected.
+    expect(normalizeExcelDate("2019-06-12")).toEqual({
+      isoDate: null,
+      needsReview: true,
+      rawValue: "2019-06-12",
+    });
+    expect(normalizeExcelDate("2020-06-12")).toEqual({
+      isoDate: "2020-06-12",
+      needsReview: false,
+      rawValue: "2020-06-12",
+    });
   });
 
-  it("rejects an ISO date that is not a real calendar day", () => {
-    expect(normalizeExcelDate("2025-02-30").isoDate).toBeNull();
-    expect(normalizeExcelDate("2025-02-30").needsReview).toBe(true);
+  it("rejects an ISO date that is not a real calendar day, while accepting a neighboring real one", () => {
+    // Same discrimination as above, for isRealCalendarDate rather than
+    // isPlausibleYear: pairing the Feb-30 rejection with the Feb-28
+    // acceptance (same year, so isPlausibleYear is not what's under test)
+    // means deleting the whole ISO branch — or just its calendar check —
+    // shows up as the acceptance assertion failing, not only the rejection.
+    expect(normalizeExcelDate("2025-02-30")).toEqual({
+      isoDate: null,
+      needsReview: true,
+      rawValue: "2025-02-30",
+    });
+    expect(normalizeExcelDate("2025-02-28")).toEqual({
+      isoDate: "2025-02-28",
+      needsReview: false,
+      rawValue: "2025-02-28",
+    });
   });
 
   it("does not throw on an invalid Date object, routing it to review instead", () => {

@@ -46,6 +46,20 @@ function isBlank(rawValue: string): boolean {
 }
 
 /**
+ * Task-7 review round 1, Minor 5 — measured across all 115 present-but-
+ * unparseable cells in the three date columns of the real workbook: 13
+ * contain no digit at all ("aposttile", "REJECT", "DUPLICATE", "Passport",
+ * "N/A", the row-3001 email address, ...) and the remaining 102 all contain
+ * a digit (typo'd or out-of-window dates like "22-012024", "31-01-2028").
+ * A cell with zero digits is not a mistyped date attempt at all — it is
+ * foreign content sitting in a date column, i.e. exactly what
+ * `COLUMN_SHIFT_JUNK` names. A cell with a digit stays `UNPARSEABLE_DATE`.
+ */
+function looksLikeColumnShiftJunk(rawValue: string): boolean {
+  return !/\d/.test(rawValue);
+}
+
+/**
  * Spec §6: a blank cell means the sheet did not record the value. It is not
  * a defect and must never become a review item — treating blanks as review
  * items turns 64.9% of rows into queue entries instead of 14.2%.
@@ -59,15 +73,8 @@ function isBlank(rawValue: string): boolean {
  *
  * When the value is present but cannot be parsed as any date, its text must
  * not simply vanish: it survives on the review item's `rawValue` AND is
- * copied into `legacyRaw`. Measured against the real workbook, 85 of the
- * three date columns' cells are present-but-unparseable, and one of them
- * (Mini CRM row 3001, column "C") is not a malformed date attempt at all —
- * it is an email address left behind by a column-shift paste. Since the
- * reader has already flattened every cell to text by the time this function
- * sees it, the two cases are indistinguishable by shape; copying every
- * unparseable date's text into `legacyRaw` (in addition to the review item)
- * is what keeps that one row's data from being dropped, without guessing
- * which of the 85 rows are "really" column-shift junk.
+ * copied into `legacyRaw` — see `looksLikeColumnShiftJunk` above for which
+ * `ReviewReason` it gets.
  */
 function mapDateField(
   rawValue: string,
@@ -80,7 +87,10 @@ function mapDateField(
   }
   const normalizedDate = crm.normalizeExcelDate(rawValue);
   if (normalizedDate.isoDate === null) {
-    reviewItems.push({ reason: "UNPARSEABLE_DATE", fieldName, rawValue });
+    const reason: crm.ReviewReason = looksLikeColumnShiftJunk(rawValue)
+      ? "COLUMN_SHIFT_JUNK"
+      : "UNPARSEABLE_DATE";
+    reviewItems.push({ reason, fieldName, rawValue });
     legacyRaw[fieldName] = rawValue;
     return undefined;
   }
@@ -118,7 +128,23 @@ export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
 
   // A caseType named in the Status column describes what the case IS and
   // beats the Visa Type column, which often contradicts it (task-7 brief).
-  const caseType: crm.CaseType = statusResult.caseTypeHint ?? visaTypeResult.caseType ?? "OTHER";
+  //
+  // Task-7 review round 1, Major 1: crm.normalizeCountry returns a
+  // visaTypeHint (e.g. Country "Sri Lanka ETA" -> countryCode "LK" +
+  // visaTypeHint "E_VISA") that names a specific visa product implied by the
+  // COUNTRY text alone. It is a fallback, never an override: when the Visa
+  // Type column already yielded a caseType/visaType, the explicit column
+  // wins and the hint is dropped silently (it is derived from Country, not
+  // itself source data, so dropping it is not a "nothing is discarded"
+  // violation). It only fills in when the column yielded nothing at all —
+  // measured on the real workbook, that is 39 of the 113 "Sri Lanka ETA"
+  // rows, which otherwise land on caseType "OTHER" with no visaType, no
+  // review item, and no legacyRaw trace of the ETA signal.
+  const caseTypeFromColumns = statusResult.caseTypeHint ?? visaTypeResult.caseType;
+  const visaTypeHintApplies = caseTypeFromColumns === null && countryResult.visaTypeHint !== null;
+  const caseType: crm.CaseType = caseTypeFromColumns ?? (visaTypeHintApplies ? "VISA" : null) ?? "OTHER";
+  const visaType: crm.VisaType | null =
+    visaTypeResult.visaType ?? (visaTypeHintApplies ? countryResult.visaTypeHint : null);
 
   if (!isBlank(rawRow.additionalItems)) {
     legacyRaw["Additional Items"] = rawRow.additionalItems;
@@ -139,7 +165,7 @@ export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
   const caseDraft: MappedCaseDraft = {
     caseType,
     destinationCountry: countryResult.countryCode ?? "",
-    ...(visaTypeResult.visaType !== null ? { visaType: visaTypeResult.visaType } : {}),
+    ...(visaType !== null ? { visaType } : {}),
     ...(entriesResult.entryType !== null ? { entryType: entriesResult.entryType } : {}),
     ...(entriesResult.processing !== null ? { processing: entriesResult.processing } : {}),
     ...(entriesResult.validity !== null ? { validity: entriesResult.validity } : {}),

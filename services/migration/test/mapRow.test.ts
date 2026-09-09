@@ -78,11 +78,28 @@ describe("mapRow — pass 1", () => {
     expect(statusReview?.rawValue).toBe("DEU/DEL/190126/");
   });
 
-  it("raises a review item for an unparseable date but still maps the rest of the row", () => {
+  it("raises a review item for a no-digit date-column value but still maps the rest of the row", () => {
+    // Review round 1, Minor 5: "aposttile" contains no digit at all, so per
+    // the coordinator's ruling it is COLUMN_SHIFT_JUNK (foreign content in a
+    // date column), not UNPARSEABLE_DATE (a typo'd date attempt). This
+    // overrides the brief's original text, which predates that ruling.
     const mapped = mapRow(buildRawRow({ subDateRaw: "aposttile" }));
-    expect(mapped.reviewItems.some((item) => item.reason === "UNPARSEABLE_DATE")).toBe(true);
+    expect(mapped.reviewItems.some((item) => item.reason === "COLUMN_SHIFT_JUNK")).toBe(true);
     expect(mapped.caseDraft.destinationCountry).toBe("TR");
     expect(mapped.caseDraft.submissionDate).toBeUndefined();
+  });
+
+  it("raises UNPARSEABLE_DATE, not COLUMN_SHIFT_JUNK, for a digit-bearing malformed date", () => {
+    // Review round 1, Minor 5: a cell with a digit is a mangled/out-of-window
+    // date attempt, not foreign content — the two reasons must not collapse
+    // into one. "31-02-2025" is day-first shaped but 31 February does not
+    // exist, so it fails isRealCalendarDate while clearly containing digits.
+    const mapped = mapRow(buildRawRow({ collectionRaw: "31-02-2025" }));
+    const collectionReview = mapped.reviewItems.find((item) => item.fieldName === "Collection");
+    expect(collectionReview?.reason).toBe("UNPARSEABLE_DATE");
+    expect(collectionReview?.rawValue).toBe("31-02-2025");
+    expect(mapped.legacyRaw["Collection"]).toBe("31-02-2025");
+    expect(mapped.caseDraft.expectedCollectionDate).toBeUndefined();
   });
 
   it("parses ambiguous dates day-first, matching the workbook's 3261:15 split", () => {
@@ -101,6 +118,60 @@ describe("mapRow — pass 1", () => {
 
   it("defaults a missing applicant count to 1 rather than 0", () => {
     expect(mapRow(buildRawRow({ applicantCount: "" })).applicantCount).toBe(1);
+  });
+
+  // --- Review round 1, Major 2: courierMode/note wiring from Status into
+  // caseDraft was asserted nowhere; status.test.ts only proves the
+  // *normalizer* returns them, not that mapRow plumbs them through.
+  it("wires a courier mode from the Status column into caseDraft", () => {
+    // "DTDC" maps to custody IN_TRANSIT + courierMode DTDC per status.ts.
+    const mapped = mapRow(buildRawRow({ status: "DTDC" }));
+    expect(mapped.caseDraft.courierMode).toBe("DTDC");
+    expect(mapped.caseDraft.custody).toBe("IN_TRANSIT");
+  });
+
+  it("wires a note from the Status column into caseDraft", () => {
+    // "REC: BIO LETTER" maps to caseStatus IN_PROGRESS + a fixed note.
+    const mapped = mapRow(buildRawRow({ status: "REC: BIO LETTER" }));
+    expect(mapped.caseDraft.note).toBe("Biometrics letter received");
+    expect(mapped.caseDraft.caseStatus).toBe("IN_PROGRESS");
+  });
+
+  // --- Review round 1, Major 3: receivedDate's happy path and all of
+  // expectedCollectionDate were untested — two of mapDateField's three call
+  // sites, in the very function this task's ruling is about.
+  it("maps a parseable Received Date into caseDraft.receivedDate", () => {
+    const mapped = mapRow(buildRawRow({ receivedDateRaw: "30-12-2024" }));
+    expect(mapped.caseDraft.receivedDate).toBe("2024-12-30");
+    expect(mapped.reviewItems).toEqual([]);
+  });
+
+  it("maps a parseable Collection date into caseDraft.expectedCollectionDate", () => {
+    const mapped = mapRow(buildRawRow({ collectionRaw: "02/01/2025" }));
+    expect(mapped.caseDraft.expectedCollectionDate).toBe("2025-01-02");
+    expect(mapped.reviewItems).toEqual([]);
+  });
+
+  // --- Review round 1, Major 1: crm.normalizeCountry's visaTypeHint (e.g.
+  // Country "Sri Lanka ETA" -> visaTypeHint "E_VISA") had no consumer
+  // anywhere in the plan. It is a fallback: it fills in only when the Visa
+  // Type column itself yielded nothing, and is dropped silently when the
+  // column already named something else.
+  it("falls back to the country's visaTypeHint when Visa Type is blank", () => {
+    const mapped = mapRow(buildRawRow({ country: "Sri Lanka ETA", visaType: "" }));
+    expect(mapped.caseDraft.visaType).toBe("E_VISA");
+    expect(mapped.caseDraft.caseType).toBe("VISA");
+    expect(mapped.reviewItems).toEqual([]);
+  });
+
+  it("lets an explicit Visa Type column value beat the country's visaTypeHint", () => {
+    // Measured on the real workbook: 74 of 113 "Sri Lanka ETA" rows carry an
+    // explicit Visa Type (Tourist/Business/Evisa - Tourist) that disagrees
+    // with the country hint. The explicit column wins; the hint is dropped.
+    const mapped = mapRow(buildRawRow({ country: "Sri Lanka ETA", visaType: "Tourist" }));
+    expect(mapped.caseDraft.visaType).toBe("TOURIST");
+    expect(mapped.caseDraft.caseType).toBe("VISA");
+    expect(mapped.reviewItems).toEqual([]);
   });
 
   // --- Controller ruling (task-7-ruling-date-seam.md): the reader/normalizer
@@ -123,12 +194,13 @@ describe("mapRow — pass 1", () => {
     // Mini CRM row 3001, column "C": travel@airbournetravels.com — a real
     // email address left behind by a bad paste, sitting in the
     // received-date column. It must survive verbatim and must never be
-    // silently dropped or guessed into some other field.
+    // silently dropped or guessed into some other field. Review round 1,
+    // Minor 5: it contains no digit, so the reason is COLUMN_SHIFT_JUNK.
     const mapped = mapRow(
       buildRawRow({ sourceRow: 3001, receivedDateRaw: "travel@airbournetravels.com" }),
     );
     const dateReview = mapped.reviewItems.find((item) => item.fieldName === "C");
-    expect(dateReview?.reason).toBe("UNPARSEABLE_DATE");
+    expect(dateReview?.reason).toBe("COLUMN_SHIFT_JUNK");
     expect(dateReview?.rawValue).toBe("travel@airbournetravels.com");
     expect(mapped.legacyRaw["C"]).toBe("travel@airbournetravels.com");
     expect(mapped.caseDraft.receivedDate).toBeUndefined();
