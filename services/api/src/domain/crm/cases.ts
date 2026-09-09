@@ -7,6 +7,7 @@ import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
 import { CASE_META_SORT_KEY, caseStatusGsi1Pk, partnerCasesGsi2Pk } from "./keys";
 import { getPartnerOrThrow } from "./partners";
+import { getTravellerOrThrow } from "./travellers";
 
 export interface CreateCaseApplicantInput {
   applicantRef: string;
@@ -34,6 +35,12 @@ export async function createCase(
 ): Promise<crm.CrmCase> {
   // 404s if the partner is unknown — a case always belongs to someone.
   await getPartnerOrThrow(context, tenantId, input.partnerId);
+  // ...and 404s if any applicant cites a traveller that is not on file. The
+  // repeat-traveller capability (spec §5) is worth nothing if a case can point
+  // at a travellerId nobody ever created.
+  for (const applicantInput of input.applicants) {
+    await getTravellerOrThrow(context, tenantId, applicantInput.travellerId);
+  }
 
   const nowIso = context.now().toISOString();
   let crmCase: crm.CrmCase;

@@ -70,6 +70,15 @@ async function callUnauthenticated(
   return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
 }
 
+/**
+ * Cases point at travellers on file, so a case fixture creates its traveller
+ * through the traveller route first and uses the id that comes back.
+ */
+async function seedTraveller(router: Router, fullName: string): Promise<string> {
+  const created = await call(router, "POST", "/api/v1/admin/crm/travellers", { fullName });
+  return created.payload.travellerId;
+}
+
 describe("crm admin routes", () => {
   it("creates a partner then a case, and reads the case back", async () => {
     const context = buildTestContext();
@@ -81,6 +90,7 @@ describe("crm admin routes", () => {
     expect(partnerResponse.statusCode).toBe(200);
     const partnerId = partnerResponse.payload.partnerId;
 
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     const caseResponse = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -88,7 +98,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
     expect(caseResponse.statusCode).toBe(200);
     expect(caseResponse.payload.caseStatus).toBe("NEW");
@@ -105,6 +115,7 @@ describe("crm admin routes", () => {
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
     });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -112,7 +123,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
 
     const listed = await call(router, "GET", "/api/v1/admin/crm/cases", undefined, {
@@ -128,6 +139,7 @@ describe("crm admin routes", () => {
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
     });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -135,7 +147,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
 
     const moved = await call(
@@ -154,6 +166,7 @@ describe("crm admin routes", () => {
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
     });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -161,7 +174,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
     const caseId = created.payload.caseId;
     await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
@@ -195,6 +208,7 @@ describe("crm admin routes", () => {
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
     });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -202,7 +216,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
     const events = await call(
       router,
@@ -248,6 +262,7 @@ describe("crm admin routes", () => {
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
     });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -255,7 +270,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
     const moved = await call(
       router,
@@ -273,6 +288,7 @@ describe("crm admin routes", () => {
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
     });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -280,7 +296,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
     const missing = await call(
       router,
@@ -332,6 +348,7 @@ describe("crm admin routes", () => {
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
     });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -339,7 +356,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
 
     const moved = await call(
@@ -361,6 +378,7 @@ describe("crm admin routes", () => {
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
     });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -368,7 +386,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
     const missing = await call(
       router,
@@ -379,6 +397,24 @@ describe("crm admin routes", () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it("returns 404 creating a case for a traveller that does not exist", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const missingTraveller = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId: "trv_totally_made_up" }],
+    });
+    expect(missingTraveller.statusCode).toBe(404);
+  });
+
   // --- One half-written case partition must not take the whole queue down. ---
   it("still lists the healthy cases when one case partition lost its applicants", async () => {
     const context = buildTestContext();
@@ -386,6 +422,7 @@ describe("crm admin routes", () => {
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
     });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
     const healthy = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31377",
       caseType: "VISA",
@@ -393,8 +430,9 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31377", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31377", travellerId }],
     });
+    const secondTravellerId = await seedTraveller(router, "Aman Kapoor");
     const corrupted = await call(router, "POST", "/api/v1/admin/crm/cases", {
       caseRef: "31378",
       caseType: "VISA",
@@ -402,7 +440,7 @@ describe("crm admin routes", () => {
       destinationCountry: "BH",
       visaType: "EVISA_TOURIST",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: "31378", travellerId: "trv_1" }],
+      applicants: [{ applicantRef: "31378", travellerId: secondTravellerId }],
     });
     await writeCase(context, { ...corrupted.payload, applicants: [] });
 

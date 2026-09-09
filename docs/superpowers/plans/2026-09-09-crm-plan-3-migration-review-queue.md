@@ -1152,3 +1152,583 @@ git commit -m "feat(migration): read the workbook by column position with serial
 ```
 
 ---
+
+### Task 7: Pass 1 — the deterministic row mapper
+
+**Files:**
+- Create: `services/migration/src/mapRow.ts`
+- Test: `services/migration/test/mapRow.test.ts`
+
+**Interfaces:**
+- Consumes: `RawMiniCrmRow` from `./readWorkbook`; `crm.normalizeCountry`, `crm.normalizeEntries`, `crm.normalizeStatus`, `crm.normalizeVisaType`, `crm.normalizePartnerName`, `crm.normalizeExcelDate`, `crm.ReviewReason` from `@rgs/shared`.
+- Produces:
+  - `interface MappedRow { caseRef: string; sourceSheet: string; sourceRow: number; partnerName: string; travellerFullName: string; passportNumber?: string; applicantCount: number; caseDraft: MappedCaseDraft; reviewItems: PendingReviewItem[]; legacyRaw: Record<string, string> }`
+  - `interface MappedCaseDraft { caseType: crm.CaseType; destinationCountry: string; visaType?: crm.VisaType; entryType?: crm.EntryType; processing?: crm.ProcessingSpeed; validity?: string; caseStatus: crm.CaseStatus; custody: crm.CustodyStatus; outcome: crm.ApplicantOutcome; courierMode?: crm.CourierMode; receivedDate?: string; submissionDate?: string; expectedCollectionDate?: string; note?: string }`
+  - `interface PendingReviewItem { reason: crm.ReviewReason; fieldName: string; rawValue: string; proposedValue?: string; detail?: string }`
+  - `mapRow(rawRow: RawMiniCrmRow): MappedRow`
+
+**Context for the implementer:** This is spec §9's pass 1 and it is a **pure function** — no I/O, no database, no clock. That is what makes it testable against all 7,161 rows in a second.
+
+The rules that decide review vs. accept:
+
+- **Blank means "not recorded", not "needs review"** (spec §6). A blank cell produces no review item and no field. Only a value that is *present and unmappable* goes to the queue. Getting this backwards turns 4,648 rows (64.9%) into review items instead of 1,016 (14.2%) — measured.
+- **Every normalizer already returns `needsReview`.** Trust it; do not second-guess with extra heuristics. Compose the Plan 1 normalizers and translate their `needsReview` into a `PendingReviewItem`.
+- **Nothing is discarded.** Any column whose value could not be mapped onto a domain field is copied into `legacyRaw` keyed by its workbook column name, so it survives and a human can see it later.
+- **A row always produces a `MappedRow`,** even when it also produces review items. A row with an unmappable `Status` still has a country, a partner and a traveller worth importing; the review item resolves the one field, it does not reject the row. Only a row with no usable `caseRef` is dropped, and the reader already excludes those.
+- **Status is the axis-splitter.** `normalizeStatus` returns `caseStatus`, `custody`, `outcome`, `courierMode`, `caseTypeHint`, `lineItemHint` and `note` — the three axes come from one Excel column. When it yields no `caseStatus`, default to `NEW`; when it yields no `custody`, default to `NOT_HELD`; when it yields no `outcome`, default to `PENDING`. Those are the schema defaults and they mean "the sheet did not say".
+- **`caseTypeHint` from Status wins over `Visa Type`** — `Payment Only` and `Documents attestation` sit in the Status column and describe what the case *is*, which the Visa Type column then contradicts.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, expect, it } from "vitest";
+import { mapRow } from "../src/mapRow";
+import type { RawMiniCrmRow } from "../src/readWorkbook";
+
+function buildRawRow(overrides: Partial<RawMiniCrmRow> = {}): RawMiniCrmRow {
+  return {
+    sourceRow: 2,
+    receivedDateRaw: "30-12-2024",
+    caseRef: "31376",
+    applicantsName: "AKSHAY JAIN",
+    applicantCount: "3",
+    partnerName: "Sudiva Spinners Pvt Ltd",
+    country: "Turkey",
+    dateOfBirthRaw: "",
+    subDateRaw: "31/12/2024",
+    collectionRaw: "",
+    passportNumber: "V2404480",
+    entries: "Single",
+    visaType: "Business",
+    status: "Handover",
+    additionalItems: "",
+    ...overrides,
+  };
+}
+
+describe("mapRow — pass 1", () => {
+  it("maps a clean row with no review items", () => {
+    const mapped = mapRow(buildRawRow());
+    expect(mapped.reviewItems).toEqual([]);
+    expect(mapped.caseRef).toBe("31376");
+    expect(mapped.sourceRow).toBe(2);
+    expect(mapped.caseDraft.destinationCountry).toBe("TR");
+    expect(mapped.caseDraft.caseType).toBe("VISA");
+    expect(mapped.caseDraft.visaType).toBe("BUSINESS");
+    expect(mapped.caseDraft.entryType).toBe("SINGLE");
+    expect(mapped.caseDraft.processing).toBe("NORMAL");
+    expect(mapped.applicantCount).toBe(3);
+  });
+
+  it("splits one Status cell across all three axes", () => {
+    // "Handover" is CLOSED + RETURNED per spec §6.
+    const mapped = mapRow(buildRawRow({ status: "Handover" }));
+    expect(mapped.caseDraft.caseStatus).toBe("CLOSED");
+    expect(mapped.caseDraft.custody).toBe("RETURNED");
+  });
+
+  it("records an outcome that lives in the Status column", () => {
+    const mapped = mapRow(buildRawRow({ status: "Approved" }));
+    expect(mapped.caseDraft.caseStatus).toBe("DECIDED");
+    expect(mapped.caseDraft.outcome).toBe("APPROVED");
+  });
+
+  it("treats a BLANK cell as not-recorded, never as a review item", () => {
+    const mapped = mapRow(buildRawRow({ entries: "", subDateRaw: "", status: "" }));
+    expect(mapped.reviewItems).toEqual([]);
+    expect(mapped.caseDraft.entryType).toBeUndefined();
+    expect(mapped.caseDraft.submissionDate).toBeUndefined();
+    expect(mapped.caseDraft.caseStatus).toBe("NEW");
+    expect(mapped.caseDraft.custody).toBe("NOT_HELD");
+    expect(mapped.caseDraft.outcome).toBe("PENDING");
+  });
+
+  it("raises a review item for a PRESENT but unmappable status", () => {
+    const mapped = mapRow(buildRawRow({ status: "DEU/DEL/190126/" }));
+    const statusReview = mapped.reviewItems.find((item) => item.fieldName === "Status");
+    expect(statusReview?.reason).toBe("UNMAPPED_STATUS");
+    expect(statusReview?.rawValue).toBe("DEU/DEL/190126/");
+  });
+
+  it("raises a review item for an unparseable date but still maps the rest of the row", () => {
+    const mapped = mapRow(buildRawRow({ subDateRaw: "aposttile" }));
+    expect(mapped.reviewItems.some((item) => item.reason === "UNPARSEABLE_DATE")).toBe(true);
+    expect(mapped.caseDraft.destinationCountry).toBe("TR");
+    expect(mapped.caseDraft.submissionDate).toBeUndefined();
+  });
+
+  it("parses ambiguous dates day-first, matching the workbook's 3261:15 split", () => {
+    expect(mapRow(buildRawRow({ subDateRaw: "05/01/2025" })).caseDraft.submissionDate).toBe("2025-01-05");
+  });
+
+  it("keeps unmapped columns in legacyRaw so nothing is discarded", () => {
+    const mapped = mapRow(buildRawRow({ additionalItems: "PHOTO, HOTEL, GST NO" }));
+    expect(mapped.legacyRaw["Additional Items"]).toBe("PHOTO, HOTEL, GST NO");
+  });
+
+  it("lets a caseType hint in the Status column beat the Visa Type column", () => {
+    const mapped = mapRow(buildRawRow({ status: "Documents attestation", visaType: "Tourist" }));
+    expect(mapped.caseDraft.caseType).toBe("ATTESTATION");
+  });
+
+  it("defaults a missing applicant count to 1 rather than 0", () => {
+    expect(mapRow(buildRawRow({ applicantCount: "" })).applicantCount).toBe(1);
+  });
+});
+```
+
+- [ ] **Step 2: Run the test and watch it fail**
+
+Run: `pnpm --filter @rgs/migration test mapRow`
+Expected: FAIL — `Failed to load url ../src/mapRow`.
+
+- [ ] **Step 3: Write the implementation**
+
+```ts
+import { crm } from "@rgs/shared";
+import type { RawMiniCrmRow } from "./readWorkbook";
+
+export interface PendingReviewItem {
+  reason: crm.ReviewReason;
+  fieldName: string;
+  rawValue: string;
+  proposedValue?: string;
+  detail?: string;
+}
+
+export interface MappedCaseDraft {
+  caseType: crm.CaseType;
+  destinationCountry: string;
+  visaType?: crm.VisaType;
+  entryType?: crm.EntryType;
+  processing?: crm.ProcessingSpeed;
+  validity?: string;
+  caseStatus: crm.CaseStatus;
+  custody: crm.CustodyStatus;
+  outcome: crm.ApplicantOutcome;
+  courierMode?: crm.CourierMode;
+  receivedDate?: string;
+  submissionDate?: string;
+  expectedCollectionDate?: string;
+  note?: string;
+}
+
+export interface MappedRow {
+  caseRef: string;
+  sourceSheet: string;
+  sourceRow: number;
+  partnerName: string;
+  travellerFullName: string;
+  passportNumber?: string;
+  applicantCount: number;
+  caseDraft: MappedCaseDraft;
+  reviewItems: PendingReviewItem[];
+  legacyRaw: Record<string, string>;
+}
+
+const MINI_CRM_SHEET_NAME = "Mini CRM";
+
+function isBlank(rawValue: string): boolean {
+  return rawValue.trim() === "";
+}
+
+/**
+ * Spec §6: a blank cell means the sheet did not record the value. It is not
+ * a defect and must never become a review item — treating blanks as review
+ * items turns 64.9% of rows into queue entries instead of 14.2%.
+ */
+function mapDateField(
+  rawValue: string,
+  fieldName: string,
+  reviewItems: PendingReviewItem[],
+): string | undefined {
+  if (isBlank(rawValue)) {
+    return undefined;
+  }
+  // The reader has already converted Excel serials to ISO.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawValue)) {
+    return rawValue;
+  }
+  const normalized = crm.normalizeExcelDate(rawValue);
+  if (normalized.isoDate === null) {
+    reviewItems.push({ reason: "UNPARSEABLE_DATE", fieldName, rawValue });
+    return undefined;
+  }
+  return normalized.isoDate;
+}
+
+export function mapRow(rawRow: RawMiniCrmRow): MappedRow {
+  const reviewItems: PendingReviewItem[] = [];
+  const legacyRaw: Record<string, string> = {};
+
+  const country = crm.normalizeCountry(rawRow.country);
+  if (!isBlank(rawRow.country) && country.needsReview) {
+    reviewItems.push({ reason: "UNMAPPED_COUNTRY", fieldName: "Country", rawValue: rawRow.country });
+  }
+
+  const visaTypeResult = crm.normalizeVisaType(rawRow.visaType);
+  if (!isBlank(rawRow.visaType) && visaTypeResult.needsReview) {
+    reviewItems.push({ reason: "UNMAPPED_VISA_TYPE", fieldName: "Visa Type", rawValue: rawRow.visaType });
+  }
+
+  const entriesResult = crm.normalizeEntries(rawRow.entries);
+  if (!isBlank(rawRow.entries) && entriesResult.needsReview) {
+    reviewItems.push({ reason: "UNMAPPED_ENTRIES", fieldName: "Entries", rawValue: rawRow.entries });
+  }
+
+  const statusResult = crm.normalizeStatus(rawRow.status);
+  if (!isBlank(rawRow.status) && statusResult.needsReview) {
+    reviewItems.push({ reason: "UNMAPPED_STATUS", fieldName: "Status", rawValue: rawRow.status });
+  }
+
+  const partnerResult = crm.normalizePartnerName(rawRow.partnerName);
+  if (!isBlank(rawRow.partnerName) && partnerResult.needsReview) {
+    reviewItems.push({ reason: "UNMAPPED_PARTNER", fieldName: "REFRENCE", rawValue: rawRow.partnerName });
+  }
+
+  // A caseType named in the Status column describes what the case IS and
+  // beats the Visa Type column, which often contradicts it.
+  const caseType: crm.CaseType = statusResult.caseTypeHint ?? visaTypeResult.caseType ?? "OTHER";
+
+  if (!isBlank(rawRow.additionalItems)) {
+    legacyRaw["Additional Items"] = rawRow.additionalItems;
+  }
+  if (statusResult.lineItemHint !== null) {
+    legacyRaw["Status line item"] = statusResult.lineItemHint;
+  }
+  if (!isBlank(rawRow.dateOfBirthRaw)) {
+    legacyRaw["DOB"] = rawRow.dateOfBirthRaw;
+  }
+
+  const parsedApplicantCount = Number(rawRow.applicantCount);
+  const applicantCount =
+    Number.isFinite(parsedApplicantCount) && parsedApplicantCount >= 1 ? Math.trunc(parsedApplicantCount) : 1;
+
+  const caseDraft: MappedCaseDraft = {
+    caseType,
+    destinationCountry: country.countryCode ?? "",
+    ...(visaTypeResult.visaType !== null ? { visaType: visaTypeResult.visaType } : {}),
+    ...(entriesResult.entryType !== null ? { entryType: entriesResult.entryType } : {}),
+    ...(entriesResult.processing !== null ? { processing: entriesResult.processing } : {}),
+    ...(entriesResult.validity !== null ? { validity: entriesResult.validity } : {}),
+    caseStatus: statusResult.caseStatus ?? "NEW",
+    custody: statusResult.custody ?? "NOT_HELD",
+    outcome: statusResult.outcome ?? "PENDING",
+    ...(statusResult.courierMode !== null ? { courierMode: statusResult.courierMode } : {}),
+    ...(statusResult.note !== null ? { note: statusResult.note } : {}),
+  };
+
+  const receivedDate = mapDateField(rawRow.receivedDateRaw, "C", reviewItems);
+  if (receivedDate !== undefined) caseDraft.receivedDate = receivedDate;
+  const submissionDate = mapDateField(rawRow.subDateRaw, "Sub Date", reviewItems);
+  if (submissionDate !== undefined) caseDraft.submissionDate = submissionDate;
+  const collectionDate = mapDateField(rawRow.collectionRaw, "Collection", reviewItems);
+  if (collectionDate !== undefined) caseDraft.expectedCollectionDate = collectionDate;
+
+  return {
+    caseRef: rawRow.caseRef,
+    sourceSheet: MINI_CRM_SHEET_NAME,
+    sourceRow: rawRow.sourceRow,
+    partnerName: rawRow.partnerName,
+    travellerFullName: rawRow.applicantsName,
+    ...(isBlank(rawRow.passportNumber) ? {} : { passportNumber: rawRow.passportNumber }),
+    applicantCount,
+    caseDraft,
+    reviewItems,
+    legacyRaw,
+  };
+}
+```
+
+- [ ] **Step 4: Run the test and watch it pass**
+
+Run: `pnpm --filter @rgs/migration test mapRow` — PASS, 10 tests.
+Then `pnpm -r typecheck`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add services/migration/src/mapRow.ts services/migration/test/mapRow.test.ts
+git commit -m "feat(migration): add the deterministic pass-1 row mapper"
+```
+
+---
+
+### Task 8: The Plan 4 seam, phone join, and group detection
+
+**Files:**
+- Create: `services/migration/src/residueResolver.ts`
+- Create: `services/migration/src/joinPhones.ts`
+- Create: `services/migration/src/groupCases.ts`
+- Test: `services/migration/test/residueResolver.test.ts`, `services/migration/test/joinPhones.test.ts`, `services/migration/test/groupCases.test.ts`
+
+**Interfaces:**
+- Consumes: `MappedRow`, `PendingReviewItem` from `./mapRow`; `RawYearRow` from `./readWorkbook`.
+- Produces:
+  - `interface ResidueResolution { fieldName: string; proposedValue: string; confidence: number }`
+  - `interface ResidueResolver { resolve(row: MappedRow, pending: PendingReviewItem[]): Promise<ResidueResolution[]> }`
+  - `const passthroughResidueResolver: ResidueResolver` — resolves nothing
+  - `joinPhones(mappedRows: MappedRow[], yearRows: RawYearRow[]): Map<string, { phone?: string; trackingNumber?: string }>`
+  - `interface ProposedGroup { caseRefs: string[]; partnerName: string; destinationCountry: string; receivedDate: string }`
+  - `proposeGroups(mappedRows: MappedRow[]): ProposedGroup[]`
+
+**Context for the implementer:** Three small, independent pieces; they share a task because none is worth its own review cycle.
+
+`residueResolver.ts` is **the seam for spec §9's pass 2**. Plan 4 supplies an LLM-backed implementation; this plan ships only the interface and a pass-through that resolves nothing, so the importer's wiring is already correct when Plan 4 arrives. Do **not** call a model here, and do not add a provider dependency — the whole point is that this plan has no LLM in it.
+
+`joinPhones` implements spec §9's "phone numbers are recovered from `2025 YEAR` by REF NO join, since `Mini CRM` dropped that column". An Indian mobile is 10 digits starting 6-9; anything else is kept but flagged, because the source stores phones as floats and a leading zero may already be lost.
+
+`proposeGroups` implements spec §9's group detection: same partner + country + received date + **adjacent** REF NO. It **proposes only** — the spec is explicit that groupings are reviewed, never auto-applied. Return the proposals; the importer turns them into `PROPOSED_GROUP` review items.
+
+- [ ] **Step 1: Write the failing tests**
+
+`residueResolver.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { passthroughResidueResolver } from "../src/residueResolver";
+
+describe("passthroughResidueResolver", () => {
+  it("resolves nothing, so pass-1 residue flows to the human queue", async () => {
+    const resolutions = await passthroughResidueResolver.resolve(
+      { caseRef: "1" } as never,
+      [{ reason: "UNMAPPED_STATUS", fieldName: "Status", rawValue: "???" }],
+    );
+    expect(resolutions).toEqual([]);
+  });
+});
+```
+
+`joinPhones.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { joinPhones } from "../src/joinPhones";
+import type { MappedRow } from "../src/mapRow";
+
+const rowFor = (caseRef: string) => ({ caseRef }) as MappedRow;
+
+describe("joinPhones", () => {
+  it("recovers a phone from the 2025 YEAR sheet by REF NO", () => {
+    const joined = joinPhones(
+      [rowFor("31376")],
+      [{ sourceRow: 2, caseRef: "31376", phoneRaw: "9812345670", trackingNumber: "DTDC9911" }],
+    );
+    expect(joined.get("31376")).toEqual({ phone: "9812345670", trackingNumber: "DTDC9911" });
+  });
+
+  it("omits a phone that is not a plausible Indian mobile but keeps the tracking number", () => {
+    const joined = joinPhones(
+      [rowFor("31376")],
+      [{ sourceRow: 2, caseRef: "31376", phoneRaw: "723001238", trackingNumber: "X1" }],
+    );
+    expect(joined.get("31376")?.phone).toBeUndefined();
+    expect(joined.get("31376")?.trackingNumber).toBe("X1");
+  });
+
+  it("ignores year rows with no matching case", () => {
+    const joined = joinPhones([rowFor("31376")], [{ sourceRow: 2, caseRef: "99999", phoneRaw: "9812345670", trackingNumber: "" }]);
+    expect(joined.has("99999")).toBe(false);
+  });
+});
+```
+
+`groupCases.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { proposeGroups } from "../src/groupCases";
+import type { MappedRow } from "../src/mapRow";
+
+function rowFor(caseRef: string, receivedDate: string, partnerName = "VWI Mumbai"): MappedRow {
+  return {
+    caseRef,
+    partnerName,
+    caseDraft: { destinationCountry: "TR", receivedDate },
+  } as MappedRow;
+}
+
+describe("proposeGroups", () => {
+  it("proposes adjacent REF NOs sharing partner, country and received date", () => {
+    const proposals = proposeGroups([
+      rowFor("31376", "2025-01-02"),
+      rowFor("31377", "2025-01-02"),
+      rowFor("31378", "2025-01-02"),
+    ]);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]!.caseRefs).toEqual(["31376", "31377", "31378"]);
+  });
+
+  it("does not group non-adjacent REF NOs", () => {
+    expect(proposeGroups([rowFor("31376", "2025-01-02"), rowFor("31380", "2025-01-02")])).toEqual([]);
+  });
+
+  it("does not group across different partners", () => {
+    expect(
+      proposeGroups([rowFor("31376", "2025-01-02", "VWI Mumbai"), rowFor("31377", "2025-01-02", "Other Agency")]),
+    ).toEqual([]);
+  });
+
+  it("does not group rows with no received date", () => {
+    expect(proposeGroups([rowFor("31376", ""), rowFor("31377", "")])).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run the tests and watch them fail**
+
+Run: `pnpm --filter @rgs/migration test`
+Expected: three FAILs, one per missing module.
+
+- [ ] **Step 3: Write the implementations**
+
+`residueResolver.ts`:
+
+```ts
+import type { MappedRow, PendingReviewItem } from "./mapRow";
+
+export interface ResidueResolution {
+  fieldName: string;
+  proposedValue: string;
+  /** 0..1. Spec §9: >= 0.9 auto-applies, below goes to review. */
+  confidence: number;
+}
+
+/**
+ * Spec §9 pass 2. Plan 4's agent layer supplies the LLM-backed
+ * implementation; this plan ships only the seam so the importer's wiring is
+ * already correct when it arrives. Deliberately no model and no provider
+ * dependency here.
+ */
+export interface ResidueResolver {
+  resolve(row: MappedRow, pending: PendingReviewItem[]): Promise<ResidueResolution[]>;
+}
+
+export const passthroughResidueResolver: ResidueResolver = {
+  async resolve(): Promise<ResidueResolution[]> {
+    return [];
+  },
+};
+```
+
+`joinPhones.ts`:
+
+```ts
+import type { MappedRow } from "./mapRow";
+import type { RawYearRow } from "./readWorkbook";
+
+export interface JoinedContactDetails {
+  phone?: string;
+  trackingNumber?: string;
+}
+
+/** An Indian mobile is 10 digits starting 6-9. The sheet stores phones as
+ *  floats, so a leading zero may already be lost — anything else is dropped
+ *  rather than stored as a number nobody can call. */
+function isPlausibleIndianMobile(phoneDigits: string): boolean {
+  return /^[6-9]\d{9}$/.test(phoneDigits);
+}
+
+export function joinPhones(
+  mappedRows: MappedRow[],
+  yearRows: RawYearRow[],
+): Map<string, JoinedContactDetails> {
+  const knownCaseRefs = new Set(mappedRows.map((mappedRow) => mappedRow.caseRef));
+  const joined = new Map<string, JoinedContactDetails>();
+
+  for (const yearRow of yearRows) {
+    if (!knownCaseRefs.has(yearRow.caseRef)) {
+      continue;
+    }
+    const details: JoinedContactDetails = {};
+    if (isPlausibleIndianMobile(yearRow.phoneRaw)) {
+      details.phone = yearRow.phoneRaw;
+    }
+    if (yearRow.trackingNumber.trim() !== "") {
+      details.trackingNumber = yearRow.trackingNumber.trim();
+    }
+    joined.set(yearRow.caseRef, details);
+  }
+
+  return joined;
+}
+```
+
+`groupCases.ts`:
+
+```ts
+import type { MappedRow } from "./mapRow";
+
+export interface ProposedGroup {
+  caseRefs: string[];
+  partnerName: string;
+  destinationCountry: string;
+  receivedDate: string;
+}
+
+/**
+ * Spec §9: same partner + country + received date + adjacent REF NO numbers
+ * are PROPOSED as one case. Proposals are reviewed, never auto-applied —
+ * this function returns candidates and writes nothing.
+ */
+export function proposeGroups(mappedRows: MappedRow[]): ProposedGroup[] {
+  const buckets = new Map<string, MappedRow[]>();
+
+  for (const mappedRow of mappedRows) {
+    const receivedDate = mappedRow.caseDraft.receivedDate;
+    if (receivedDate === undefined || receivedDate === "") {
+      continue; // no date, no basis for grouping
+    }
+    const bucketKey = `${mappedRow.partnerName}|${mappedRow.caseDraft.destinationCountry}|${receivedDate}`;
+    const bucket = buckets.get(bucketKey);
+    if (bucket === undefined) {
+      buckets.set(bucketKey, [mappedRow]);
+    } else {
+      bucket.push(mappedRow);
+    }
+  }
+
+  const proposals: ProposedGroup[] = [];
+  for (const bucketRows of buckets.values()) {
+    if (bucketRows.length < 2) {
+      continue;
+    }
+    const sortedRows = [...bucketRows].sort((left, right) => Number(left.caseRef) - Number(right.caseRef));
+    let runStart = 0;
+    for (let position = 1; position <= sortedRows.length; position += 1) {
+      const previousRef = Number(sortedRows[position - 1]!.caseRef);
+      const currentRef = position < sortedRows.length ? Number(sortedRows[position]!.caseRef) : Number.NaN;
+      const isAdjacent = currentRef === previousRef + 1;
+      if (!isAdjacent) {
+        const run = sortedRows.slice(runStart, position);
+        if (run.length >= 2) {
+          const firstRow = run[0]!;
+          proposals.push({
+            caseRefs: run.map((runRow) => runRow.caseRef),
+            partnerName: firstRow.partnerName,
+            destinationCountry: firstRow.caseDraft.destinationCountry,
+            receivedDate: firstRow.caseDraft.receivedDate ?? "",
+          });
+        }
+        runStart = position;
+      }
+    }
+  }
+
+  return proposals;
+}
+```
+
+- [ ] **Step 4: Run the tests and watch them pass**
+
+Run: `pnpm --filter @rgs/migration test` — PASS, 8 new tests.
+Then `pnpm -r typecheck`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add services/migration/src services/migration/test
+git commit -m "feat(migration): add the pass-2 seam, phone join and group proposals"
+```
+
+---

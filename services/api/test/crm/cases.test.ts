@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildTestContext, type TestContext } from "../helpers";
 import { writeCase } from "../../src/domain/crm/caseStore";
 import { createPartner } from "../../src/domain/crm/partners";
+import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import {
   changeApplicantCustody,
@@ -25,7 +26,14 @@ async function seedPartner(context: TestContext): Promise<string> {
   return partner.partnerId;
 }
 
+/** Cases point at travellers on file, so every case fixture needs one first. */
+async function seedTraveller(context: TestContext, fullName: string): Promise<string> {
+  const traveller = await upsertTraveller(context, "rgs", { fullName });
+  return traveller.travellerId;
+}
+
 async function seedCase(context: TestContext, partnerId: string, caseRef = "31377") {
+  const travellerId = await seedTraveller(context, `Traveller ${caseRef}`);
   return createCase(
     context,
     "rgs",
@@ -38,13 +46,15 @@ async function seedCase(context: TestContext, partnerId: string, caseRef = "3137
       entryType: "SINGLE",
       processing: "NORMAL",
       receivedDate: "2026-01-02",
-      applicants: [{ applicantRef: caseRef, travellerId: "trv_1" }],
+      applicants: [{ applicantRef: caseRef, travellerId }],
     },
     "ops@rgs.test",
   );
 }
 
 async function seedTwoApplicantCase(context: TestContext, partnerId: string, caseRef = "31377") {
+  const firstTravellerId = await seedTraveller(context, `Traveller ${caseRef}-1`);
+  const secondTravellerId = await seedTraveller(context, `Traveller ${caseRef}-2`);
   return createCase(
     context,
     "rgs",
@@ -58,8 +68,8 @@ async function seedTwoApplicantCase(context: TestContext, partnerId: string, cas
       processing: "NORMAL",
       receivedDate: "2026-01-02",
       applicants: [
-        { applicantRef: `${caseRef}-1`, travellerId: "trv_1" },
-        { applicantRef: `${caseRef}-2`, travellerId: "trv_2" },
+        { applicantRef: `${caseRef}-1`, travellerId: firstTravellerId },
+        { applicantRef: `${caseRef}-2`, travellerId: secondTravellerId },
       ],
     },
     "ops@rgs.test",
@@ -93,9 +103,57 @@ describe("crm cases", () => {
     });
   });
 
+  it("rejects a case whose traveller does not exist", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await expect(
+      createCase(
+        context,
+        "rgs",
+        {
+          caseRef: "31377",
+          caseType: "VISA",
+          partnerId,
+          destinationCountry: "BH",
+          visaType: "EVISA_TOURIST",
+          receivedDate: "2026-01-02",
+          applicants: [{ applicantRef: "31377", travellerId: "trv_totally_made_up" }],
+        },
+        "ops@rgs.test",
+      ),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("rejects a case when only the second applicant's traveller is unknown", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const knownTravellerId = await seedTraveller(context, "Umesh Kumar Yadav");
+    await expect(
+      createCase(
+        context,
+        "rgs",
+        {
+          caseRef: "31377",
+          caseType: "VISA",
+          partnerId,
+          destinationCountry: "BH",
+          visaType: "EVISA_TOURIST",
+          receivedDate: "2026-01-02",
+          applicants: [
+            { applicantRef: "31377-1", travellerId: knownTravellerId },
+            { applicantRef: "31377-2", travellerId: "trv_totally_made_up" },
+          ],
+        },
+        "ops@rgs.test",
+      ),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
   it("rejects a VISA case with no visa type", async () => {
     const context = buildTestContext();
     const partnerId = await seedPartner(context);
+    // A real traveller, so the 400 below is the missing visaType and nothing else.
+    const travellerId = await seedTraveller(context, "Umesh Kumar Yadav");
     await expect(
       createCase(
         context,
@@ -106,7 +164,7 @@ describe("crm cases", () => {
           partnerId,
           destinationCountry: "BH",
           receivedDate: "2026-01-02",
-          applicants: [{ applicantRef: "31999", travellerId: "trv_1" }],
+          applicants: [{ applicantRef: "31999", travellerId }],
         },
         "ops@rgs.test",
       ),
@@ -116,6 +174,7 @@ describe("crm cases", () => {
   it("allows a non-visa case with no visa type", async () => {
     const context = buildTestContext();
     const partnerId = await seedPartner(context);
+    const travellerId = await seedTraveller(context, "Aman Kapoor");
     const attestation = await createCase(
       context,
       "rgs",
@@ -125,7 +184,7 @@ describe("crm cases", () => {
         partnerId,
         destinationCountry: "AE",
         receivedDate: "2026-01-02",
-        applicants: [{ applicantRef: "31888", travellerId: "trv_2" }],
+        applicants: [{ applicantRef: "31888", travellerId }],
       },
       "ops@rgs.test",
     );
