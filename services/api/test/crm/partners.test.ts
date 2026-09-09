@@ -260,7 +260,7 @@ describe("crm partners", () => {
     expect(partner.createdByEmail).toBe("ops@rgs.test");
     const reloaded = await getPartnerOrThrow(context, "rgs", partner.partnerId);
     expect(reloaded.createdByEmail).toBe("ops@rgs.test");
-    expect(listPartners(context, "rgs")).resolves.toMatchObject([
+    await expect(listPartners(context, "rgs")).resolves.toMatchObject([
       { createdByEmail: "ops@rgs.test" },
     ]);
   });
