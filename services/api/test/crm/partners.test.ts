@@ -73,6 +73,90 @@ describe("crm partners", () => {
     expect(await listPartners(context, "other-tenant")).toHaveLength(1);
   });
 
+  // Aliases were persisted and then never consulted: a partner recorded as
+  // "Ozzy Travels" with the alias "Ozzy" still duplicated when a row said
+  // "Ozzy". The migration importer resolves partner names across 7,157
+  // spreadsheet rows, where collapsing aliases is the entire point.
+  it("finds a partner through one of its recorded aliases", async () => {
+    const context = buildTestContext();
+    const ozzy = await createPartner(
+      context,
+      "rgs",
+      { canonicalName: "Ozzy Travels", aliases: ["Ozzy"] },
+      "ops@rgs.test",
+    );
+    const found = await findPartnerByName(context, "rgs", "Ozzy");
+    expect(found).toBeDefined();
+    expect(found!.partnerId).toBe(ozzy.partnerId);
+  });
+
+  it("normalizes an alias the same way it normalizes the canonical name", async () => {
+    const context = buildTestContext();
+    const ozzy = await createPartner(
+      context,
+      "rgs",
+      { canonicalName: "Ozzy Travels", aliases: ["  ozzy   travels bom "] },
+      "ops@rgs.test",
+    );
+    // Case, padding and repeated spaces all fold away, exactly as they do for
+    // the canonical name — otherwise the alias only matches a byte-perfect row.
+    const found = await findPartnerByName(context, "rgs", "OZZY TRAVELS BOM");
+    expect(found).toBeDefined();
+    expect(found!.partnerId).toBe(ozzy.partnerId);
+  });
+
+  it("refuses a new partner whose name collides with an existing alias", async () => {
+    const context = buildTestContext();
+    const existing = await createPartner(
+      context,
+      "rgs",
+      { canonicalName: "Ozzy Travels", aliases: ["Ozzy"] },
+      "ops@rgs.test",
+    );
+    await expect(
+      createPartner(context, "rgs", { canonicalName: "Ozzy" }, "ops@rgs.test"),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect((await listPartners(context, "rgs")).map((partner) => partner.partnerId)).toEqual([
+      existing.partnerId,
+    ]);
+  });
+
+  it("keeps one tenant's aliases from matching another tenant's lookup", async () => {
+    const context = buildTestContext();
+    await createPartner(
+      context,
+      "rgs",
+      { canonicalName: "Ozzy Travels", aliases: ["Ozzy"] },
+      "ops@rgs.test",
+    );
+    expect(await findPartnerByName(context, "other-tenant", "Ozzy")).toBeUndefined();
+  });
+
+  it("records the creating admin's email and reads it back", async () => {
+    const context = buildTestContext();
+    const partner = await createPartner(
+      context,
+      "rgs",
+      { canonicalName: "Ozzy Travels" },
+      "ops@rgs.test",
+    );
+    // Written but never readable is the same defect class as the aliases above.
+    expect(partner.createdByEmail).toBe("ops@rgs.test");
+    const reloaded = await getPartnerOrThrow(context, "rgs", partner.partnerId);
+    expect(reloaded.createdByEmail).toBe("ops@rgs.test");
+    expect(listPartners(context, "rgs")).resolves.toMatchObject([
+      { createdByEmail: "ops@rgs.test" },
+    ]);
+  });
+
+  it("omits createdByEmail for an admin token that carries no email claim", async () => {
+    const context = buildTestContext();
+    // router.ts defaults a missing `email` claim to "", and "" is not an author.
+    const partner = await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "");
+    expect(partner.createdByEmail).toBeUndefined();
+    expect((await getPartnerOrThrow(context, "rgs", partner.partnerId)).createdByEmail).toBeUndefined();
+  });
+
   it("returns undefined when no partner matches", async () => {
     const context = buildTestContext();
     expect(await findPartnerByName(context, "rgs", "Nobody Travels")).toBeUndefined();

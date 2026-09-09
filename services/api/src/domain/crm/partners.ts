@@ -47,6 +47,10 @@ export async function createPartner(
     ...(input.contactEmail !== undefined ? { contactEmail: input.contactEmail } : {}),
     ...(input.contactWhatsapp !== undefined ? { contactWhatsapp: input.contactWhatsapp } : {}),
     createdAt: context.now().toISOString(),
+    // router.ts defaults a missing `email` claim to "", and an empty string is
+    // not an author — omit the field rather than record a blank one, exactly as
+    // createCase does. On PartnerSchema, so it can actually be read back.
+    ...(actorEmail !== "" ? { createdByEmail: actorEmail } : {}),
   });
 
   await context.table.put({
@@ -56,7 +60,6 @@ export async function createPartner(
     // The canonical key is a storage attribute only — PartnerSchema has no such
     // field, so it must not be spread into the domain object.
     GSI1SK: normalized.canonicalKey,
-    createdByEmail: actorEmail,
     ...partner,
   });
   return partner;
@@ -83,6 +86,12 @@ export async function getPartnerOrThrow(
 /**
  * Folds the raw name through the shared normalizer, so "VWI Mumbai" and
  * "VWI BOM" resolve to the same partner rather than creating a duplicate.
+ *
+ * The partner's recorded aliases are consulted too, folded through the same
+ * normalizer as the canonical name. Storing an alias and never reading it made
+ * "Ozzy" a second partner beside "Ozzy Travels"; the migration importer
+ * resolves partner names across every sheet row, so collapsing them here is the
+ * whole point of recording them.
  */
 export async function findPartnerByName(
   context: AppContext,
@@ -90,13 +99,25 @@ export async function findPartnerByName(
   rawName: string,
 ): Promise<crm.Partner | undefined> {
   const normalized = crm.normalizePartnerName(rawName);
-  if (normalized.canonicalKey === null) return undefined;
+  const soughtCanonicalKey = normalized.canonicalKey;
+  if (soughtCanonicalKey === null) return undefined;
   const partnerItems = await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
   // Match on the RAW item's GSI1SK. Parsing first would strip the key.
   const matchingItem = partnerItems.find(
-    (partnerItem) => partnerItem.GSI1SK === normalized.canonicalKey,
+    (partnerItem) =>
+      partnerItem.GSI1SK === soughtCanonicalKey ||
+      storedAliasesOf(partnerItem).some(
+        (alias) => crm.normalizePartnerName(alias).canonicalKey === soughtCanonicalKey,
+      ),
   );
   return matchingItem ? crm.PartnerSchema.parse(stripKeys(matchingItem)) : undefined;
+}
+
+/** The aliases on a raw stored item, ignoring anything that is not a string. */
+function storedAliasesOf(partnerItem: Record<string, unknown>): string[] {
+  const storedAliases = partnerItem["aliases"];
+  if (!Array.isArray(storedAliases)) return [];
+  return storedAliases.filter((alias): alias is string => typeof alias === "string");
 }
 
 function stripKeys(item: Record<string, unknown>): Record<string, unknown> {
@@ -105,7 +126,6 @@ function stripKeys(item: Record<string, unknown>): Record<string, unknown> {
     SK: _sortKey,
     GSI1PK: _gsi1Pk,
     GSI1SK: _gsi1Sk,
-    createdByEmail: _createdByEmail,
     ...domainFields
   } = item;
   return domainFields;

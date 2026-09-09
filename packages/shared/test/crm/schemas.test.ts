@@ -195,6 +195,29 @@ describe("PartnerSchema", () => {
     expect(parsed.aliases).toHaveLength(3);
   });
 
+  it("records the creating admin, and accepts one whose token carries no address", () => {
+    const withAuthor = PartnerSchema.parse({
+      tenantId: "rgs",
+      partnerId: "partner_1",
+      canonicalName: "Ozzy Travels",
+      partnerType: "AGENCY",
+      createdAt: "2026-09-09T10:00:00.000Z",
+      createdByEmail: "ops",
+    });
+    expect(withAuthor.createdByEmail).toBe("ops");
+    // Absent is fine; blank is not — the API omits the field instead.
+    expect(() =>
+      PartnerSchema.parse({
+        tenantId: "rgs",
+        partnerId: "partner_1",
+        canonicalName: "Ozzy Travels",
+        partnerType: "AGENCY",
+        createdAt: "2026-09-09T10:00:00.000Z",
+        createdByEmail: "",
+      }),
+    ).toThrow();
+  });
+
   it("defaults aliases to empty", () => {
     const parsed = PartnerSchema.parse({
       tenantId: "rgs",

@@ -48,6 +48,10 @@ export const PartnerSchema = z.object({
   contactWhatsapp: z.string().optional(),
   notes: z.string().optional(),
   createdAt: isoDateTime,
+  // The admin who created the partner. Not .email(): the same reason
+  // CrmCaseSchema gives — an admin token may carry no email claim, and the API
+  // omits the field rather than storing an empty string.
+  createdByEmail: z.string().min(1).optional(),
 });
 export type Partner = z.infer<typeof PartnerSchema>;
 
