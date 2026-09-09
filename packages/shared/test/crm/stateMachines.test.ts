@@ -194,13 +194,20 @@ describe("outcome machine", () => {
     expect(canTransitionOutcome("PENDING", "SENT_BACK")).toBe(true);
   });
 
-  it("corrects one decided outcome into another, because staff mistype", () => {
-    expect(canTransitionOutcome("APPROVED", "REJECTED")).toBe(true);
-    expect(canTransitionOutcome("APPROVED", "SENT_BACK")).toBe(true);
-    expect(canTransitionOutcome("REJECTED", "APPROVED")).toBe(true);
-    expect(canTransitionOutcome("REJECTED", "SENT_BACK")).toBe(true);
-    expect(canTransitionOutcome("SENT_BACK", "APPROVED")).toBe(true);
-    expect(canTransitionOutcome("SENT_BACK", "REJECTED")).toBe(true);
+  it("allows only the edges the spec names, plus the resubmission path", () => {
+    // Spec §5 line 221 specifies exactly PENDING -> APPROVED | REJECTED |
+    // SENT_BACK. Everything else this table once held was invented here, and
+    // statuses and transitions come from @rgs/shared verbatim.
+    for (const inventedTransition of [
+      ["APPROVED", "REJECTED"],
+      ["APPROVED", "SENT_BACK"],
+      ["REJECTED", "APPROVED"],
+      ["REJECTED", "SENT_BACK"],
+      ["SENT_BACK", "APPROVED"],
+      ["SENT_BACK", "REJECTED"],
+    ] as const) {
+      expect(canTransitionOutcome(inventedTransition[0], inventedTransition[1])).toBe(false);
+    }
   });
 
   it("refuses to un-decide an applicant, which is what breaks the DECIDED derivation", () => {

@@ -513,30 +513,49 @@ describe("crm cases", () => {
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 
-  it("corrects a decided outcome into another decided outcome and logs the change", async () => {
+  it("refuses to rewrite a decided outcome, an edge the spec never granted", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     await changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "APPROVED", "ops@rgs.test");
 
+    // Spec §5 line 221 grants PENDING -> APPROVED | REJECTED | SENT_BACK only.
+    // Correcting a mistyped decision is a spec change, not a table edit.
+    await expect(
+      changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "REJECTED", "ops@rgs.test"),
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    const reloaded = await getCase(context, "rgs", created.caseId);
+    expect(reloaded.applicants[0]!.outcome).toBe("APPROVED");
+    const events = await listCaseEvents(context, "rgs", created.caseId);
+    expect(
+      events.filter((event) => event.eventType === "APPLICANT_OUTCOME_CHANGED"),
+    ).toHaveLength(1);
+  });
+
+  it("logs the from/to values when a returned file is resubmitted", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
+    await changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "SENT_BACK", "ops@rgs.test");
+
     // A later timestamp, so the two events sort deterministically in the log.
     context.advanceClock(60_000);
-    // Staff mistype; a correction between decided outcomes is legitimate.
-    const corrected = await changeApplicantOutcome(
+    const resubmitted = await changeApplicantOutcome(
       context,
       "rgs",
       created.caseId,
       applicantRef,
-      "REJECTED",
+      "PENDING",
       "ops@rgs.test",
     );
-    expect(corrected.applicants[0]!.outcome).toBe("REJECTED");
+    expect(resubmitted.applicants[0]!.outcome).toBe("PENDING");
 
     const events = await listCaseEvents(context, "rgs", created.caseId);
     const outcomeEvents = events.filter((event) => event.eventType === "APPLICANT_OUTCOME_CHANGED");
     expect(outcomeEvents).toHaveLength(2);
-    expect(outcomeEvents[1]!.meta["fromOutcome"]).toBe("APPROVED");
-    expect(outcomeEvents[1]!.meta["toOutcome"]).toBe("REJECTED");
+    expect(outcomeEvents[1]!.meta["fromOutcome"]).toBe("SENT_BACK");
+    expect(outcomeEvents[1]!.meta["toOutcome"]).toBe("PENDING");
   });
 
   it("refuses to un-decide an applicant with a 409, leaving the recorded outcome intact", async () => {

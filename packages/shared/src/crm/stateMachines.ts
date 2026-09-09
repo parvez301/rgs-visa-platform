@@ -60,17 +60,25 @@ export function canTransitionCustody(
 }
 
 /**
- * PENDING decides in any direction (spec §5 line 221). SENT_BACK is the one
- * outcome that is not a decision — the embassy has handed the file back for a
- * correction — so it returns to PENDING when the corrected file is resubmitted.
- * Without that edge a returned file could never be re-recorded. APPROVED and
- * REJECTED are final. A no-op is refused, as in the two machines above.
+ * PENDING decides in any direction — spec §5 line 221 specifies exactly
+ * `PENDING -> APPROVED | REJECTED | SENT_BACK`, and nothing else. SENT_BACK is
+ * the one outcome that is not a decision — the embassy has handed the file back
+ * for a correction — so it returns to PENDING when the corrected file is
+ * resubmitted. Without that edge a returned file could never be re-recorded.
+ *
+ * A correction path for a mistyped decided outcome (APPROVED <-> REJECTED, and
+ * either into SENT_BACK) was deliberately removed: those six edges were
+ * invented here, not specified, and this table is the verbatim copy of the
+ * spec's machine. If ops genuinely needs to fix a mistyped outcome, that is a
+ * spec change, not an edit to this table.
+ *
+ * A no-op is refused, as in the two machines above.
  */
 const OUTCOME_TRANSITIONS: Record<ApplicantOutcome, readonly ApplicantOutcome[]> = {
   PENDING: ["APPROVED", "REJECTED", "SENT_BACK"],
-  APPROVED: ["REJECTED", "SENT_BACK"],
-  REJECTED: ["APPROVED", "SENT_BACK"],
-  SENT_BACK: ["PENDING", "APPROVED", "REJECTED"],
+  APPROVED: [],
+  REJECTED: [],
+  SENT_BACK: ["PENDING"],
 };
 
 export function canTransitionOutcome(
