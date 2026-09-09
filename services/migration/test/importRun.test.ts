@@ -17,6 +17,7 @@ import {
   partnerListGsi1Pk,
   partnerPartitionKey,
 } from "@rgs/api/src/domain/crm/keys";
+import { readCaseRefReservation } from "@rgs/api/src/domain/crm/caseRefIndex";
 import { CorruptRecordError } from "@rgs/api/src/lib/errors";
 import { runImport } from "../src/importRun";
 import { passthroughResidueResolver } from "../src/residueResolver";
@@ -1117,6 +1118,34 @@ describe("runImport", () => {
     };
   }
 
+  /**
+   * Counts base-table reads that touch a CASE partition. `#CASE#` is the
+   * infix `casePartitionKey` builds with; `#CASE_REF#` (the reservation) and
+   * `#CASE_STATUS#` (the GSI1 partition) do not contain it, so a reservation
+   * read and an index sweep are correctly not counted.
+   */
+  function tableCountingCasePartitionReads(
+    table: TableClient,
+    casePartitionReads: { count: number },
+  ): TableClient {
+    const countIfCasePartition = (partitionKey: string): void => {
+      if (partitionKey.includes("#CASE#")) casePartitionReads.count += 1;
+    };
+    return {
+      get: (partitionKey, sortKey, options) => {
+        countIfCasePartition(partitionKey);
+        return table.get(partitionKey, sortKey, options);
+      },
+      query: (partitionKey, options) => {
+        countIfCasePartition(partitionKey);
+        return table.query(partitionKey, options);
+      },
+      put: (item) => table.put(item),
+      delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
+      queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    };
+  }
+
   async function storedCaseRefsInStatus(
     context: ReturnType<typeof buildTestContext>,
     caseStatus: "CLOSED",
@@ -1232,6 +1261,40 @@ describe("runImport", () => {
     expect(thirdSummary.casesCreated).toBe(0);
     expect(thirdSummary.casesSkippedAlreadyImported).toBe(1);
     expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual(["31376"]);
+  });
+
+  it("completes each reservation, so a re-run reads no case partition at all", async () => {
+    const context = buildTestContext();
+    const rows = [
+      buildMappedRow({ caseRef: "1", sourceRow: 2, passportNumber: "P1111111" }),
+      buildMappedRow({ caseRef: "2", sourceRow: 3, passportNumber: "P2222222" }),
+    ];
+    await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+
+    // Half of the reserve -> write -> COMPLETE sequence. Without the third
+    // step the reservation exists but is unfinished, which by design means
+    // "a run died between the two writes".
+    for (const row of rows) {
+      const reservation = await readCaseRefReservation(context, "rgs", row.caseRef);
+      expect(reservation?.completedAt).toBeTypeOf("string");
+    }
+
+    // NEW-5: and this is what the completion marker BUYS, which is why
+    // deleting `completeCaseRefReservation` left the whole suite green. An
+    // unfinished reservation sends `claimCaseRef` down the repair path, which
+    // calls `readCase` -- 2 strongly-consistent round trips per row, the
+    // ~14,312 that C2 removed -- and then silently heals the marker, so the
+    // run still reports the right counts. Only the round trips tell you.
+    const casePartitionReads = { count: 0 };
+    const countingContext = {
+      ...context,
+      table: tableCountingCasePartitionReads(context.table, casePartitionReads),
+    };
+    const secondSummary = await runImport(countingContext, "rgs", { ...baseInput, mappedRows: rows });
+
+    expect(secondSummary.casesCreated).toBe(0);
+    expect(secondSummary.casesSkippedAlreadyImported).toBe(2);
+    expect(casePartitionReads.count).toBe(0);
   });
 
   it("stays idempotent when the case-status index has not caught up", async () => {
