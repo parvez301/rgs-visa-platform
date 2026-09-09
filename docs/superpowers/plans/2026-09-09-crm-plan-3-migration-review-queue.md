@@ -51,6 +51,7 @@ These were measured against the real workbook. Do not re-derive them; do not con
 | `REF NO.` / `No.` formatting | Floats: `31376.0`, `3.0` | Must be normalised to `"31376"` / `3` before use as an identity key |
 | `Phone` formatting | Scientific notation: `7.23001238E8` | Must be expanded to digits; a result that is not 10 digits starting 6-9 is recorded but flagged |
 | Plan 1 normalizers | `normalizeCountry`, `normalizeEntries`, `normalizeStatus`, `normalizeVisaType`, `normalizePartnerName`, `normalizeExcelDate`, `buildLookupKey` — all exported from `@rgs/shared` under the `crm` namespace | Pass 1 composes these. **Do not write new matching logic.** |
+| `normalizeExcelDate` input shapes | Accepts a `Date`, a day-first `dd-mm-yyyy` / `dd/mm/yyyy` string, and — **added during Task 7** — an ISO `YYYY-MM-DD` string, which is what `readWorkbook` emits for every Date-typed cell. All three still go through `isRealCalendarDate` and the 2020-2027 plausible-year window. | The plan originally assumed ISO already parsed. It did not: 6,018 date cells across 4,369 rows would have become spurious review items with their dates dropped. Measured, not estimated. |
 
 ### Normalizer result shapes (Plan 1, already shipped)
 
@@ -1377,7 +1378,8 @@ function mapDateField(
   if (isBlank(rawValue)) {
     return undefined;
   }
-  // The reader has already converted Excel serials to ISO.
+  // The reader hands us ISO (`YYYY-MM-DD`) for every Date-typed cell and a serial
+  // it converted; `normalizeExcelDate` grew an ISO branch so both shapes parse.
   if (/^\d{4}-\d{2}-\d{2}$/.test(rawValue)) {
     return rawValue;
   }
