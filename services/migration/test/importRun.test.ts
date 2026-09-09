@@ -994,9 +994,27 @@ describe("runImport", () => {
     const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows, proposedGroups });
     expect(firstSummary.groupsProposed).toBe(1);
 
+    // Delete every reservation item, so the SWEEP is the only thing left that
+    // can recognise these 55 cases.
+    //
+    // Without this, NEW-3's fix would quietly make this test vacuous: the
+    // group check now prefers the reservation reads, which are per-ref and
+    // have no page limit at all, so `CASE_REF_SWEEP_PAGE_LIMIT` could go back
+    // to 50 and every assertion below would still pass. That is precisely the
+    // shape of failure the review found in the index-lag test. A store with
+    // no reservations is also a real state -- it is what a tenant imported
+    // before reservations existed looks like -- and it is the one state in
+    // which the sweep's page limit is load-bearing.
+    for (const row of rows) {
+      await context.table.delete(caseRefIndexPartitionKey("rgs", row.caseRef), META_SORT_KEY);
+    }
+
     const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows, proposedGroups });
     // Capped at the domain default of 50 the sweep would miss 5 of the refs,
-    // call the group changed, and re-queue a proposal a human already has.
+    // re-import them, call the group changed, and re-queue a proposal a human
+    // already has.
+    expect(secondSummary.casesCreated).toBe(0);
+    expect(secondSummary.casesSkippedAlreadyImported).toBe(rowCount);
     expect(secondSummary.groupsProposed).toBe(0);
   });
 
@@ -1222,18 +1240,76 @@ describe("runImport", () => {
       buildMappedRow({ caseRef: "1", sourceRow: 2, passportNumber: "P1111111" }),
       buildMappedRow({ caseRef: "2", sourceRow: 3, passportNumber: "P2222222" }),
     ];
-    await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+    // NEW-3: the two rows are a proposed GROUP as well as two cases. The
+    // version of this test that shipped in fix round 1 passed `proposedGroups:
+    // []`, asserted the two case columns, and walked straight past
+    // `groupsProposed` -- so the index-lag hole in the group check was
+    // reported closed by a test that never looked at the group check.
+    const proposedGroups = [
+      {
+        caseRefs: ["1", "2"],
+        partnerName: "VWI Mumbai",
+        destinationCountry: "TR",
+        receivedDate: "2025-01-02",
+      },
+    ];
+    const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows, proposedGroups });
+    expect(firstSummary.groupsProposed).toBe(1);
 
     // GSI1 returns nothing for the case-status partitions, which is what an
     // operator re-running seconds after an aborted --commit actually sees.
     // DynamoDB refuses a consistent read on an index, so the sweep cannot ask
     // for a better answer; only the per-ref reservation can give one.
     const laggingContext = { ...context, table: tableWithLaggingGsi1(context.table) };
-    const secondSummary = await runImport(laggingContext, "rgs", { ...baseInput, mappedRows: rows });
+    const secondSummary = await runImport(laggingContext, "rgs", {
+      ...baseInput,
+      mappedRows: rows,
+      proposedGroups,
+    });
 
     expect(secondSummary.casesCreated).toBe(0);
     expect(secondSummary.casesSkippedAlreadyImported).toBe(2);
     expect((await storedCaseRefsInStatus(context, "CLOSED")).sort()).toEqual(["1", "2"]);
+
+    // The column the old test skipped. Both members were recognised as
+    // already imported by the reservation reads above, so the group has not
+    // changed and must not be re-proposed.
+    expect(secondSummary.groupsProposed).toBe(0);
+    // And in the queue, not just in the summary: one proposal, from run 1.
+    // A human reviewing this group must not find a second copy of it.
+    const openAfterLaggedRun = await listReviewItems(context, "rgs", "OPEN");
+    expect(
+      openAfterLaggedRun.reviewItems.filter((item) => item.reason === "PROPOSED_GROUP"),
+    ).toHaveLength(1);
+  });
+
+  it("still re-proposes a group extended while the case-status index lags", async () => {
+    const context = buildTestContext();
+    const firstRow = buildMappedRow({ caseRef: "1", sourceRow: 2, passportNumber: "P1111111" });
+    const secondRow = buildMappedRow({ caseRef: "2", sourceRow: 3, passportNumber: "P2222222" });
+    const proposedGroups = [
+      {
+        caseRefs: ["1", "2"],
+        partnerName: "VWI Mumbai",
+        destinationCountry: "TR",
+        receivedDate: "2025-01-02",
+      },
+    ];
+    await runImport(context, "rgs", { ...baseInput, mappedRows: [firstRow], proposedGroups });
+
+    // The other half of NEW-3, which a fix that simply stopped re-proposing
+    // under lag would break: ref "2" is genuinely new, and the reservation
+    // read says so as consistently as it says the opposite for ref "1". A
+    // changed group is still re-proposed with the index dark.
+    const laggingContext = { ...context, table: tableWithLaggingGsi1(context.table) };
+    const secondSummary = await runImport(laggingContext, "rgs", {
+      ...baseInput,
+      mappedRows: [firstRow, secondRow],
+      proposedGroups,
+    });
+
+    expect(secondSummary.casesCreated).toBe(1);
+    expect(secondSummary.groupsProposed).toBe(1);
   });
 
   it("flags a stored case whose META item carries no readable ref", async () => {

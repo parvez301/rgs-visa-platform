@@ -755,6 +755,22 @@ export async function runImport(
   const alreadyImportedSweep = await sweepAlreadyImportedCaseRefs(context, tenantId);
   const alreadyImportedCaseRefs = alreadyImportedSweep.caseIdByCaseRef;
   const caseRefResolutionBySourceRow = resolveDuplicateCaseRefs(input.mappedRows);
+  /**
+   * Refs this run PROVED were already held by a stored case, by the only
+   * mechanism on this branch that can prove it: the per-ref reservation item,
+   * read from the base table with `ConsistentRead: true` (see `claimCaseRef`).
+   *
+   * The group loop at the bottom needs "which of this group's members existed
+   * before this run", and the sweep above cannot answer that after an aborted
+   * run -- GSI1 lag makes every recently written ref look never-imported.
+   * That is finding NEW-3: the cases were correctly skipped and their groups
+   * were re-proposed anyway, up to 1,476 duplicate PROPOSED_GROUP items on
+   * the real workbook, in front of a human who had already reviewed them.
+   *
+   * Filled as the row loop goes, so by the time the group loop runs every row
+   * of this import has contributed its consistent answer.
+   */
+  const caseRefsHeldByStoredCases = new Set<string>();
   const partnerIdByCanonicalKey = new Map<string, string>();
   const travellerIdByLookupKey = new Map<string, string>();
 
@@ -837,10 +853,17 @@ export async function runImport(
     );
     if (caseRefClaim.kind === "ALREADY_IMPORTED") {
       summary.casesSkippedAlreadyImported += 1;
+      caseRefsHeldByStoredCases.add(caseRefResolution.effectiveCaseRef);
       continue;
     }
     if (caseRefClaim.kind === "UNREADABLE_STORED_CASE") {
       summary.casesSkippedUnreadable += 1;
+      // Held by a stored record either way. The group is not re-proposed on
+      // account of this member: the row was not imported by this run, but it
+      // was not imported by this run BECAUSE something already occupies the
+      // ref, and that something is what the operator has to deal with -- a
+      // fresh copy of a group proposal they already have does not help.
+      caseRefsHeldByStoredCases.add(caseRefResolution.effectiveCaseRef);
       await recordReviewItemAndCount(context, tenantId, input.dryRun, summary, {
         reason: "UNREADABLE_STORED_CASE",
         sourceSheet: mappedRow.sourceSheet,
@@ -1185,10 +1208,25 @@ export async function runImport(
   // changed -- i.e. when at least one of its member caseRefs was NOT already
   // imported as of this run's sweep. A no-change re-run then proposes
   // nothing; a run that adds a case adjacent to an existing group re-proposes
-  // just that group, correctly. Checked against `alreadyImportedCaseRefs`
-  // (already in hand from the sweep) rather than a per-item review-queue
-  // read, which would be one more read per group on a path that already has
-  // enough of them, and would not notice a group whose membership changed.
+  // just that group, correctly. Checked against the refs already in hand
+  // rather than a per-item review-queue read, which would be one more read
+  // per group on a path that already has enough of them, and would not notice
+  // a group whose membership changed.
+  //
+  // NEW-3: that check used to consult the GSI1 sweep ALONE, and the sweep is
+  // an eventually consistent index read. Every case skipped as
+  // already-imported on the strength of its reservation -- the strongly
+  // consistent path C1/C2 exist to provide -- was simultaneously invisible to
+  // the sweep, so the very re-run those findings made safe for cases
+  // re-queued every one of its groups. The reservation-backed set is
+  // therefore the primary authority here, exactly as it is for the cases
+  // themselves.
+  //
+  // The sweep is still consulted, as a union rather than a replacement: it
+  // covers the refs the row loop never reached (a row whose partner could not
+  // be resolved never calls `claimCaseRef`), and refs imported before
+  // reservations existed. Neither source alone sees everything; a ref in
+  // either one is a ref some stored case already holds.
   for (const proposedGroup of input.proposedGroups) {
     const firstCaseRefInGroup = proposedGroup.caseRefs[0];
     // ProposedGroup.caseRefs is never empty in practice (proposeGroups only
@@ -1197,7 +1235,8 @@ export async function runImport(
     if (firstCaseRefInGroup === undefined) continue;
 
     const hasNotYetImportedMember = proposedGroup.caseRefs.some(
-      (memberCaseRef) => !alreadyImportedCaseRefs.has(memberCaseRef),
+      (memberCaseRef) =>
+        !caseRefsHeldByStoredCases.has(memberCaseRef) && !alreadyImportedCaseRefs.has(memberCaseRef),
     );
     if (!hasNotYetImportedMember) continue;
 
