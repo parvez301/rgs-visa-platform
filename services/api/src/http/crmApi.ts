@@ -9,6 +9,7 @@ import {
   changeCaseStatus,
   createCase,
   getCase,
+  listCasesByPartner,
   listCasesByStatus,
 } from "../domain/crm/cases";
 import { listCaseEvents } from "../domain/crm/crmEvents";
@@ -123,6 +124,16 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       }
       return {
         cases: await listCasesByStatus(context, tenantId, requestedStatus as crm.CaseStatus),
+      };
+    })
+    .add("GET", "/api/v1/admin/crm/cases/by-partner/{partnerId}", async (requestContext) => {
+      requireAdmin(requestContext);
+      return {
+        cases: await listCasesByPartner(
+          context,
+          tenantId,
+          requestContext.pathParams["partnerId"]!,
+        ),
       };
     })
     .add("POST", "/api/v1/admin/crm/cases", async (requestContext) => {

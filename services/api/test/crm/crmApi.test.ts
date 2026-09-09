@@ -397,6 +397,60 @@ describe("crm admin routes", () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it("lists the cases belonging to one partner, and only that partner's", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const ozzy = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const luxe = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Luxe Escape",
+    });
+    for (const caseRef of ["31377", "31378"]) {
+      const travellerId = await seedTraveller(router, `Ozzy Traveller ${caseRef}`);
+      await call(router, "POST", "/api/v1/admin/crm/cases", {
+        caseRef,
+        caseType: "VISA",
+        partnerId: ozzy.payload.partnerId,
+        destinationCountry: "BH",
+        visaType: "EVISA_TOURIST",
+        receivedDate: "2026-01-02",
+        applicants: [{ applicantRef: caseRef, travellerId }],
+      });
+    }
+    const luxeTravellerId = await seedTraveller(router, "Luxe Traveller");
+    await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31999",
+      caseType: "VISA",
+      partnerId: luxe.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31999", travellerId: luxeTravellerId }],
+    });
+
+    const listed = await call(
+      router,
+      "GET",
+      `/api/v1/admin/crm/cases/by-partner/${ozzy.payload.partnerId}`,
+    );
+    expect(listed.statusCode).toBe(200);
+    expect(
+      listed.payload.cases.map((listedCase: { caseRef: string }) => listedCase.caseRef).sort(),
+    ).toEqual(["31377", "31378"]);
+  });
+
+  it("rejects an unauthenticated caller on the by-partner route", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const rejected = await callUnauthenticated(
+      router,
+      "GET",
+      "/api/v1/admin/crm/cases/by-partner/prt_1",
+    );
+    expect(rejected.statusCode).toBe(403);
+  });
+
   it("returns 404 creating a case for a traveller that does not exist", async () => {
     const context = buildTestContext();
     const router = buildRouter(context);
