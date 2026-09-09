@@ -9,6 +9,8 @@ import {
   DRY_RUN_ABORT_MESSAGE,
   DRY_RUN_BANNER,
   IMPORT_CLI_USAGE,
+  NO_WRITES_ABORT_MESSAGE,
+  PARTIAL_WRITE_ABORT_MESSAGE,
   runImportCli,
   type ImportCliDependencies,
 } from "../src/importCli";
@@ -18,7 +20,7 @@ import {
  * — `parseArgs(process.argv)`, top-level `await`, `process.exit(1)`, a real
  * `buildProductionContext()` — so importing it ran a real import against a
  * real table. The one file carrying the operator-facing behaviour was the one
- * file in the service with no tests.
+ * file in the service with no tests, which is how NEW-4 survived two rounds.
  */
 
 function buildRawMiniCrmRow(overrides: Partial<RawMiniCrmRow> = {}): RawMiniCrmRow {
@@ -97,6 +99,22 @@ function tableThatMustNotBeWrittenTo(table: TableClient): TableClient {
     delete: (partitionKey: string, sortKey: string) => {
       throw new Error(`a dry run wrote to the table: delete ${partitionKey} / ${sortKey}`);
     },
+  };
+}
+
+/** Lets the first `allowedWriteCount` writes through, then times out. */
+function tableFailingAfterWrites(table: TableClient, allowedWriteCount: number): TableClient {
+  let writesSoFar = 0;
+  return {
+    get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
+    query: (partitionKey, options) => table.query(partitionKey, options),
+    queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    put: async (item: TableItem) => {
+      writesSoFar += 1;
+      if (writesSoFar > allowedWriteCount) throw new Error("simulated write timeout");
+      await table.put(item);
+    },
+    delete: (partitionKey: string, sortKey: string) => table.delete(partitionKey, sortKey),
   };
 }
 
@@ -187,6 +205,70 @@ describe("runImportCli", () => {
     // The counts the operator actually reads are still on the printed object.
     expect(printedSummary!["casesCreated"]).toBe(4);
     expect(printedSummary!["rowsRead"]).toBe(4);
+  });
+
+  // --- NEW-4: what the abort message is allowed to claim -------------------
+
+  it("does not claim cases were written when the context could not even be built", async () => {
+    const configurationFailure = new Error("RGS_TABLE_NAME is not set");
+    const { dependencies, output } = buildDependencies({
+      buildContext: () => {
+        throw configurationFailure;
+      },
+    });
+
+    const cliResult = await runImportCli(["--workbook", "book.xlsx", "--commit"], dependencies);
+
+    expect(cliResult.exitCode).not.toBe(0);
+    expect(cliResult.abortReason).toBe(configurationFailure);
+    // The defect: `buildProductionContext()` was evaluated as an argument
+    // INSIDE the try, so a missing table name -- the likeliest failure on a
+    // fresh machine, before a single byte is written -- printed a paragraph
+    // about partially written data and a "re-running is safe" reassurance
+    // about a repair that had nothing to repair.
+    expect(output.errors).not.toContain(PARTIAL_WRITE_ABORT_MESSAGE);
+    expect(output.errors.join("\n")).not.toMatch(/already written/);
+    expect(output.errors).toContain(NO_WRITES_ABORT_MESSAGE);
+    // And the cause is still on screen; a correct message is not a substitute
+    // for saying what went wrong.
+    expect(output.errors.join("\n")).toMatch(/RGS_TABLE_NAME is not set/);
+  });
+
+  it("does not claim cases were written when the workbook itself could not be read", async () => {
+    const { dependencies, output } = buildDependencies({
+      readWorkbookAt: async () => {
+        throw new Error("ENOENT: no such file or directory, open 'typo.xlsx'");
+      },
+    });
+
+    const cliResult = await runImportCli(["--workbook", "typo.xlsx", "--commit"], dependencies);
+
+    expect(cliResult.exitCode).not.toBe(0);
+    expect(output.errors).toContain(NO_WRITES_ABORT_MESSAGE);
+    expect(output.errors.join("\n")).not.toMatch(/already written/);
+  });
+
+  it("DOES claim cases were written when the run died after writing some", async () => {
+    const context = buildTestContext();
+    // Ten rows, and the table stops accepting writes a few writes in -- the
+    // real shape of a throttled or timed-out --commit at row N.
+    const failingContext = withTable(context, tableFailingAfterWrites(context.table, 5));
+    const { dependencies, output } = buildDependencies({
+      buildContext: () => failingContext,
+      readWorkbookAt: async () => buildWorkbookExtract(10),
+    });
+
+    const cliResult = await runImportCli(["--workbook", "book.xlsx", "--commit"], dependencies);
+
+    expect(cliResult.exitCode).not.toBe(0);
+    // The other half of NEW-4, and the reason the fix is not "delete the
+    // scary message": when writes really have happened, the operator must be
+    // told, and told that re-running repairs rather than duplicates.
+    expect(output.errors).toContain(PARTIAL_WRITE_ABORT_MESSAGE);
+    expect(output.errors).not.toContain(NO_WRITES_ABORT_MESSAGE);
+    // Something really did land.
+    const storedItems = await context.table.query("TENANT#rgs#CASE_REF#40000");
+    expect(storedItems.length).toBeGreaterThan(0);
   });
 
   it("says nothing was written when a DRY run fails, whatever the cause", async () => {
