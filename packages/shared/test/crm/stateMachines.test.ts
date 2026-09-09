@@ -131,6 +131,41 @@ describe("deriveCaseStatusFromApplicants", () => {
   it("treats a case with no applicants as unchanged", () => {
     expect(deriveCaseStatusFromApplicants("IN_PROGRESS", [])).toBe("IN_PROGRESS");
   });
+
+  it("does not treat a sent-back applicant as decided", () => {
+    // SENT_BACK is a file returning to work, not a decision on it.
+    expect(deriveCaseStatusFromApplicants("SUBMITTED", ["SENT_BACK"])).toBe("SUBMITTED");
+    expect(deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "SENT_BACK"])).toBe(
+      "SUBMITTED",
+    );
+  });
+});
+
+describe("the embassy sends one file of three back for a corrected photo", () => {
+  it("leaves the case workable, and lets the resubmission be recorded", () => {
+    // Two of the three applicants are approved; the embassy returns the third
+    // for a new photo and ops records SENT_BACK.
+    const outcomesAfterTheReturn = ["APPROVED", "APPROVED", "SENT_BACK"] as const;
+
+    // The file is actively being re-worked, so the case must NOT read DECIDED —
+    // DECIDED's only successor is CLOSED, and the case would drop out of every
+    // live queue while ops is still working it.
+    expect(deriveCaseStatusFromApplicants("SUBMITTED", outcomesAfterTheReturn)).toBe("SUBMITTED");
+
+    // Ops fixes the photo and resubmits: the returned applicant goes back into
+    // the queue as PENDING. This is the resubmission path.
+    expect(canTransitionOutcome("SENT_BACK", "PENDING")).toBe(true);
+    const outcomesAfterTheResubmission = ["APPROVED", "APPROVED", "PENDING"] as const;
+    expect(deriveCaseStatusFromApplicants("SUBMITTED", outcomesAfterTheResubmission)).toBe(
+      "SUBMITTED",
+    );
+
+    // Only when the resubmitted file is actually decided does the case decide.
+    expect(canTransitionOutcome("PENDING", "APPROVED")).toBe(true);
+    expect(deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "APPROVED", "APPROVED"])).toBe(
+      "DECIDED",
+    );
+  });
 });
 
 describe("isCaseClosable", () => {
@@ -171,7 +206,10 @@ describe("outcome machine", () => {
   it("refuses to un-decide an applicant, which is what breaks the DECIDED derivation", () => {
     expect(canTransitionOutcome("APPROVED", "PENDING")).toBe(false);
     expect(canTransitionOutcome("REJECTED", "PENDING")).toBe(false);
-    expect(canTransitionOutcome("SENT_BACK", "PENDING")).toBe(false);
+  });
+
+  it("sends a returned file back into the queue, because a resubmission is not a decision", () => {
+    expect(canTransitionOutcome("SENT_BACK", "PENDING")).toBe(true);
   });
 
   it("refuses a no-op, the same as the custody and billing machines", () => {
@@ -186,7 +224,9 @@ describe("outcome machine", () => {
     // deriveCaseStatusFromApplicants short-circuits once a case is DECIDED, so
     // an applicant slipping back to PENDING would leave a DECIDED case holding
     // a pending applicant — the contradiction this machine exists to prevent.
-    for (const decidedOutcome of ["APPROVED", "REJECTED", "SENT_BACK"] as const) {
+    // Only APPROVED and REJECTED can put a case in DECIDED, so only they are
+    // barred; SENT_BACK never decides a case, and must be able to go back.
+    for (const decidedOutcome of ["APPROVED", "REJECTED"] as const) {
       expect(canTransitionOutcome(decidedOutcome, "PENDING")).toBe(false);
     }
   });

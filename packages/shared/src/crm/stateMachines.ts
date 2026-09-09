@@ -60,18 +60,17 @@ export function canTransitionCustody(
 }
 
 /**
- * PENDING decides in any direction. A decided outcome may be corrected into
- * another decided outcome — staff mistype, and the event log records the
- * change — but never back to PENDING: deriveCaseStatusFromApplicants
- * short-circuits once a case is DECIDED, so un-deciding would leave a DECIDED
- * case holding a pending applicant. A no-op is refused, as in the two machines
- * above.
+ * PENDING decides in any direction (spec §5 line 221). SENT_BACK is the one
+ * outcome that is not a decision — the embassy has handed the file back for a
+ * correction — so it returns to PENDING when the corrected file is resubmitted.
+ * Without that edge a returned file could never be re-recorded. APPROVED and
+ * REJECTED are final. A no-op is refused, as in the two machines above.
  */
 const OUTCOME_TRANSITIONS: Record<ApplicantOutcome, readonly ApplicantOutcome[]> = {
   PENDING: ["APPROVED", "REJECTED", "SENT_BACK"],
   APPROVED: ["REJECTED", "SENT_BACK"],
   REJECTED: ["APPROVED", "SENT_BACK"],
-  SENT_BACK: ["APPROVED", "REJECTED"],
+  SENT_BACK: ["PENDING", "APPROVED", "REJECTED"],
 };
 
 export function canTransitionOutcome(
@@ -98,7 +97,14 @@ export function canTransitionBilling(
 }
 
 /**
- * A case becomes DECIDED once every applicant has a non-PENDING outcome.
+ * A case becomes DECIDED once every applicant is APPROVED or REJECTED.
+ *
+ * SENT_BACK deliberately does NOT count as a decision. The embassy returning
+ * one file for a corrected photo is that file going back into work, not a
+ * verdict on it; counting it would flip the whole case to DECIDED, whose only
+ * successor is CLOSED, and the case would drop out of the live queues while
+ * ops is still working it.
+ *
  * Terminal cases are never dragged back — migrated rows keep the status the
  * import assigned them (spec §5).
  */
@@ -113,7 +119,7 @@ export function deriveCaseStatusFromApplicants(
     return currentCaseStatus;
   }
   const everyApplicantDecided = applicantOutcomes.every(
-    (applicantOutcome) => applicantOutcome !== "PENDING",
+    (applicantOutcome) => applicantOutcome === "APPROVED" || applicantOutcome === "REJECTED",
   );
   return everyApplicantDecided ? "DECIDED" : currentCaseStatus;
 }

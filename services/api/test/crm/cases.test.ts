@@ -76,6 +76,36 @@ async function seedTwoApplicantCase(context: TestContext, partnerId: string, cas
   );
 }
 
+async function seedThreeApplicantCase(
+  context: TestContext,
+  partnerId: string,
+  caseRef = "31377",
+) {
+  const applicantInputs = [];
+  for (const applicantSuffix of [1, 2, 3]) {
+    applicantInputs.push({
+      applicantRef: `${caseRef}-${applicantSuffix}`,
+      travellerId: await seedTraveller(context, `Traveller ${caseRef}-${applicantSuffix}`),
+    });
+  }
+  return createCase(
+    context,
+    "rgs",
+    {
+      caseRef,
+      caseType: "VISA",
+      partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      entryType: "SINGLE",
+      processing: "NORMAL",
+      receivedDate: "2026-01-02",
+      applicants: applicantInputs,
+    },
+    "ops@rgs.test",
+  );
+}
+
 describe("crm cases", () => {
   it("creates a case on all three axes at their starting values", async () => {
     const context = buildTestContext();
@@ -359,6 +389,63 @@ describe("crm cases", () => {
       statusCode: 409,
       code: "CORRUPT_RECORD",
     });
+  });
+
+  // The embassy returns one file of three for a corrected photo. Recording
+  // SENT_BACK must not read as a decision: a DECIDED case can only go on to
+  // CLOSED, so the file would become impossible to resubmit and would vanish
+  // from the queue ops is actively working it from.
+  it("keeps the case workable when the embassy sends one of three files back", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const created = await seedThreeApplicantCase(context, partnerId);
+    await changeCaseStatus(context, "rgs", created.caseId, "SUBMITTED", "ops@rgs.test");
+    for (const decidedApplicantRef of ["31377-1", "31377-2"]) {
+      await changeApplicantOutcome(
+        context,
+        "rgs",
+        created.caseId,
+        decidedApplicantRef,
+        "APPROVED",
+        "ops@rgs.test",
+      );
+    }
+
+    const afterTheReturn = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      "31377-3",
+      "SENT_BACK",
+      "ops@rgs.test",
+    );
+    expect(afterTheReturn.caseStatus).toBe("SUBMITTED");
+    const submittedQueue = await listCasesByStatus(context, "rgs", "SUBMITTED");
+    expect(submittedQueue.map((queuedCase) => queuedCase.caseId)).toContain(created.caseId);
+
+    // The corrected photo goes back to the embassy: the returned applicant
+    // rejoins the queue as PENDING.
+    const afterTheResubmission = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      "31377-3",
+      "PENDING",
+      "ops@rgs.test",
+    );
+    expect(afterTheResubmission.applicants[2]!.outcome).toBe("PENDING");
+    expect(afterTheResubmission.caseStatus).toBe("SUBMITTED");
+
+    // The case decides only once the resubmitted file is actually decided.
+    const afterTheDecision = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      "31377-3",
+      "APPROVED",
+      "ops@rgs.test",
+    );
+    expect(afterTheDecision.caseStatus).toBe("DECIDED");
   });
 
   it("keeps one tenant's cases out of another's queries", async () => {
