@@ -2,7 +2,7 @@ import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
-import { partnerListGsi1Pk, partnerPartitionKey } from "./keys";
+import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "./keys";
 
 export interface CreatePartnerInput {
   canonicalName: string;
@@ -51,7 +51,7 @@ export async function createPartner(
 
   await context.table.put({
     PK: partnerPartitionKey(tenantId, partner.partnerId),
-    SK: "META",
+    SK: META_SORT_KEY,
     GSI1PK: partnerListGsi1Pk(tenantId),
     // The canonical key is a storage attribute only — PartnerSchema has no such
     // field, so it must not be spread into the domain object.
@@ -75,7 +75,7 @@ export async function getPartnerOrThrow(
   tenantId: string,
   partnerId: string,
 ): Promise<crm.Partner> {
-  const partnerItem = await context.table.get(partnerPartitionKey(tenantId, partnerId), "META");
+  const partnerItem = await context.table.get(partnerPartitionKey(tenantId, partnerId), META_SORT_KEY);
   if (!partnerItem) throw notFound("Partner");
   return crm.PartnerSchema.parse(stripKeys(partnerItem));
 }

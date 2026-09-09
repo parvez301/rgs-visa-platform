@@ -7,7 +7,11 @@
 
 export const DEFAULT_TENANT_ID = "rgs";
 
-export const CASE_META_SORT_KEY = "META";
+/**
+ * The sort key every "the record itself" item uses — cases, partners and
+ * travellers alike. One constant, because it is one storage decision.
+ */
+export const META_SORT_KEY = "META";
 export const APPLICANT_SORT_KEY_PREFIX = "APPLICANT#";
 export const NOTE_SORT_KEY_PREFIX = "NOTE#";
 export const EVENT_SORT_KEY_PREFIX = "EVENT#";

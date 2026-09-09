@@ -1,7 +1,8 @@
+import { readFile, readdir } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   APPLICANT_SORT_KEY_PREFIX,
-  CASE_META_SORT_KEY,
+  META_SORT_KEY,
   DEFAULT_TENANT_ID,
   applicantSortKey,
   caseIdFromPartitionKey,
@@ -43,7 +44,7 @@ describe("crm keys", () => {
 
   it("prefixes applicant keys so a case query can select just them", () => {
     expect(applicantSortKey(3).startsWith(APPLICANT_SORT_KEY_PREFIX)).toBe(true);
-    expect(CASE_META_SORT_KEY.startsWith(APPLICANT_SORT_KEY_PREFIX)).toBe(false);
+    expect(META_SORT_KEY.startsWith(APPLICANT_SORT_KEY_PREFIX)).toBe(false);
   });
 
   it("builds the three index keys from spec section 5", () => {
@@ -60,5 +61,22 @@ describe("crm keys", () => {
 
   it("defaults to the rgs tenant", () => {
     expect(DEFAULT_TENANT_ID).toBe("rgs");
+  });
+
+  // The standing rule: keys.ts is the only file allowed to write a CRM
+  // DynamoDB key literal. A copy of "META" elsewhere is a second definition of
+  // the storage layout, free to drift from this one.
+  it("is the only CRM domain file that writes a key literal", async () => {
+    const domainDirectory = new URL("../../src/domain/crm/", import.meta.url);
+    const domainFileNames = (await readdir(domainDirectory)).filter(
+      (fileName) => fileName.endsWith(".ts") && fileName !== "keys.ts",
+    );
+    expect(domainFileNames.length).toBeGreaterThan(0);
+
+    for (const fileName of domainFileNames) {
+      const source = await readFile(new URL(fileName, domainDirectory), "utf8");
+      const keyLiterals = source.match(/"(META|APPLICANT#|NOTE#|EVENT#|TENANT#)/g) ?? [];
+      expect({ fileName, keyLiterals }).toEqual({ fileName, keyLiterals: [] });
+    }
   });
 });

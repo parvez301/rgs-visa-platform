@@ -6,7 +6,7 @@ import { newId } from "../../lib/ids";
 import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
 import {
-  CASE_META_SORT_KEY,
+  META_SORT_KEY,
   caseIdFromPartitionKey,
   caseStatusGsi1Pk,
   partnerCasesGsi2Pk,
@@ -351,7 +351,7 @@ async function loadCasesFromMetaItems(
   const loadedCases: crm.CrmCase[] = [];
   const unreadableCaseIds: string[] = [];
   for (const metaItem of metaItems) {
-    if (metaItem["SK"] !== CASE_META_SORT_KEY) continue;
+    if (metaItem["SK"] !== META_SORT_KEY) continue;
     const caseId = caseIdOfMetaItem(metaItem);
     if (caseId === undefined) {
       // Neither the body nor the partition key names a case. Report the raw key

@@ -3,7 +3,12 @@ import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import { badRequest, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
-import { passportGsi3Pk, travellerNameGsi2Pk, travellerPartitionKey } from "./keys";
+import {
+  META_SORT_KEY,
+  passportGsi3Pk,
+  travellerNameGsi2Pk,
+  travellerPartitionKey,
+} from "./keys";
 
 export interface UpsertTravellerInput {
   fullName: string;
@@ -59,7 +64,7 @@ export async function upsertTraveller(
 
   await context.table.put({
     PK: travellerPartitionKey(tenantId, traveller.travellerId),
-    SK: "META",
+    SK: META_SORT_KEY,
     GSI2PK: travellerNameGsi2Pk(tenantId, traveller.normalizedName),
     GSI2SK: traveller.travellerId,
     ...(traveller.passportNumber !== undefined
@@ -115,7 +120,7 @@ export async function getTravellerOrThrow(
 ): Promise<crm.CrmTraveller> {
   const travellerItem = await context.table.get(
     travellerPartitionKey(tenantId, travellerId),
-    "META",
+    META_SORT_KEY,
   );
   if (!travellerItem) throw notFound("Traveller");
   return crm.CrmTravellerSchema.parse(stripKeys(travellerItem));

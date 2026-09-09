@@ -5,7 +5,7 @@ import type { TableItem } from "../../lib/db";
 import { corruptRecord, notFound } from "../../lib/errors";
 import {
   APPLICANT_SORT_KEY_PREFIX,
-  CASE_META_SORT_KEY,
+  META_SORT_KEY,
   applicantSortKey,
   casePartitionKey,
   caseStatusGsi1Pk,
@@ -24,7 +24,7 @@ export async function writeCase(context: AppContext, crmCase: crm.CrmCase): Prom
 
   await context.table.put({
     PK: partitionKey,
-    SK: CASE_META_SORT_KEY,
+    SK: META_SORT_KEY,
     GSI1PK: caseStatusGsi1Pk(crmCase.tenantId, crmCase.caseStatus),
     GSI1SK: crmCase.updatedAt,
     GSI2PK: partnerCasesGsi2Pk(crmCase.tenantId, crmCase.partnerId),
@@ -59,7 +59,7 @@ export async function readCase(
   caseId: string,
 ): Promise<crm.CrmCase | undefined> {
   const partitionKey = casePartitionKey(tenantId, caseId);
-  const metaItem = await context.table.get(partitionKey, CASE_META_SORT_KEY);
+  const metaItem = await context.table.get(partitionKey, META_SORT_KEY);
   if (!metaItem) return undefined;
 
   // Strongly consistent for the same reason writeCase's re-read is: an
