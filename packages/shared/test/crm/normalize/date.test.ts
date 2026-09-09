@@ -70,6 +70,27 @@ describe("normalizeExcelDate", () => {
     expect(normalizeExcelDate(45658).isoDate).toBeNull();
   });
 
+  it("reads the ISO shape the reader emits for a Date cell", () => {
+    // readWorkbook.ts converts a Date cell to "YYYY-MM-DD" (UTC) before this
+    // function ever sees it. A 4-digit year FIRST does not match the
+    // dd-mm-yyyy branch above, so this needs its own branch.
+    expect(normalizeExcelDate("2025-06-12")).toEqual({
+      isoDate: "2025-06-12",
+      needsReview: false,
+      rawValue: "2025-06-12",
+    });
+  });
+
+  it("sends an ISO date outside the sane window to review", () => {
+    expect(normalizeExcelDate("2019-06-12").needsReview).toBe(true);
+    expect(normalizeExcelDate("2019-06-12").isoDate).toBeNull();
+  });
+
+  it("rejects an ISO date that is not a real calendar day", () => {
+    expect(normalizeExcelDate("2025-02-30").isoDate).toBeNull();
+    expect(normalizeExcelDate("2025-02-30").needsReview).toBe(true);
+  });
+
   it("does not throw on an invalid Date object, routing it to review instead", () => {
     const invalidDate = new Date("nonsense");
     expect(() => normalizeExcelDate(invalidDate)).not.toThrow();

@@ -37,6 +37,13 @@ function isPlausibleYear(year: number): boolean {
  * used by the migration emits serials rather than Date objects, convert them
  * at the reader boundary or add a branch here with the correct epoch
  * (1900 vs 1904); do not guess the epoch.
+ *
+ * The reader boundary (`services/migration/src/readWorkbook.ts`) converts a
+ * `Date` cell to `"YYYY-MM-DD"` (UTC, deliberately) rather than handing this
+ * function a `Date` object, so a string in that exact shape is a second
+ * accepted input format, matched before the day-first `dd-mm-yyyy` format
+ * below. It still runs through `isRealCalendarDate` and `isPlausibleYear` —
+ * an ISO-shaped string is not automatically trustworthy.
  */
 export function normalizeExcelDate(
   rawInput: string | Date | number | null | undefined,
@@ -67,6 +74,18 @@ export function normalizeExcelDate(
   const rawValue = String(rawInput);
   // Strip the stray spaces the sheet contains ("01 /09/2026") before matching.
   const compactValue = rawValue.trim().replace(/\s+/g, "");
+
+  const isoPartsMatch = compactValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoPartsMatch !== null) {
+    const isoYear = Number(isoPartsMatch[1]);
+    const isoMonth = Number(isoPartsMatch[2]);
+    const isoDay = Number(isoPartsMatch[3]);
+    if (isPlausibleYear(isoYear) && isRealCalendarDate(isoYear, isoMonth, isoDay)) {
+      return { isoDate: toIsoDate(isoYear, isoMonth, isoDay), needsReview: false, rawValue };
+    }
+    return { isoDate: null, needsReview: true, rawValue };
+  }
+
   const partsMatch = compactValue.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
   if (partsMatch === null) {
     return { isoDate: null, needsReview: true, rawValue };
