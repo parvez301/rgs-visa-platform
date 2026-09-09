@@ -462,7 +462,10 @@ describe("normalizeCountry", () => {
   });
 
   it("handles the apostrophe in Cote d'Ivoire", () => {
-    expect(normalizeCountry("Cote d’Ivoire (Ivory Coast)").countryCode).toBe("CI");
+    // Guard: if a future edit flattens the curly apostrophe, the two inputs below
+    // become identical and this test silently stops testing anything.
+    expect("Cote d\u2019Ivoire (Ivory Coast)").not.toBe("Cote d'Ivoire (Ivory Coast)");
+    expect(normalizeCountry("Cote d\u2019Ivoire (Ivory Coast)").countryCode).toBe("CI");
     expect(normalizeCountry("Cote d'Ivoire (Ivory Coast)").countryCode).toBe("CI");
   });
 
@@ -512,7 +515,7 @@ export interface CountryNormalizationResult {
  * whitespace collapsed. Keeps "SRI LANKA ETA" distinct from "SRI LANKA".
  */
 function buildLookupKey(rawValue: string): string {
-  return rawValue.trim().toUpperCase().replace(/’/g, "'").replace(/\s+/g, " ");
+  return rawValue.trim().toUpperCase().replace(/\u2019/g, "'").replace(/\s+/g, " ");
 }
 
 /** Country spellings observed in the workbook, mapped to ISO-3166 alpha-2. */
