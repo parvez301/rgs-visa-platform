@@ -2,8 +2,9 @@ import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import type { TableItem } from "../../lib/db";
-import { CorruptRecordError, badRequest, conflict, notFound } from "../../lib/errors";
+import { badRequest, conflict, corruptRecord, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
+import { collectReadableRecords } from "../../lib/storedRecords";
 import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
 import {
@@ -418,45 +419,33 @@ async function loadCasesFromMetaItems(
   tenantId: string,
   metaItems: TableItem[],
 ): Promise<CaseListing> {
-  const loadedCases: crm.CrmCase[] = [];
-  const unreadableCaseIds: string[] = [];
-  for (const metaItem of metaItems) {
-    if (metaItem["SK"] !== META_SORT_KEY) continue;
-    const caseId = caseIdOfMetaItem(metaItem);
-    if (caseId === undefined) {
-      // Neither the body nor the partition key names a case — a row repaired
-      // into a partition that is not a case partition at all looks like this.
-      // Report the storage key: it is all an operator has to find the row with,
-      // and String(undefined) used to turn this into the literal id
-      // "undefined", which reads back as no case and left the loop wordless.
-      unreadableCaseIds.push(metaItem.PK);
-      console.warn(
-        `Skipped an unidentifiable CRM case META item in tenant ${tenantId}: ${metaItem.PK}`,
-      );
-      continue;
-    }
-    try {
-      const loadedCase = await readCase(context, tenantId, caseId);
-      if (loadedCase) {
-        loadedCases.push(loadedCase);
-        continue;
+  const caseMetaItems = metaItems.filter((metaItem) => metaItem["SK"] === META_SORT_KEY);
+  const { records, unreadableRecordIds } = await collectReadableRecords(
+    caseMetaItems,
+    async (metaItem) => {
+      const caseId = caseIdOfMetaItem(metaItem);
+      if (caseId === undefined) {
+        // Neither the body nor the partition key names a case — a row repaired
+        // into a partition that is not a case partition at all looks like this.
+        // Report the storage key: it is all an operator has to find the row
+        // with, and String(undefined) used to turn this into the literal id
+        // "undefined", which reads back as no case and left the loop wordless.
+        throw corruptRecord("Case", metaItem.PK, "the row names no caseId at all");
       }
+      const loadedCase = await readCase(context, tenantId, caseId);
+      if (loadedCase) return loadedCase;
       // The index named a case whose partition holds no META item — a deleted
       // case still in an eventually consistent GSI, or an index entry pointing
       // at the wrong id. Dropping it here is what made the disappearance silent.
-      unreadableCaseIds.push(caseId);
-      console.warn(
-        `Skipped CRM case ${caseId} in tenant ${tenantId}: the status index names it but its partition holds no case`,
+      throw corruptRecord(
+        "Case",
+        caseId,
+        "the status index names it but its partition holds no case",
       );
-    } catch (error) {
-      if (!(error instanceof CorruptRecordError)) throw error;
-      unreadableCaseIds.push(error.recordId);
-      console.warn(
-        `Skipped unreadable CRM case ${error.recordId} in tenant ${tenantId}: ${error.reason}`,
-      );
-    }
-  }
-  return { cases: loadedCases, unreadableCaseIds };
+    },
+    { entityDescription: "CRM case", scopeDescription: `tenant ${tenantId}` },
+  );
+  return { cases: records, unreadableCaseIds: unreadableRecordIds };
 }
 
 /**

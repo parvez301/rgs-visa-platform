@@ -1,7 +1,11 @@
 import { ActivityEventSchema, type ActivityEvent } from "@rgs/shared";
-import { ZodError } from "zod";
 import type { AppContext } from "../lib/context";
-import { CorruptRecordError, corruptRecord } from "../lib/errors";
+import {
+  collectReadableRecords,
+  parseStoredRecord,
+  storedRecordId,
+  stripStorageKeys,
+} from "../lib/storedRecords";
 
 function dayBucketsBetween(startDate: Date, endDate: Date): string[] {
   const buckets: string[] = [];
@@ -34,34 +38,12 @@ export interface ActivityListing {
  * the row, and the listings below can catch precisely this and skip.
  */
 function itemToActivityEvent(item: Record<string, unknown>): ActivityEvent {
-  const { PK, SK, GSI2PK, GSI2SK, ...eventAttributes } = item;
-  try {
-    return ActivityEventSchema.parse(eventAttributes);
-  } catch (error) {
-    if (error instanceof ZodError) {
-      throw corruptRecord("Activity event", eventIdOfItem(item), describeFirstIssue(error));
-    }
-    throw error;
-  }
-}
-
-/**
- * The id that names a stored event row. The body carries it, but a row that
- * lost it is exactly the kind of row this path exists for, and
- * String(undefined) would report the literal id "undefined" — which finds
- * nothing. The storage key always names the row, so it is the fallback.
- */
-function eventIdOfItem(item: Record<string, unknown>): string {
-  const storedEventId = item["eventId"];
-  if (typeof storedEventId === "string" && storedEventId.length > 0) return storedEventId;
-  return `${String(item["PK"])} / ${String(item["SK"])}`;
-}
-
-function describeFirstIssue(error: ZodError): string {
-  const firstIssue = error.issues[0];
-  return firstIssue
-    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
-    : "the stored item failed schema validation";
+  return parseStoredRecord(
+    ActivityEventSchema,
+    "Activity event",
+    storedRecordId(item, "eventId"),
+    stripStorageKeys(item),
+  );
 }
 
 /**
@@ -71,20 +53,18 @@ function describeFirstIssue(error: ZodError): string {
  * named in `unreadableEventIds`. Only CorruptRecordError is swallowed; every
  * other failure still propagates.
  */
-function collectReadableEvents(
+async function collectReadableEvents(
   items: Record<string, unknown>[],
   events: ActivityEvent[],
   unreadableEventIds: string[],
-): void {
-  for (const item of items) {
-    try {
-      events.push(itemToActivityEvent(item));
-    } catch (error) {
-      if (!(error instanceof CorruptRecordError)) throw error;
-      unreadableEventIds.push(error.recordId);
-      console.warn(`Skipped unreadable activity event ${error.recordId}: ${error.reason}`);
-    }
-  }
+): Promise<void> {
+  const { records, unreadableRecordIds } = await collectReadableRecords(
+    items,
+    itemToActivityEvent,
+    { entityDescription: "activity event" },
+  );
+  events.push(...records);
+  unreadableEventIds.push(...unreadableRecordIds);
 }
 
 /** Reverse-chron feed over the last `daysBack` days (admin dashboard). */
@@ -104,7 +84,7 @@ export async function listRecentActivity(
       scanForward: false,
       limit: limit - events.length,
     });
-    collectReadableEvents(items, events, unreadableEventIds);
+    await collectReadableEvents(items, events, unreadableEventIds);
   }
   return { events, unreadableEventIds };
 }
@@ -121,6 +101,6 @@ export async function listUserActivity(
   });
   const events: ActivityEvent[] = [];
   const unreadableEventIds: string[] = [];
-  collectReadableEvents(items, events, unreadableEventIds);
+  await collectReadableEvents(items, events, unreadableEventIds);
   return { events, unreadableEventIds };
 }

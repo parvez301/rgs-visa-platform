@@ -10,6 +10,7 @@ import type {
   PaymentStatus,
   User,
 } from "@rgs/shared";
+import { unwrapListingResponse } from "@rgs/shared";
 
 const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? "";
 
@@ -67,16 +68,6 @@ export interface ReviewDocumentInput {
   rejectReason?: string;
 }
 
-interface ApplicationListing {
-  applications: Application[];
-  unreadableApplicationIds: string[];
-}
-
-interface ActivityListing {
-  events: ActivityEvent[];
-  unreadableEventIds: string[];
-}
-
 /**
  * A stored row the API could not reassemble. It is skipped so one bad row
  * cannot take a whole screen down, but skipping it silently would make a
@@ -90,18 +81,39 @@ function warnAboutUnreadable(entity: string, unreadableIds: string[]): void {
   );
 }
 
+/**
+ * Every collection endpoint answers `{ <records>, unreadable<Record>Ids }`.
+ * The pages want the list, so it is unwrapped here and anything skipped is
+ * reported. `unwrapListingResponse` also accepts a bare array, so an admin
+ * bundle that reaches an API deployed a moment earlier or later degrades to
+ * "no skipped rows reported" instead of a TypeError on `undefined.length`.
+ */
+async function fetchListing<RecordType>(
+  path: string,
+  idToken: string,
+  recordsFieldName: string,
+  unreadableIdsFieldName: string,
+  entityDescription: string,
+): Promise<RecordType[]> {
+  const responsePayload = await apiFetch<unknown>(path, { idToken });
+  const listing = unwrapListingResponse<RecordType>(
+    responsePayload,
+    recordsFieldName,
+    unreadableIdsFieldName,
+  );
+  warnAboutUnreadable(entityDescription, listing.unreadableRecordIds);
+  return listing.records;
+}
+
 export const adminApi = {
-  // The API answers { applications, unreadableApplicationIds } so that one
-  // malformed row cannot 500 the whole queue. The pages want the list, so it
-  // is unwrapped here; a skipped row is reported rather than merely absent.
-  listApplications: async (idToken: string, status: ApplicationStatus) => {
-    const listing = await apiFetch<ApplicationListing>(
+  listApplications: (idToken: string, status: ApplicationStatus) =>
+    fetchListing<Application>(
       `/api/v1/admin/applications?status=${status}`,
-      { idToken },
-    );
-    warnAboutUnreadable("application", listing.unreadableApplicationIds);
-    return listing.applications;
-  },
+      idToken,
+      "applications",
+      "unreadableApplicationIds",
+      "application",
+    ),
 
   getApplication: (idToken: string, applicationId: string) =>
     apiFetch<{ application: Application; documents: ApplicationDocument[] }>(
@@ -158,24 +170,39 @@ export const adminApi = {
       idToken,
     }),
 
-  listActivity: async (idToken: string, options: { userId?: string; daysBack?: number } = {}) => {
+  listActivity: (idToken: string, options: { userId?: string; daysBack?: number } = {}) => {
     const queryParams = new URLSearchParams();
     if (options.userId) queryParams.set("userId", options.userId);
     if (options.daysBack !== undefined) queryParams.set("daysBack", String(options.daysBack));
     const queryString = queryParams.toString();
-    const listing = await apiFetch<ActivityListing>(
+    return fetchListing<ActivityEvent>(
       `/api/v1/admin/activity${queryString ? `?${queryString}` : ""}`,
-      { idToken },
+      idToken,
+      "events",
+      "unreadableEventIds",
+      "activity event",
     );
-    warnAboutUnreadable("activity event", listing.unreadableEventIds);
-    return listing.events;
   },
 
   listLeads: (idToken: string) => apiFetch<Lead[]>("/api/v1/admin/leads", { idToken }),
 
-  listUsers: (idToken: string) => apiFetch<User[]>("/api/v1/admin/users", { idToken }),
+  listUsers: (idToken: string) =>
+    fetchListing<User>(
+      "/api/v1/admin/users",
+      idToken,
+      "users",
+      "unreadableUserIds",
+      "user profile",
+    ),
 
-  listNotices: (idToken: string) => apiFetch<Notice[]>("/api/v1/admin/notices", { idToken }),
+  listNotices: (idToken: string) =>
+    fetchListing<Notice>(
+      "/api/v1/admin/notices",
+      idToken,
+      "notices",
+      "unreadableNoticeIds",
+      "notice",
+    ),
 
   upsertNotice: (idToken: string, noticeInput: NoticeInput) =>
     apiFetch<Notice>("/api/v1/admin/notices", {
@@ -191,7 +218,13 @@ export const adminApi = {
     }),
 
   listCountries: (idToken: string) =>
-    apiFetch<CountryProduct[]>("/api/v1/admin/config/countries", { idToken }),
+    fetchListing<CountryProduct>(
+      "/api/v1/admin/config/countries",
+      idToken,
+      "countryProducts",
+      "unreadableCountryProductIds",
+      "country product",
+    ),
 
   putCountry: (idToken: string, countryProduct: CountryProduct) =>
     apiFetch<CountryProduct>("/api/v1/admin/config/countries", {

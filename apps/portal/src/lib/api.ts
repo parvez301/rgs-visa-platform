@@ -7,6 +7,7 @@ import type {
   Traveller,
   WizardStep,
 } from "@rgs/shared";
+import { unwrapListingResponse } from "@rgs/shared";
 
 const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? "";
 
@@ -45,11 +46,56 @@ async function apiFetch<ResponseType>(
   return responsePayload as ResponseType;
 }
 
+/**
+ * Every collection endpoint answers `{ <records>, unreadable<Record>Ids }` so
+ * that one malformed stored row is skipped and named rather than taking the
+ * whole listing down with it (finding C3). The pages want the list, so it is
+ * unwrapped here; anything skipped is said out loud, because an application
+ * that quietly vanishes from a customer's dashboard is indistinguishable from
+ * one that was never created.
+ *
+ * `unwrapListingResponse` also accepts a bare array, so a portal bundle that
+ * reaches an API deployed a moment earlier or later degrades to "no skipped
+ * rows reported" instead of a TypeError that blanks the page.
+ */
+async function fetchListing<RecordType>(
+  path: string,
+  recordsFieldName: string,
+  unreadableIdsFieldName: string,
+  entityDescription: string,
+  options: { idToken?: string } = {},
+): Promise<RecordType[]> {
+  const responsePayload = await apiFetch<unknown>(path, options);
+  const listing = unwrapListingResponse<RecordType>(
+    responsePayload,
+    recordsFieldName,
+    unreadableIdsFieldName,
+  );
+  if (listing.unreadableRecordIds.length > 0) {
+    console.warn(
+      `${listing.unreadableRecordIds.length} ${entityDescription}(s) could not be read and were left out: ${listing.unreadableRecordIds.join(", ")}`,
+    );
+  }
+  return listing.records;
+}
+
 export const portalApi = {
-  listCountries: () => apiFetch<CountryProduct[]>("/api/v1/config/countries"),
+  listCountries: () =>
+    fetchListing<CountryProduct>(
+      "/api/v1/config/countries",
+      "countryProducts",
+      "unreadableCountryProductIds",
+      "country product",
+    ),
 
   listMyApplications: (idToken: string) =>
-    apiFetch<Application[]>("/api/v1/applications", { idToken }),
+    fetchListing<Application>(
+      "/api/v1/applications",
+      "applications",
+      "unreadableApplicationIds",
+      "application",
+      { idToken },
+    ),
 
   getApplication: (idToken: string, applicationId: string) =>
     apiFetch<{ application: Application; documents: ApplicationDocument[] }>(

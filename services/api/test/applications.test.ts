@@ -138,10 +138,11 @@ describe("listMyApplications", () => {
     await createDraft(context, "user_1", "TZ", "user_1@example.com");
     context.advanceClock(1000);
     await createDraft(context, "user_2", "ZM", "user_2@example.com");
-    const userOneApplications = await listMyApplications(context, "user_1");
-    expect(userOneApplications).toHaveLength(2);
+    const userOneListing = await listMyApplications(context, "user_1");
+    expect(userOneListing.applications).toHaveLength(2);
     expect(
-      userOneApplications.every((application) => application.userId === "user_1"),
+      userOneListing.applications.every((application) => application.userId === "user_1"),
     ).toBe(true);
+    expect(userOneListing.unreadableApplicationIds).toEqual([]);
   });
 });

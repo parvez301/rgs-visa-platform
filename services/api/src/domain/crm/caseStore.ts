@@ -1,8 +1,7 @@
 import { crm } from "@rgs/shared";
-import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import type { TableItem } from "../../lib/db";
-import { corruptRecord, notFound } from "../../lib/errors";
+import { notFound } from "../../lib/errors";
+import { parseStoredRecord, stripStorageKeys } from "../../lib/storedRecords";
 import {
   APPLICANT_SORT_KEY_PREFIX,
   META_SORT_KEY,
@@ -80,28 +79,14 @@ export async function readCase(
     consistentRead: true,
   });
 
-  try {
-    return crm.CrmCaseSchema.parse({
-      ...stripStorageAttributes(metaItem),
-      applicants: applicantItems.map(stripStorageAttributes),
-    });
-  } catch (error) {
-    if (error instanceof ZodError) {
-      // A partition can hold META with no APPLICANT# items — writeCase is not
-      // transactional, so a timeout between the two writes leaves exactly that.
-      // Raw, a ZodError escapes the router's ApiError mapping as a 500; an
-      // empty applicants array would instead pass a corrupt case off as healthy.
-      throw corruptRecord("Case", caseId, describeFirstIssue(error));
-    }
-    throw error;
-  }
-}
-
-function describeFirstIssue(error: ZodError): string {
-  const firstIssue = error.issues[0];
-  return firstIssue
-    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
-    : "the stored item failed schema validation";
+  // A partition can hold META with no APPLICANT# items — writeCase is not
+  // transactional, so a timeout between the two writes leaves exactly that.
+  // Raw, a ZodError escapes the router's ApiError mapping as a 500; an empty
+  // applicants array would instead pass a corrupt case off as healthy.
+  return parseStoredRecord(crm.CrmCaseSchema, "Case", caseId, {
+    ...stripStorageKeys(metaItem),
+    applicants: applicantItems.map(stripStorageKeys),
+  });
 }
 
 export async function readCaseOrThrow(
@@ -112,20 +97,4 @@ export async function readCaseOrThrow(
   const loadedCase = await readCase(context, tenantId, caseId);
   if (!loadedCase) throw notFound("Case");
   return loadedCase;
-}
-
-/** Removes the key and index attributes so only domain fields reach the schema. */
-function stripStorageAttributes(item: TableItem): Record<string, unknown> {
-  const {
-    PK: _partitionKey,
-    SK: _sortKey,
-    GSI1PK: _gsi1Pk,
-    GSI1SK: _gsi1Sk,
-    GSI2PK: _gsi2Pk,
-    GSI2SK: _gsi2Sk,
-    GSI3PK: _gsi3Pk,
-    GSI3SK: _gsi3Sk,
-    ...domainFields
-  } = item;
-  return domainFields;
 }

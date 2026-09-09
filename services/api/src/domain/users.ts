@@ -2,6 +2,12 @@ import { UserSchema, type User } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
 import type { TableItem } from "../lib/db";
+import {
+  collectReadableRecords,
+  parseStoredRecord,
+  storedRecordId,
+  stripStorageKeys,
+} from "../lib/storedRecords";
 
 export const PROFILE_SORT_KEY = "PROFILE";
 const USER_PROFILE_GSI_PARTITION = "USERPROFILE";
@@ -10,19 +16,21 @@ function userPartitionKey(userId: string): string {
   return `USER#${userId}`;
 }
 
+/**
+ * The single place a stored row becomes a User.
+ *
+ * This used to end in a bare `UserSchema.parse()`, and `listUserProfiles`
+ * mapped it over every profile the index returned -- so one malformed USER#
+ * row answered 500 from `GET /api/v1/admin/users`, which is what resolves
+ * names on the activity and user-trail screens.
+ */
 function itemToUser(item: TableItem): User {
-  const {
-    PK: _partitionKey,
-    SK: _sortKey,
-    GSI1PK: _gsi1PartitionKey,
-    GSI1SK: _gsi1SortKey,
-    GSI2PK: _gsi2PartitionKey,
-    GSI2SK: _gsi2SortKey,
-    GSI3PK: _gsi3PartitionKey,
-    GSI3SK: _gsi3SortKey,
-    ...userAttributes
-  } = item;
-  return UserSchema.parse(userAttributes);
+  return parseStoredRecord(
+    UserSchema,
+    "User profile",
+    storedRecordId(item, "userId"),
+    stripStorageKeys(item),
+  );
 }
 
 export async function getUserProfile(
@@ -34,9 +42,24 @@ export async function getUserProfile(
   return itemToUser(profileItem);
 }
 
-export async function listUserProfiles(context: AppContext): Promise<User[]> {
+export interface UserProfileListing {
+  users: User[];
+  /**
+   * Profiles the index names that could not be reassembled. Named rather than
+   * merely absent: this list is what puts a human name against an activity
+   * row, and a profile missing from it silently reverts that row to a raw id.
+   */
+  unreadableUserIds: string[];
+}
+
+export async function listUserProfiles(context: AppContext): Promise<UserProfileListing> {
   const profileItems = await context.table.queryGsi("GSI1", USER_PROFILE_GSI_PARTITION);
-  return profileItems.map(itemToUser);
+  const { records, unreadableRecordIds } = await collectReadableRecords(
+    profileItems,
+    itemToUser,
+    { entityDescription: "user profile" },
+  );
+  return { users: records, unreadableUserIds: unreadableRecordIds };
 }
 
 export async function ensureUserProfile(

@@ -15,7 +15,7 @@ const uaeSeed = getCountryProduct("AE");
 describe("listCountryConfig", () => {
   it("falls back to the static seed catalog when DB is empty", async () => {
     const context = buildTestContext();
-    const catalog = await listCountryConfig(context);
+    const catalog = (await listCountryConfig(context)).countryProducts;
     expect(catalog).toHaveLength(COUNTRY_PRODUCTS.length);
     expect(catalog.map((product) => product.countryCode)).toContain("AE");
   });
@@ -27,7 +27,7 @@ describe("listCountryConfig", () => {
       docsRequired: [...uaeSeed.docsRequired],
       governmentFeeInr: 7200,
     });
-    const catalog = await listCountryConfig(context);
+    const catalog = (await listCountryConfig(context)).countryProducts;
     const uaeFromDb = catalog.find((product) => product.countryCode === "AE");
     expect(uaeFromDb?.governmentFeeInr).toBe(7200);
   });
@@ -41,7 +41,7 @@ describe("upsertCountryProduct", () => {
       docsRequired: [...uaeSeed.docsRequired],
       serviceFeeInr: 1800,
     });
-    const catalog = await listCountryConfig(context);
+    const catalog = (await listCountryConfig(context)).countryProducts;
     expect(catalog).toHaveLength(COUNTRY_PRODUCTS.length);
   });
 
@@ -97,7 +97,7 @@ describe("schema evolution", () => {
       ...legacyShape,
       governmentFeeInr: 7777,
     });
-    const catalog = await listCountryConfig(context);
+    const catalog = (await listCountryConfig(context)).countryProducts;
     const uaeFromDb = catalog.find((product) => product.countryCode === "AE");
     expect(uaeFromDb?.governmentFeeInr).toBe(7777);
     expect(uaeFromDb?.region).toBe("MIDDLE_EAST");

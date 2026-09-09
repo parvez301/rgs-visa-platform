@@ -1,15 +1,14 @@
 import { crm } from "@rgs/shared";
-import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import type { TableItem } from "../../lib/db";
-import {
-  CorruptRecordError,
-  badRequest,
-  conflict,
-  corruptRecord,
-  notFound,
-} from "../../lib/errors";
+import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
+import {
+  collectReadableRecords,
+  parseStoredRecord,
+  storedRecordId,
+  stripStorageKeys,
+} from "../../lib/storedRecords";
 import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "./keys";
 
 export interface CreatePartnerInput {
@@ -99,20 +98,12 @@ export async function listPartners(
   tenantId: string,
 ): Promise<PartnerListing> {
   const partnerItems = await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
-  const loadedPartners: crm.Partner[] = [];
-  const unreadablePartnerIds: string[] = [];
-  for (const partnerItem of partnerItems) {
-    try {
-      loadedPartners.push(parseStoredPartner(partnerItem));
-    } catch (error) {
-      if (!(error instanceof CorruptRecordError)) throw error;
-      unreadablePartnerIds.push(error.recordId);
-      console.warn(
-        `Skipped unreadable CRM partner ${error.recordId} in tenant ${tenantId}: ${error.reason}`,
-      );
-    }
-  }
-  return { partners: loadedPartners, unreadablePartnerIds };
+  const { records, unreadableRecordIds } = await collectReadableRecords(
+    partnerItems,
+    parseStoredPartner,
+    { entityDescription: "CRM partner", scopeDescription: `tenant ${tenantId}` },
+  );
+  return { partners: records, unreadablePartnerIds: unreadableRecordIds };
 }
 
 export async function getPartnerOrThrow(
@@ -174,35 +165,12 @@ export async function findPartnerByName(
  * listPartners can then catch precisely this and let everything else propagate.
  */
 function parseStoredPartner(partnerItem: TableItem): crm.Partner {
-  try {
-    return crm.PartnerSchema.parse(stripKeys(partnerItem));
-  } catch (error) {
-    if (error instanceof ZodError) {
-      throw corruptRecord("Partner", partnerIdOfStoredItem(partnerItem), describeFirstIssue(error));
-    }
-    throw error;
-  }
-}
-
-/**
- * The id that names a stored partner row. The body carries it, but a row that
- * lost it is exactly the kind of row this path exists for, and
- * String(undefined) would report the literal id "undefined" — which finds
- * nothing. The storage key always names the row, so it is the fallback.
- */
-function partnerIdOfStoredItem(partnerItem: TableItem): string {
-  const storedPartnerId = partnerItem["partnerId"];
-  if (typeof storedPartnerId === "string" && storedPartnerId.length > 0) {
-    return storedPartnerId;
-  }
-  return partnerItem.PK;
-}
-
-function describeFirstIssue(error: ZodError): string {
-  const firstIssue = error.issues[0];
-  return firstIssue
-    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
-    : "the stored item failed schema validation";
+  return parseStoredRecord(
+    crm.PartnerSchema,
+    "Partner",
+    storedRecordId(partnerItem, "partnerId"),
+    stripStorageKeys(partnerItem),
+  );
 }
 
 /** The aliases on a raw stored item, ignoring anything that is not a string. */
@@ -210,15 +178,4 @@ function storedAliasesOf(partnerItem: Record<string, unknown>): string[] {
   const storedAliases = partnerItem["aliases"];
   if (!Array.isArray(storedAliases)) return [];
   return storedAliases.filter((alias): alias is string => typeof alias === "string");
-}
-
-function stripKeys(item: Record<string, unknown>): Record<string, unknown> {
-  const {
-    PK: _partitionKey,
-    SK: _sortKey,
-    GSI1PK: _gsi1Pk,
-    GSI1SK: _gsi1Sk,
-    ...domainFields
-  } = item;
-  return domainFields;
 }

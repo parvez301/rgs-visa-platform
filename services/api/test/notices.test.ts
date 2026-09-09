@@ -77,7 +77,7 @@ describe("listPublicNotices", () => {
       title: "Live notice here",
       status: "PUBLISHED",
     });
-    const publicNotices = await listPublicNotices(context);
+    const publicNotices = (await listPublicNotices(context)).notices;
     expect(publicNotices.map((notice) => notice.noticeId)).toEqual([liveNotice.noticeId]);
     expect(publicNotices[0]).not.toHaveProperty("status");
     expect(publicNotices[0]).not.toHaveProperty("createdByEmail");
@@ -110,7 +110,7 @@ describe("listPublicNotices", () => {
       status: "PUBLISHED",
     });
 
-    const forUae = await listPublicNotices(context, { countryCode: "AE" });
+    const forUae = (await listPublicNotices(context, { countryCode: "AE" })).notices;
     expect(forUae.map((notice) => notice.noticeId)).toEqual([
       uaeNotice.noticeId,
       globalNotice.noticeId,
@@ -125,8 +125,8 @@ describe("deleteNotice", () => {
       ...baseNoticeInput,
       status: "DRAFT",
     });
-    expect(await listNotices(context)).toHaveLength(1);
+    expect((await listNotices(context)).notices).toHaveLength(1);
     await deleteNotice(context, notice.noticeId);
-    expect(await listNotices(context)).toHaveLength(0);
+    expect((await listNotices(context)).notices).toHaveLength(0);
   });
 });

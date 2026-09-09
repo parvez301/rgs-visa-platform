@@ -8,7 +8,8 @@ import {
 } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
-import { CorruptRecordError, badRequest, conflict, notFound } from "../lib/errors";
+import { badRequest, conflict, notFound } from "../lib/errors";
+import { collectReadableRecords } from "../lib/storedRecords";
 import {
   applicationToItem,
   itemToApplication,
@@ -54,18 +55,12 @@ export async function listApplicationsByStatus(
     limit,
     scanForward: false,
   });
-  const applications: Application[] = [];
-  const unreadableApplicationIds: string[] = [];
-  for (const item of items) {
-    try {
-      applications.push(itemToApplication(item));
-    } catch (error) {
-      if (!(error instanceof CorruptRecordError)) throw error;
-      unreadableApplicationIds.push(error.recordId);
-      console.warn(`Skipped unreadable application ${error.recordId}: ${error.reason}`);
-    }
-  }
-  return { applications, unreadableApplicationIds };
+  const { records, unreadableRecordIds } = await collectReadableRecords(
+    items,
+    itemToApplication,
+    { entityDescription: "application" },
+  );
+  return { applications: records, unreadableApplicationIds: unreadableRecordIds };
 }
 
 export interface AdminApplicationDetail {

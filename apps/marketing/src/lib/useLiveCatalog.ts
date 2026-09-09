@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { CountryProduct } from "@rgs/shared";
+import { unwrapListingResponse } from "@rgs/shared";
 
 const SESSION_STORAGE_KEY = "rgs.liveCountryCatalog";
 
@@ -39,12 +40,25 @@ async function fetchLiveCatalog(): Promise<CountryProduct[]> {
   const baseUrl = apiBaseUrl();
   if (!baseUrl) return [];
 
+  // { countryProducts, unreadableCountryProductIds } — one catalog row that
+  // will not parse is skipped and named rather than 500ing the public price
+  // list. A bare array from an API deployed before that change is accepted
+  // too: this bundle is static and ships on its own schedule.
   inFlightFetch = fetch(`${baseUrl}/api/v1/config/countries`)
     .then(async (response) => {
       if (!response.ok) return [];
-      const products = (await response.json()) as CountryProduct[];
-      writeCachedCatalog(products);
-      return products;
+      const listing = unwrapListingResponse<CountryProduct>(
+        await response.json(),
+        "countryProducts",
+        "unreadableCountryProductIds",
+      );
+      if (listing.unreadableRecordIds.length > 0) {
+        console.warn(
+          `${listing.unreadableRecordIds.length} country product(s) could not be read and were left out: ${listing.unreadableRecordIds.join(", ")}`,
+        );
+      }
+      writeCachedCatalog(listing.records);
+      return listing.records;
     })
     .catch(() => [] as CountryProduct[])
     .finally(() => {

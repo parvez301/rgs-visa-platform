@@ -6,7 +6,13 @@ import {
 } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
-import { badRequest } from "../lib/errors";
+import { badRequest, corruptRecord } from "../lib/errors";
+import {
+  collectReadableRecords,
+  describeFirstZodIssue,
+  storedRecordId,
+  stripStorageKeys,
+} from "../lib/storedRecords";
 
 const CONFIG_PARTITION_KEY = "CONFIG#COUNTRY";
 
@@ -14,8 +20,18 @@ function configSortKey(countryCode: string, productCode: string): string {
   return `${countryCode}#${productCode}`;
 }
 
+/**
+ * The single place a stored row becomes a CountryProduct.
+ *
+ * This used to end in `throw directParse.error` — a bare ZodError, which
+ * `router.ts` does not map — so one malformed CONFIG#COUNTRY row answered 500
+ * from the admin catalog screen AND from `GET /api/v1/config/countries`,
+ * which is unauthenticated and is what the marketing site and the portal read
+ * their prices from. Typed as CorruptRecordError, the one bad row is skipped
+ * and named while the rest of the catalog serves.
+ */
 function itemToCountryProduct(item: Record<string, unknown>): CountryProduct {
-  const { PK, SK, ...productAttributes } = item;
+  const productAttributes = stripStorageKeys(item);
   const directParse = CountryProductSchema.safeParse(productAttributes);
   if (directParse.success) return directParse.data;
   // Schema evolution: rows written before newer fields existed are healed by
@@ -31,7 +47,22 @@ function itemToCountryProduct(item: Record<string, unknown>): CountryProduct {
     });
     if (mergedParse.success) return mergedParse.data;
   }
-  throw directParse.error;
+  throw corruptRecord(
+    "Country product",
+    storedRecordId(item, "productCode"),
+    describeFirstZodIssue(directParse.error),
+  );
+}
+
+export interface CountryConfigListing {
+  countryProducts: CountryProduct[];
+  /**
+   * Catalog rows that could not be reassembled even after the seed-merge
+   * heal. Named rather than merely absent: a country that silently drops out
+   * of the catalog stops being sellable on the public site, and nothing else
+   * would say why.
+   */
+  unreadableCountryProductIds: string[];
 }
 
 /**
@@ -39,15 +70,27 @@ function itemToCountryProduct(item: Record<string, unknown>): CountryProduct {
  * The static catalog in @rgs/shared is the SEED — after deployment, admins
  * edit the DB copy and it wins everywhere (portal, API guards, pricing).
  */
-export async function listCountryConfig(context: AppContext): Promise<CountryProduct[]> {
+export async function listCountryConfig(context: AppContext): Promise<CountryConfigListing> {
   const configItems = await context.table.query(CONFIG_PARTITION_KEY);
-  if (configItems.length === 0) return [...COUNTRY_PRODUCTS];
-  return configItems.map(itemToCountryProduct);
+  if (configItems.length === 0) {
+    return { countryProducts: [...COUNTRY_PRODUCTS], unreadableCountryProductIds: [] };
+  }
+  const { records, unreadableRecordIds } = await collectReadableRecords(
+    configItems,
+    itemToCountryProduct,
+    { entityDescription: "country product" },
+  );
+  return { countryProducts: records, unreadableCountryProductIds: unreadableRecordIds };
 }
 
-export async function listActiveCountryConfig(context: AppContext): Promise<CountryProduct[]> {
-  const allProducts = await listCountryConfig(context);
-  return allProducts.filter((countryProduct) => countryProduct.active);
+export async function listActiveCountryConfig(
+  context: AppContext,
+): Promise<CountryConfigListing> {
+  const catalog = await listCountryConfig(context);
+  return {
+    countryProducts: catalog.countryProducts.filter((countryProduct) => countryProduct.active),
+    unreadableCountryProductIds: catalog.unreadableCountryProductIds,
+  };
 }
 
 export async function resolveCountryProduct(
@@ -55,7 +98,7 @@ export async function resolveCountryProduct(
   countryCode: string,
   productCode?: string,
 ): Promise<CountryProduct> {
-  const allProducts = await listCountryConfig(context);
+  const allProducts = (await listCountryConfig(context)).countryProducts;
   const resolvedProduct = allProducts.find(
     (candidate) =>
       candidate.countryCode === countryCode &&

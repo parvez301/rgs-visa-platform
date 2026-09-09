@@ -47,7 +47,7 @@ describe("listUserProfiles", () => {
     const context = buildTestContext();
     await ensureUserProfile(context, "user_1", "one@example.com", { fullName: "One" });
     await ensureUserProfile(context, "user_2", "two@example.com", { fullName: "Two" });
-    const profiles = await listUserProfiles(context);
+    const profiles = (await listUserProfiles(context)).users;
     expect(profiles.map((userProfile) => userProfile.userId).sort()).toEqual([
       "user_1",
       "user_2",

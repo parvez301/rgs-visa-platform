@@ -20,7 +20,7 @@ import { CreateLeadSchema, createLead } from "../domain/leads";
 import { listActiveCountryConfig } from "../domain/config";
 import { ensureUserProfile, getUserProfile } from "../domain/users";
 import { listPublicNotices } from "../domain/notices";
-import { Router, parseBody, type RequestContext } from "./router";
+import { Router, parseBody, parseQueryParam, type RequestContext } from "./router";
 
 const CreateDraftSchema = z.object({ countryCode: z.string().regex(/^[A-Z]{2}$/) });
 
@@ -130,9 +130,15 @@ export function buildUserRouter(context: AppContext): Router {
       "/api/v1/applications/{applicationId}/documents/download",
       async (requestContext) => {
         const { userId } = requireUser(requestContext);
-        const docType = requestContext.queryParams["docType"] ?? "";
+        // C3: a query parameter is caller input, so a bad one is a 400. A bare
+        // `.parse()` threw a ZodError, which router.ts does not map, so a
+        // missing or mistyped ?docType= answered 500 "Internal error".
+        const parsedDocType = parseQueryParam(
+          z.enum(DOC_TYPES),
+          "docType",
+          requestContext.queryParams["docType"] ?? "",
+        );
         const travellerIndex = Number(requestContext.queryParams["travellerIndex"] ?? "0");
-        const parsedDocType = z.enum(DOC_TYPES).parse(docType);
         const downloadUrl = await presignOwnedDocumentDownload(
           context,
           userId,
@@ -154,10 +160,16 @@ export function buildUserRouter(context: AppContext): Router {
     .add("GET", "/api/v1/notices", async (requestContext) => {
       const countryCode = requestContext.queryParams["countryCode"];
       if (countryCode !== undefined) {
-        const parsedCountryCode = z
-          .string()
-          .regex(/^[A-Z]{2}$/)
-          .parse(countryCode);
+        // Unauthenticated, so this is the one query parameter anybody on the
+        // internet can send. A bare `.parse()` turned `?countryCode=xx` into a
+        // 500 on the public website rather than a 400 at the caller.
+        const parsedCountryCode = parseQueryParam(
+          z.string().regex(/^[A-Z]{2}$/),
+          "countryCode",
+          countryCode,
+        );
+        // { notices, unreadableNoticeIds } — a NOTICE# row that will not parse
+        // is named rather than 500ing the ticker for every visitor.
         return listPublicNotices(context, { countryCode: parsedCountryCode });
       }
       return listPublicNotices(context);

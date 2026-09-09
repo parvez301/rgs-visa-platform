@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { NoticeCategory, NoticeSeverity } from "@rgs/shared";
+import { unwrapListingResponse } from "@rgs/shared";
 
 /** Public projection returned by GET /api/v1/notices (internal fields omitted). */
 export interface PublicNotice {
@@ -43,10 +44,25 @@ async function fetchNotices(countryCode?: string): Promise<PublicNotice[]> {
   const querySuffix =
     countryCode !== undefined ? `?countryCode=${encodeURIComponent(countryCode)}` : "";
 
+  // The endpoint answers { notices, unreadableNoticeIds } so that one
+  // malformed NOTICE# row is skipped and named rather than 500ing the ticker
+  // for every visitor to the public site. This bundle is static and ships on
+  // its own schedule, so it must also survive an API that still answers a bare
+  // array -- `unwrapListingResponse` accepts either and never throws.
   const fetchPromise = fetch(`${baseUrl}/api/v1/notices${querySuffix}`)
     .then(async (response) => {
       if (!response.ok) return [] as PublicNotice[];
-      return (await response.json()) as PublicNotice[];
+      const listing = unwrapListingResponse<PublicNotice>(
+        await response.json(),
+        "notices",
+        "unreadableNoticeIds",
+      );
+      if (listing.unreadableRecordIds.length > 0) {
+        console.warn(
+          `${listing.unreadableRecordIds.length} notice(s) could not be read and were left out: ${listing.unreadableRecordIds.join(", ")}`,
+        );
+      }
+      return listing.records;
     })
     .catch(() => [] as PublicNotice[])
     .finally(() => {

@@ -1,6 +1,6 @@
-import { ZodError, z } from "zod";
+import { z } from "zod";
 import type { AppContext } from "../../lib/context";
-import { corruptRecord } from "../../lib/errors";
+import { parseStoredRecord, stripStorageKeys } from "../../lib/storedRecords";
 import { META_SORT_KEY, caseRefIndexPartitionKey } from "./keys";
 
 /**
@@ -74,17 +74,15 @@ export async function readCaseRefReservation(
     { consistentRead: true },
   );
   if (!storedItem) return undefined;
-  try {
-    return CaseRefReservationSchema.parse(stripStorageKeys(storedItem));
-  } catch (error) {
-    if (error instanceof ZodError) {
-      // Raw, a ZodError is not an ApiError and router.ts maps only ApiError
-      // subclasses, so it would leave here as a 500. Typed, a caller can
-      // decide what to do with a reservation row it cannot read.
-      throw corruptRecord("Case ref reservation", caseRef, describeFirstIssue(error));
-    }
-    throw error;
-  }
+  // Raw, a ZodError is not an ApiError and router.ts maps only ApiError
+  // subclasses, so it would leave here as a 500. Typed as CorruptRecordError,
+  // a caller can decide what to do with a reservation row it cannot read.
+  return parseStoredRecord(
+    CaseRefReservationSchema,
+    "Case ref reservation",
+    caseRef,
+    stripStorageKeys(storedItem),
+  );
 }
 
 /** Claims a ref for a caseId. Call before writing the case. */
@@ -129,14 +127,3 @@ async function writeReservation(
   });
 }
 
-function describeFirstIssue(error: ZodError): string {
-  const firstIssue = error.issues[0];
-  return firstIssue
-    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
-    : "the stored item failed schema validation";
-}
-
-function stripStorageKeys(storedItem: Record<string, unknown>): Record<string, unknown> {
-  const { PK: _partitionKey, SK: _sortKey, ...domainFields } = storedItem;
-  return domainFields;
-}

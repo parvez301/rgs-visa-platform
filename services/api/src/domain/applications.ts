@@ -12,8 +12,13 @@ import { ZodError, z } from "zod";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
 import type { TableItem } from "../lib/db";
-import { badRequest, conflict, corruptRecord, notFound } from "../lib/errors";
+import { badRequest, conflict, notFound } from "../lib/errors";
 import { newId } from "../lib/ids";
+import {
+  collectReadableRecords,
+  parseStoredRecord,
+  storedRecordId,
+} from "../lib/storedRecords";
 import { resolveCountryProduct } from "./config";
 import { ensureUserProfile } from "./users";
 
@@ -39,35 +44,15 @@ export function applicationToItem(application: Application): TableItem {
  * listings do, and a listing can then catch precisely this and skip.
  */
 export function itemToApplication(item: TableItem): Application {
-  try {
-    return ApplicationSchema.parse(item);
-  } catch (error) {
-    if (error instanceof ZodError) {
-      throw corruptRecord("Application", applicationIdOfItem(item), describeFirstIssue(error));
-    }
-    throw error;
-  }
-}
-
-/**
- * The id that names a stored application row. The body carries it, but a row
- * that lost it is exactly the kind of row this path exists for, and
- * String(undefined) would report the literal id "undefined" — which finds
- * nothing. The storage key always names the row, so it is the fallback.
- */
-function applicationIdOfItem(item: TableItem): string {
-  const storedApplicationId = item["applicationId"];
-  if (typeof storedApplicationId === "string" && storedApplicationId.length > 0) {
-    return storedApplicationId;
-  }
-  return `${item.PK} / ${item.SK}`;
-}
-
-function describeFirstIssue(error: ZodError): string {
-  const firstIssue = error.issues[0];
-  return firstIssue
-    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
-    : "the stored item failed schema validation";
+  // The whole item, storage keys included: ApplicationSchema is a plain
+  // z.object, which drops unknown keys, so stripping them first would be work
+  // with no effect.
+  return parseStoredRecord(
+    ApplicationSchema,
+    "Application",
+    storedRecordId(item, "applicationId"),
+    item,
+  );
 }
 
 export async function createDraft(
@@ -176,12 +161,30 @@ export async function patchDraft(
   return updatedApplication;
 }
 
+export interface OwnedApplicationListing {
+  applications: Application[];
+  /**
+   * The applicant's own rows that could not be reassembled. Named rather than
+   * merely absent: a customer whose application vanishes from their portal has
+   * no way to tell that from one that was never created. This listing used to
+   * answer 409 CORRUPT_RECORD for the whole page rather than for the one bad
+   * row, so a single half-written draft cost the applicant every application
+   * they had.
+   */
+  unreadableApplicationIds: string[];
+}
+
 export async function listMyApplications(
   context: AppContext,
   userId: string,
-): Promise<Application[]> {
+): Promise<OwnedApplicationListing> {
   const items = await context.table.query(`USER#${userId}`, { skPrefix: "APP#" });
-  return items.map(itemToApplication);
+  const { records, unreadableRecordIds } = await collectReadableRecords(
+    items,
+    itemToApplication,
+    { entityDescription: "application" },
+  );
+  return { applications: records, unreadableApplicationIds: unreadableRecordIds };
 }
 
 export async function listApplicationDocuments(

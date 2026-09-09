@@ -8,6 +8,12 @@ import { logActivity } from "../lib/context";
 import type { TableItem } from "../lib/db";
 import { badRequest, notFound } from "../lib/errors";
 import { newId } from "../lib/ids";
+import {
+  collectReadableRecords,
+  parseStoredRecord,
+  storedRecordId,
+  stripStorageKeys,
+} from "../lib/storedRecords";
 
 export const NOTICE_PARTITION_KEY = "NOTICE";
 
@@ -15,19 +21,22 @@ export function noticeSortKey(createdAt: string, noticeId: string): string {
   return `${createdAt}#${noticeId}`;
 }
 
+/**
+ * The single place a stored row becomes a Notice.
+ *
+ * This used to end in a bare `NoticeSchema.parse()`, and `listNotices` mapped
+ * it over every queried item -- so one malformed NOTICE# row answered 500
+ * from `GET /api/v1/notices`, which is unauthenticated and is what the
+ * marketing site's notice ticker calls. One hand-repaired row took the public
+ * website's notices down for every visitor, not just for admins.
+ */
 function itemToNotice(item: TableItem): Notice {
-  const {
-    PK: _partitionKey,
-    SK: _sortKey,
-    GSI1PK: _gsi1PartitionKey,
-    GSI1SK: _gsi1SortKey,
-    GSI2PK: _gsi2PartitionKey,
-    GSI2SK: _gsi2SortKey,
-    GSI3PK: _gsi3PartitionKey,
-    GSI3SK: _gsi3SortKey,
-    ...noticeAttributes
-  } = item;
-  return NoticeSchema.parse(noticeAttributes);
+  return parseStoredRecord(
+    NoticeSchema,
+    "Notice",
+    storedRecordId(item, "noticeId"),
+    stripStorageKeys(item),
+  );
 }
 
 export type PublicNotice = Omit<Notice, "createdByEmail" | "status" | "updatedAt">;
@@ -55,21 +64,42 @@ async function findNoticeItem(
   return noticeItems.find((noticeItem) => noticeItem["noticeId"] === noticeId);
 }
 
-export async function listNotices(context: AppContext): Promise<Notice[]> {
+export interface NoticeListing {
+  notices: Notice[];
+  /**
+   * Rows the partition holds that could not be turned back into a Notice.
+   * Named rather than merely absent: an admin who published a notice and
+   * cannot see it in the list needs to be told the row is broken, not shown
+   * a list that quietly omits it.
+   */
+  unreadableNoticeIds: string[];
+}
+
+export async function listNotices(context: AppContext): Promise<NoticeListing> {
   const noticeItems = await context.table.query(NOTICE_PARTITION_KEY);
-  return noticeItems
-    .map(itemToNotice)
-    .sort((leftNotice, rightNotice) =>
-      rightNotice.createdAt.localeCompare(leftNotice.createdAt),
-    );
+  const { records, unreadableRecordIds } = await collectReadableRecords(
+    noticeItems,
+    itemToNotice,
+    { entityDescription: "notice" },
+  );
+  records.sort((leftNotice, rightNotice) =>
+    rightNotice.createdAt.localeCompare(leftNotice.createdAt),
+  );
+  return { notices: records, unreadableNoticeIds: unreadableRecordIds };
+}
+
+export interface PublicNoticeListing {
+  notices: PublicNotice[];
+  unreadableNoticeIds: string[];
 }
 
 export async function listPublicNotices(
   context: AppContext,
   options: { countryCode?: string } = {},
-): Promise<PublicNotice[]> {
+): Promise<PublicNoticeListing> {
   const todayIsoDate = context.now().toISOString().slice(0, 10);
-  const publishedNotices = (await listNotices(context)).filter((notice) => {
+  const allNotices = await listNotices(context);
+  const publishedNotices = allNotices.notices.filter((notice) => {
     if (notice.status !== "PUBLISHED") return false;
     if (notice.expiresAt !== undefined && notice.expiresAt < todayIsoDate) return false;
     if (options.countryCode === undefined) return true;
@@ -87,7 +117,10 @@ export async function listPublicNotices(
     return rightPublishedAt.localeCompare(leftPublishedAt);
   });
 
-  return publishedNotices.map(toPublicNotice);
+  return {
+    notices: publishedNotices.map(toPublicNotice),
+    unreadableNoticeIds: allNotices.unreadableNoticeIds,
+  };
 }
 
 export async function upsertNotice(

@@ -2,14 +2,15 @@ import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import type { TableItem } from "../../lib/db";
-import {
-  CorruptRecordError,
-  badRequest,
-  conflict,
-  corruptRecord,
-  notFound,
-} from "../../lib/errors";
+import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
+import {
+  collectReadableRecords,
+  describeFirstZodIssue,
+  parseStoredRecord,
+  storedRecordId,
+  stripStorageKeys,
+} from "../../lib/storedRecords";
 import { REVIEW_ITEM_SORT_KEY, reviewItemPartitionKey, reviewQueueGsi1Pk } from "./keys";
 
 /**
@@ -100,7 +101,7 @@ function parseNewReviewItem(candidateReviewItem: Record<string, unknown>): crm.R
     return crm.ReviewItemSchema.parse(candidateReviewItem);
   } catch (error) {
     if (error instanceof ZodError) {
-      throw badRequest(`Review item ${describeFirstIssue(error)}`);
+      throw badRequest(`Review item ${describeFirstZodIssue(error)}`);
     }
     throw error;
   }
@@ -133,20 +134,16 @@ export async function listReviewItems(
   );
   const hasMore = storedItemsPlusOne.length > limit;
   const storedItems = hasMore ? storedItemsPlusOne.slice(0, limit) : storedItemsPlusOne;
-  const loadedReviewItems: crm.ReviewItem[] = [];
-  const unreadableReviewItemIds: string[] = [];
-  for (const storedItem of storedItems) {
-    try {
-      loadedReviewItems.push(parseStoredReviewItem(storedItem));
-    } catch (error) {
-      if (!(error instanceof CorruptRecordError)) throw error;
-      unreadableReviewItemIds.push(error.recordId);
-      console.warn(
-        `Skipped unreadable CRM review item ${error.recordId} in tenant ${tenantId}: ${error.reason}`,
-      );
-    }
-  }
-  return { reviewItems: loadedReviewItems, unreadableReviewItemIds, hasMore };
+  const { records, unreadableRecordIds } = await collectReadableRecords(
+    storedItems,
+    parseStoredReviewItem,
+    { entityDescription: "CRM review item", scopeDescription: `tenant ${tenantId}` },
+  );
+  return {
+    reviewItems: records,
+    unreadableReviewItemIds: unreadableRecordIds,
+    hasMore,
+  };
 }
 
 export async function getReviewItemOrThrow(
@@ -228,49 +225,10 @@ async function writeReviewItem(context: AppContext, reviewItem: crm.ReviewItem):
  * this and let everything else propagate.
  */
 function parseStoredReviewItem(storedItem: TableItem): crm.ReviewItem {
-  try {
-    return crm.ReviewItemSchema.parse(stripStorageKeys(storedItem));
-  } catch (error) {
-    if (error instanceof ZodError) {
-      throw corruptRecord(
-        "Review item",
-        reviewItemIdOfStoredItem(storedItem),
-        describeFirstIssue(error),
-      );
-    }
-    throw error;
-  }
-}
-
-/**
- * The id that names a stored review row. The body carries it, but a row that
- * lost it is exactly the kind of row this path exists for, and
- * String(undefined) would report the literal id "undefined" — which finds
- * nothing. The storage key always names the row, so it is the fallback.
- */
-function reviewItemIdOfStoredItem(storedItem: TableItem): string {
-  const storedReviewItemId = storedItem["reviewItemId"];
-  if (typeof storedReviewItemId === "string" && storedReviewItemId.length > 0) {
-    return storedReviewItemId;
-  }
-  return storedItem.PK;
-}
-
-function describeFirstIssue(error: ZodError): string {
-  const firstIssue = error.issues[0];
-  return firstIssue
-    ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
-    : "the stored item failed schema validation";
-}
-
-/** Storage attributes are not domain fields — drop them before parsing. */
-function stripStorageKeys(storedItem: Record<string, unknown>): Record<string, unknown> {
-  const {
-    PK: _partitionKey,
-    SK: _sortKey,
-    GSI1PK: _gsi1Pk,
-    GSI1SK: _gsi1Sk,
-    ...domainFields
-  } = storedItem;
-  return domainFields;
+  return parseStoredRecord(
+    crm.ReviewItemSchema,
+    "Review item",
+    storedRecordId(storedItem, "reviewItemId"),
+    stripStorageKeys(storedItem),
+  );
 }
