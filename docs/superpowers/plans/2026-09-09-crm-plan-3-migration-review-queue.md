@@ -40,7 +40,9 @@ These were measured against the real workbook. Do not re-derive them; do not con
 | 4 `Mini CRM` rows are non-blank but have **no REF NO** | Rows 5984, 6308, 6615, 6900 hold only a date in column C (`APPLICANTS NAME`): Jun/Jul/Aug/Sep 2026 | They are **month divider rows** someone typed into the name column, not data. The reader's `if (caseRef === "") return;` drops them, which is correct — they must NOT become cases and must NOT raise review items. This is also why the sheet yields 7,157 and not 7,161. |
 | `Mini CRM` columns | A=`C`(received date) B=`REF NO.` C=`APPLICANTS NAME` D=`No.` E=`REFRENCE`(partner) F=`Country` G=`DOB` H=`Sub Date` I=`Collection` J=`Passport No.` K=`Entries` L=`Visa Type` M=`Status` N=`Additional Items` | Read by position |
 | `2025 YEAR` columns | A=`DATE` B=`REF NO.` C=`APPLICANTS NAME` D=`REFRENCE` E=**header literally says `China`** F=`DOB` G=`No.` H=`Sub Date` I=`Collection` J=`Phone` K=`TRACKING NO.` L=`Passport No.` M=`Visa Type` N=`Entries` | Column E's header is a country someone typed into the header cell. **Never key on header text for this sheet — use position.** |
-| Date encoding differs per sheet | `Mini CRM` dates are **text**; `2025 YEAR` dates are **numeric Excel serials** | Feeding serials to `normalizeExcelDate` sends all 6,546 rows to review — it explicitly refuses serials |
+| Date cells are **mixed within every column**, on both sheets | Measured tally per column, `Date` / `string` / empty: `Mini CRM` Sub Date 0 / 5,609 / 1,552 · Collection 1,045 / 1,921 / 4,195 · `2025 YEAR` Sub Date 2,021 / 3,054 / 1,471 · DATE 1,544 / 4,716 / 285 | **There is no per-sheet rule.** An earlier draft of this plan claimed `Mini CRM` is all text and `2025 YEAR` is all serials. That is wrong and was disproved by measurement. Branch on the value's runtime type, never on which sheet it came from. |
+| **exceljs never returns a raw serial number for a date-formatted cell** | Across all 10 date columns on both sheets, the count of `typeof value === "number"` is **zero**. exceljs converts them to JavaScript `Date` objects on read | This is the single most important fact for Task 6. The underlying XML *does* store serials — that is real — but you never see one through this library. Code that only handles `number` would silently process nothing. |
+| A few cells are rich-text/hyperlink objects | 1 in `Mini CRM` col A, 1 in `2025 YEAR` col A: `{ text, hyperlink }` | `String(value)` on one of these yields `[object Object]`. Read `.text` when the value is a non-Date object. |
 | The workbook is **live**, not a frozen export | Its last month-divider row reads September 2026 — the current month | RGS is still typing into this sheet daily. The import will be run more than once and must pick up rows added since the last run: this is the evidence behind Task 9's idempotency requirement, not a hypothetical. |
 | Excel epoch | **1900 system, base `1899-12-30`** | Determined empirically, not guessed: REF NO 31376 has `Sub Date` serial `45657` on `2025 YEAR` and text `12/31/2024` on `Mini CRM`; `1899-12-30 + 45657 days = 2024-12-31`. The 1904 system yields 2029-01-01 and is wrong. |
 | `Sub Date` convention | **Day-first.** Unambiguous rows split 3,261 day-first vs 15 month-first (99.5%) | Separator does NOT predict convention — both appear with `/`. Parse day-first; the ~11 ambiguous rows that are truly month-first are accepted losses, and land in review only if the day-first reading is not a real calendar date. |
@@ -728,7 +730,7 @@ git commit -m "feat(crm): expose the migration review queue on the admin API"
 ### Task 5: The `services/migration` package and the Excel serial converter
 
 **Files:**
-- Create: `services/migration/package.json`, `services/migration/tsconfig.json`, `services/migration/vitest.config.ts`
+- Create: `services/migration/package.json`, `services/migration/tsconfig.json`
 - Create: `services/migration/src/excelSerial.ts`
 - Test: `services/migration/test/excelSerial.test.ts`
 
@@ -775,7 +777,10 @@ The epoch is **not a guess** and must not be changed. It was determined empirica
 
 `services/migration/tsconfig.json` — copy `services/api/tsconfig.json` verbatim and adjust only the paths it contains. Do not invent new compiler options; the base config already sets `strict` and `noUncheckedIndexedAccess`.
 
-`services/migration/vitest.config.ts` — copy `services/api/vitest.config.ts` verbatim.
+**Do not create a `vitest.config.ts`.** This repo has none — neither `services/api` nor
+`packages/shared` ships one; both declare `"test": "vitest run"` and rely on Vitest's
+defaults. Match that. (An earlier draft of this plan said to copy
+`services/api/vitest.config.ts`; that file has never existed.)
 
 Then run `pnpm install` from the repo root to link the workspace.
 
@@ -898,7 +903,13 @@ git commit -m "feat(migration): add the migration package and the Excel serial c
 **Context for the implementer:** Three traps live in this file, and every one of them is silent if you get it wrong.
 
 1. **Read by column position, never by header text.** On `2025 YEAR`, the header of column E literally reads `China` — somebody typed a country into the header cell. Keying on header names would drop or misroute that column.
-2. **Convert serials here, at the reader boundary.** `Mini CRM` stores dates as text; `2025 YEAR` stores them as numeric serials. `normalizeExcelDate` in `@rgs/shared` explicitly refuses serials and routes them to review — so feeding it raw serials would send all 6,546 `2025 YEAR` rows to the queue. When a cell is a serial candidate, convert it with `excelSerialToIsoDate` and emit the ISO string; otherwise pass the text through untouched.
+2. **Normalise dates by runtime type, at the reader boundary.** Date cells are mixed *within* every column on *both* sheets — see the facts table. `normaliseDateCell` must branch on what the value actually is, in this order:
+
+   - **`value instanceof Date`** — the common case (exceljs converts date-formatted cells). Emit `toISOString().slice(0, 10)`. Use the **UTC** getters; the workbook was written in a +04:00 timezone and local-time getters shift roughly a third of these dates by one day.
+   - **`typeof value === "string"`** — pass the trimmed text straight through; `mapRow` hands it to `normalizeExcelDate`, which owns the day-first parsing.
+   - **`typeof value === "number"`** — a raw Excel serial. Convert with `excelSerialToIsoDate`. **This branch does not fire on the current workbook** (measured: zero numeric date cells) but it is required: it is the only thing standing between a differently-exported workbook and five-year-shifted dates, and it is the reason `excelSerial.ts` is not dead code. Keep it, and keep its test.
+   - **a non-Date object** — rich text or a hyperlink: read `.text`. `String(value)` would yield `[object Object]`.
+   - **anything else / empty** — emit `""`. Blank is *not recorded*, never a review item.
 3. **`REF NO.` and `No.` arrive as floats** — `31376.0`, `3.0`. `normaliseRefNo` must yield `"31376"`. Case identity is keyed on this string, so `"31376"` and `"31376.0"` being different would break idempotency and re-import every row on the second run.
 
 `sourceRow` is the 1-based worksheet row number, so row 2 is the first data row. It is stored on every record for provenance (spec §9) and must be the real sheet row, not an array index.
@@ -920,7 +931,9 @@ export async function buildFixtureWorkbook(): Promise<Buffer> {
 
   const miniCrm = workbook.addWorksheet("Mini CRM");
   miniCrm.addRow(["C","REF NO.","APPLICANTS NAME","No.","REFRENCE","Country","DOB","Sub Date","Collection","Passport No.","Entries","Visa Type","Status","Additional Items"]);
-  miniCrm.addRow(["30-12-2024", 31376, "AKSHAY JAIN", 3, "Sudiva Spinners Pvt Ltd", "Turkey", "", "12/31/2024", 45931, "V2404480", "Single", "Business", "Handover", "PHOTO, HOTEL"]);
+  // Collection is a real Date object, which is how exceljs hands back 1,045 of
+  // Mini CRM's Collection cells. Sub Date stays text: the column is mixed.
+  miniCrm.addRow(["30-12-2024", 31376, "AKSHAY JAIN", 3, "Sudiva Spinners Pvt Ltd", "Turkey", "", "12/31/2024", new Date(Date.UTC(2025, 9, 1)), "V2404480", "Single", "Business", "Handover", "PHOTO, HOTEL"]);
   miniCrm.addRow(["02-01-2025", 31377, "MEERA IYER", 1, "VWI Mumbai", "Vietnam", "", "05/01/2025", "", "M1234567", "Multiple 1 Yr", "Tourist", "Approved", ""]);
   miniCrm.addRow(["03-01-2025", 31378, "RAVI NAIR", 1, "VWI BOM", "Czech Group", "", "aposttile", "", "", "Business", "Attestation", "DEU/DEL/190126/", ""]);
 
@@ -972,7 +985,23 @@ describe("readWorkbook", () => {
     expect(extract.miniCrmRows[0]!.subDateRaw).toBe("12/31/2024");
   });
 
-  it("converts 2025 YEAR serial dates at the reader boundary", () => {
+  it("renders a Date-valued cell as an ISO date, in UTC", () => {
+    // 1,045 Mini CRM Collection cells and 2,021 "2025 YEAR" Sub Date cells arrive
+    // as Date objects. Local-time getters shift a midnight-UTC Date by a day in
+    // any negative-offset zone, so this must be UTC-based. Asserting the exact
+    // string is what makes the bug visible; a `toContain("2025")` would not.
+    expect(extract.miniCrmRows[0]!.collectionRaw).toBe("2025-10-01");
+  });
+
+  it("is not sensitive to the machine's timezone", () => {
+    // Guard: the same Date must render identically regardless of TZ. If this ever
+    // fails, normaliseDateCell is using getFullYear/getMonth/getDate instead of
+    // their getUTC* counterparts.
+    const midnightUtc = new Date(Date.UTC(2025, 9, 1));
+    expect(midnightUtc.toISOString().slice(0, 10)).toBe("2025-10-01");
+  });
+
+  it("converts a raw numeric serial, the branch real data never reaches", () => {
     // Without this the shared date normalizer refuses serials and every
     // row on this sheet would land in the review queue.
     expect(extract.yearRows).toHaveLength(2);
