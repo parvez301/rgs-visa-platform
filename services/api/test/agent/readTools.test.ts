@@ -5,7 +5,7 @@ import { ToolRegistry } from "../../src/agent/tools/registry";
 import { buildTestContext, type TestContext } from "../helpers";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
-import { createCase } from "../../src/domain/crm/cases";
+import { CASE_COUNT_GROUP_BY_FIELDS, createCase } from "../../src/domain/crm/cases";
 import { writeCase } from "../../src/domain/crm/caseStore";
 import { putCountryChecklist } from "../../src/domain/crm/countryChecklist";
 import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "../../src/domain/crm/keys";
@@ -69,36 +69,99 @@ function refuseWrites(context: TestContext, toolNameForMessage: string): AppCont
   };
 }
 
+/** What the property test below seeds before it drives a tool. */
+interface ReadToolSeeds {
+  caseId: string;
+  partnerId: string;
+  travellerFullName: string;
+  travellerPassportNumber: string;
+}
+
+interface ToolInputCase {
+  /** Names the BRANCH, not the tool -- it is what a failure line has to identify. */
+  label: string;
+  build: (seeds: ReadToolSeeds) => Record<string, unknown>;
+}
+
 /**
- * One valid, minimal input per read tool, built against fixtures seeded
- * through the real (write-allowed) context. Keyed by tool name so the
- * property test below can drive every tool in READ_TOOLS without knowing its
- * shape up front -- and so a read tool added later with no entry here fails
- * loudly instead of silently skipping the property it exists to prove.
+ * Every branch of every read tool's `execute` that resolves, as a valid input
+ * built against fixtures seeded through the real (write-allowed) context.
+ *
+ * Branch review I3 / carried finding R1: this used to be `switch (name) ->
+ * ONE input`, so `search_cases` only ever ran its `caseStatus` branch,
+ * `find_traveller` only its `fullName` branch, and `recall` only its ORG
+ * scope. The write-refusing context -- the entire mechanism -- never reached
+ * the others, and a `put` inserted into `search_cases`' `partnerId` branch
+ * reddened 0 of 629. The headline invariant ("`execute` proposes and never
+ * touches the table") was a claim about the paths one fixture happened to
+ * take, and the untested paths were partnerId search, passport lookup and
+ * both non-ORG memory scopes -- what a real desk uses constantly.
+ *
+ * Keyed by tool name so a read tool added later with no entry here fails
+ * loudly at COLLECTION time instead of silently skipping the property it
+ * exists to prove. Only resolving branches belong here: `search_cases` with
+ * neither filter, `find_traveller` with neither input and
+ * `get_country_checklist` for a country with no checklist all throw on
+ * purpose, and are pinned by their own tests below.
  */
-function minimalInputForReadTool(
-  toolName: string,
-  seededCase: { caseId: string },
-): Record<string, unknown> {
+function inputCasesForReadTool(toolName: string): ToolInputCase[] {
   switch (toolName) {
     case "get_case":
-      return { caseId: seededCase.caseId };
+      return [{ label: "by caseId", build: (seeds) => ({ caseId: seeds.caseId }) }];
     case "search_cases":
-      return { caseStatus: "NEW" };
+      return [
+        { label: "caseStatus branch", build: () => ({ caseStatus: "NEW" }) },
+        { label: "partnerId branch", build: (seeds) => ({ partnerId: seeds.partnerId }) },
+        { label: "caseStatus branch with an explicit limit", build: () => ({ caseStatus: "NEW", limit: 5 }) },
+      ];
     case "find_traveller":
-      return { fullName: "ASHA RAO" };
+      return [
+        { label: "fullName branch", build: (seeds) => ({ fullName: seeds.travellerFullName }) },
+        { label: "passportNumber branch", build: (seeds) => ({ passportNumber: seeds.travellerPassportNumber }) },
+        // passportNumber wins when both are given -- a separate path through
+        // the same `if`, and the one a model is most likely to produce.
+        {
+          label: "both, passportNumber taking precedence",
+          build: (seeds) => ({
+            passportNumber: seeds.travellerPassportNumber,
+            fullName: seeds.travellerFullName,
+          }),
+        },
+      ];
     case "list_partners":
-      return {};
+      return [{ label: "no input", build: () => ({}) }];
     case "aggregate":
-      return { groupBy: "caseStatus" };
+      // Every groupBy the domain declares, not one of them: each is a
+      // different read path through countCasesByField.
+      return CASE_COUNT_GROUP_BY_FIELDS.map((groupByField) => ({
+        label: `groupBy ${groupByField}`,
+        build: () => ({ groupBy: groupByField }),
+      }));
     case "get_country_checklist":
-      return { countryCode: "JP" };
+      return [{ label: "a country with a checklist on file", build: () => ({ countryCode: "JP" }) }];
     case "recall":
-      return { scopes: ["ORG"] };
+      return [
+        { label: "ORG scope", build: () => ({ scopes: ["ORG"] }) },
+        { label: "USER scope", build: () => ({ scopes: ["USER"] }) },
+        { label: "PARTNER scope", build: (seeds) => ({ scopes: ["PARTNER"], partnerId: seeds.partnerId }) },
+        {
+          label: "all three scopes at once, with an explicit limit",
+          build: (seeds) => ({ scopes: ["ORG", "PARTNER", "USER"], partnerId: seeds.partnerId, limit: 3 }),
+        },
+      ];
     default:
-      throw new Error(`no minimal input registered for read tool "${toolName}" -- add one above`);
+      throw new Error(`no input cases registered for read tool "${toolName}" -- add some above`);
   }
 }
+
+/**
+ * The cross product of tool and branch, enumerated at collection time so each
+ * branch is its own test rather than one loop whose first failure hides the
+ * rest. The seeds resolve inside the test body, where the fixtures exist.
+ */
+const READ_TOOL_INPUT_CASES = READ_TOOLS.flatMap((tool) =>
+  inputCasesForReadTool(tool.name).map((inputCase) => ({ tool, ...inputCase })),
+);
 
 describe("the read tool registry", () => {
   it("declares every read tool as kind 'read'", () => {
@@ -133,36 +196,50 @@ describe("the read tool registry", () => {
 // every other test in this file, because none of them run against a
 // write-refusing context.
 describe("every READ_TOOLS tool resolves without ever reaching the table's write side", () => {
-  it.each(READ_TOOLS)("$name: execute resolves without reaching put() or delete()", async (tool) => {
-    const context = buildTestContext();
-    const partner = await createPartner(
-      context,
-      TENANT_ID,
-      { canonicalName: "Ozzy Travels", partnerType: "AGENCY" },
-      ACTOR,
-    );
-    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "ASHA RAO" });
-    const seededCase = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "40099",
-        caseType: "VISA",
-        visaType: "EVISA_TOURIST",
+  it.each(READ_TOOL_INPUT_CASES)(
+    "$tool.name / $label: execute resolves without reaching put() or delete()",
+    async ({ tool, build }) => {
+      const context = buildTestContext();
+      const partner = await createPartner(
+        context,
+        TENANT_ID,
+        { canonicalName: "Ozzy Travels", partnerType: "AGENCY" },
+        ACTOR,
+      );
+      const traveller = await upsertTraveller(context, TENANT_ID, {
+        fullName: "ASHA RAO",
+        // find_traveller's passportNumber branch needs one on file -- without
+        // it that branch resolves to `{ travellers: [] }` having taken a
+        // different path through findTravellerByPassport than a real lookup.
+        passportNumber: "P7654321",
+      });
+      const seededCase = await createCase(
+        context,
+        TENANT_ID,
+        {
+          caseRef: "40099",
+          caseType: "VISA",
+          visaType: "EVISA_TOURIST",
+          partnerId: partner.partnerId,
+          destinationCountry: "JP",
+          receivedDate: "2026-09-01",
+          applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
+        },
+        ACTOR,
+      );
+      await putCountryChecklist(context, TENANT_ID, { countryCode: "JP", requiredDocuments: ["PASSPORT"] }, ACTOR);
+
+      const input = build({
+        caseId: seededCase.caseId,
         partnerId: partner.partnerId,
-        destinationCountry: "JP",
-        receivedDate: "2026-09-01",
-        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
-      },
-      ACTOR,
-    );
-    await putCountryChecklist(context, TENANT_ID, { countryCode: "JP", requiredDocuments: ["PASSPORT"] }, ACTOR);
+        travellerFullName: "ASHA RAO",
+        travellerPassportNumber: "P7654321",
+      });
+      const writeRefusingContext = refuseWrites(context, tool.name);
 
-    const input = minimalInputForReadTool(tool.name, seededCase);
-    const writeRefusingContext = refuseWrites(context, tool.name);
-
-    await expect(tool.execute(writeRefusingContext, TENANT_ID, input, ACTOR)).resolves.toBeDefined();
-  });
+      await expect(tool.execute(writeRefusingContext, TENANT_ID, input, ACTOR)).resolves.toBeDefined();
+    },
+  );
 });
 
 describe("get_case", () => {

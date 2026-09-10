@@ -124,110 +124,230 @@ describe("the write tool registry", () => {
   });
 });
 
+/** What the property test below seeds before it drives a tool. */
+interface WriteToolSeeds {
+  caseId: string;
+  partnerId: string;
+  travellerId: string;
+}
+
+interface ToolInputCase {
+  /** Names the BRANCH, not the tool -- it is what a failure line has to identify. */
+  label: string;
+  build: (seeds: WriteToolSeeds) => Record<string, unknown>;
+}
+
 /**
- * One valid, minimal input per write tool, built against a case seeded
- * through the real (write-allowed) context. Keyed by tool name so the
- * property test below can drive every tool in WRITE_TOOLS without knowing its
- * shape up front -- and so a write tool added later with no entry here fails
- * loudly instead of silently skipping the property it exists to prove.
+ * Every branch of every write tool's `execute`, as a valid input built
+ * against fixtures seeded through the real (write-allowed) context.
+ *
+ * Branch review I3 / carried finding R1: this used to be `switch (name) ->
+ * ONE input`, so `remember` and `forget` only ever ran their ORG scope and
+ * `create_case`/`update_case` only ever ran with one shape of optional
+ * fields. The write-refusing context -- the entire mechanism -- never reached
+ * the other branches, and a `put` inserted into `remember`'s USER-scope
+ * branch reddened 0 of 629. The untested paths included both non-ORG memory
+ * scopes, which carry a privacy property (`resolveMemoryScope` resolves USER
+ * through the acting identity and nothing else).
+ *
+ * Keyed by tool name so a write tool added later with no entry here fails
+ * loudly at COLLECTION time instead of silently skipping the property it
+ * exists to prove.
  */
-function minimalInputFor(
-  toolName: string,
-  seededCase: { caseId: string },
-  partnerId: string,
-  travellerId: string,
-): Record<string, unknown> {
+function inputCasesForWriteTool(toolName: string): ToolInputCase[] {
   switch (toolName) {
     case "create_case":
-      return {
-        caseRef: "80099",
-        caseType: "VISA",
-        visaType: "EVISA_TOURIST",
-        partnerId,
-        destinationCountry: "JP",
-        receivedDate: "2026-09-01",
-        applicants: [{ applicantRef: "A1", travellerId }],
-      };
+      return [
+        {
+          label: "required fields only",
+          build: (seeds) => ({
+            caseRef: "80099",
+            caseType: "VISA",
+            partnerId: seeds.partnerId,
+            destinationCountry: "JP",
+            receivedDate: "2026-09-01",
+            applicants: [{ applicantRef: "A1", travellerId: seeds.travellerId }],
+          }),
+        },
+        {
+          // Every optional field set at once -- the three `if` arms in
+          // create_case's summary builder that the minimal input never enters.
+          label: "every optional field set",
+          build: (seeds) => ({
+            caseRef: "80098",
+            caseType: "VISA",
+            visaType: "EVISA_TOURIST",
+            entryType: "SINGLE",
+            processing: "EXPRESS",
+            partnerId: seeds.partnerId,
+            destinationCountry: "JP",
+            receivedDate: "2026-09-01",
+            applicants: [
+              { applicantRef: "A1", travellerId: seeds.travellerId },
+              { applicantRef: "A2", travellerId: seeds.travellerId, passportNumber: "P1112223" },
+            ],
+          }),
+        },
+      ];
     case "update_case":
-      return { caseId: seededCase.caseId, appointmentDate: "2026-10-01" };
+      return [
+        { label: "one field", build: (seeds) => ({ caseId: seeds.caseId, appointmentDate: "2026-10-01" }) },
+        {
+          // All six summary branches at once; the one-field case above is
+          // what covers their false arms.
+          label: "every changeable field at once",
+          build: (seeds) => ({
+            caseId: seeds.caseId,
+            visaType: "EVISA_BUSINESS",
+            entryType: "MULTIPLE",
+            processing: "EXPRESS",
+            submissionDate: "2026-09-15",
+            appointmentDate: "2026-10-01",
+            expectedCollectionDate: "2026-10-20",
+          }),
+        },
+      ];
     case "add_line_item":
-      return {
-        caseId: seededCase.caseId,
-        lineItemCode: "VISA_SERVICE_FEE",
-        quantity: 1,
-        unitPriceInr: 1000,
-      };
+      return [
+        {
+          label: "one billable line",
+          build: (seeds) => ({
+            caseId: seeds.caseId,
+            lineItemCode: "VISA_SERVICE_FEE",
+            quantity: 1,
+            unitPriceInr: 1000,
+          }),
+        },
+      ];
     case "set_custody":
-      return { caseId: seededCase.caseId, applicantRef: "A1", custody: "WITH_RGS" };
+      return [
+        {
+          label: "an applicant that exists",
+          build: (seeds) => ({ caseId: seeds.caseId, applicantRef: "A1", custody: "WITH_RGS" }),
+        },
+      ];
     case "set_billing":
-      return { caseId: seededCase.caseId, billingStatus: "BILL_SENT" };
+      return [{ label: "a billing move", build: (seeds) => ({ caseId: seeds.caseId, billingStatus: "BILL_SENT" }) }];
     case "remember":
-      return {
-        scope: "ORG",
-        memoryKey: "morning-slots",
-        text: "prefers morning appointment slots",
-        sourceCaseId: seededCase.caseId,
-      };
+      return [
+        {
+          label: "ORG scope",
+          build: (seeds) => ({
+            scope: "ORG",
+            memoryKey: "morning-slots",
+            text: "prefers morning appointment slots",
+            sourceCaseId: seeds.caseId,
+          }),
+        },
+        {
+          label: "USER scope",
+          build: (seeds) => ({
+            scope: "USER",
+            memoryKey: "my-shorthand",
+            text: "logs partner refs without the prefix",
+            sourceCaseId: seeds.caseId,
+          }),
+        },
+        {
+          label: "PARTNER scope",
+          build: (seeds) => ({
+            scope: "PARTNER",
+            partnerId: seeds.partnerId,
+            memoryKey: "sends-scans-late",
+            text: "sends passport scans late in the day",
+            sourceCaseId: seeds.caseId,
+          }),
+        },
+        {
+          // No sourceCaseId: a different arm of the summary's second row.
+          // rememberMemory refuses this at APPLY time, never at propose time.
+          label: "ORG scope with no sourceCaseId",
+          build: () => ({ scope: "ORG", memoryKey: "unsourced", text: "a fact with no case behind it" }),
+        },
+      ];
     case "forget":
-      return { scope: "ORG", memoryKey: "morning-slots" };
+      return [
+        { label: "ORG scope", build: () => ({ scope: "ORG", memoryKey: "morning-slots" }) },
+        { label: "USER scope", build: () => ({ scope: "USER", memoryKey: "my-shorthand" }) },
+        {
+          label: "PARTNER scope",
+          build: (seeds) => ({ scope: "PARTNER", partnerId: seeds.partnerId, memoryKey: "sends-scans-late" }),
+        },
+      ];
     default:
-      throw new Error(`no minimal input registered for write tool "${toolName}" -- add one above`);
+      throw new Error(`no input cases registered for write tool "${toolName}" -- add some above`);
   }
 }
 
+/**
+ * The cross product of tool and branch, enumerated at collection time so each
+ * branch is its own test rather than one loop whose first failure hides the
+ * rest. The seeds resolve inside the test body, where the fixtures exist.
+ */
+const WRITE_TOOL_INPUT_CASES = WRITE_TOOLS.flatMap((tool) =>
+  inputCasesForWriteTool(tool.name).map((inputCase) => ({ tool, ...inputCase })),
+);
+
 describe("every WRITE_TOOLS tool proposes without writing", () => {
-  it.each(WRITE_TOOLS)("$name: execute resolves to a PENDING proposal and never reaches the table", async (tool) => {
-    const context = buildTestContext();
-    const partner = await createPartner(
-      context,
-      TENANT_ID,
-      { canonicalName: "Ozzy Travels", partnerType: "AGENCY" },
-      ACTOR,
-    );
-    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "ASHA RAO" });
-    const seededCase = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "80001",
-        caseType: "VISA",
-        visaType: "EVISA_TOURIST",
+  it.each(WRITE_TOOL_INPUT_CASES)(
+    "$tool.name / $label: execute resolves to a PENDING proposal and never reaches the table",
+    async ({ tool, build }) => {
+      const context = buildTestContext();
+      const partner = await createPartner(
+        context,
+        TENANT_ID,
+        { canonicalName: "Ozzy Travels", partnerType: "AGENCY" },
+        ACTOR,
+      );
+      const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "ASHA RAO" });
+      const seededCase = await createCase(
+        context,
+        TENANT_ID,
+        {
+          caseRef: "80001",
+          caseType: "VISA",
+          visaType: "EVISA_TOURIST",
+          partnerId: partner.partnerId,
+          destinationCountry: "JP",
+          receivedDate: "2026-09-01",
+          applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
+        },
+        ACTOR,
+      );
+
+      const input = build({
+        caseId: seededCase.caseId,
         partnerId: partner.partnerId,
-        destinationCountry: "JP",
-        receivedDate: "2026-09-01",
-        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
-      },
-      ACTOR,
-    );
+        travellerId: traveller.travellerId,
+      });
+      const writeRefusingContext = refuseWrites(context, tool.name);
 
-    const input = minimalInputFor(tool.name, seededCase, partner.partnerId, traveller.travellerId);
-    const writeRefusingContext = refuseWrites(context, tool.name);
+      const proposal = await tool.execute(writeRefusingContext, TENANT_ID, input, ACTOR);
 
-    const proposal = await tool.execute(writeRefusingContext, TENANT_ID, input, ACTOR);
-
-    expect(proposal, `${tool.name}'s execute did not resolve`).toBeDefined();
-    const proposedChange = proposal as ProposedChange;
-    expect(proposedChange.status, `${tool.name}'s proposal is not PENDING`).toBe("PENDING");
-    expect(proposedChange.toolName, `${tool.name}'s proposal names the wrong tool`).toBe(tool.name);
-    expect(
-      Array.isArray(proposedChange.summary),
-      `${tool.name}'s proposal has no summary array`,
-    ).toBe(true);
-    // A populated summary, not merely an array: an approval card with zero
-    // rows gives the human nothing to judge.
-    expect(
-      proposedChange.summary.length,
-      `${tool.name}'s proposal has an empty summary`,
-    ).toBeGreaterThan(0);
-    // The exact two fields ruling P35 exists for: proposalId minted by
-    // newId("prop", ...), proposedAt from the injectable clock -- never
-    // `new Date()`. The test clock is frozen (helpers.ts), so a `new Date()`
-    // proposedAt would fail the second assertion immediately.
-    expect(proposedChange.proposalId, `${tool.name}'s proposalId is not prop_-prefixed`).toMatch(/^prop_/);
-    expect(proposedChange.proposedAt, `${tool.name}'s proposedAt did not come from context.now()`).toBe(
-      context.now().toISOString(),
-    );
-  });
+      expect(proposal, `${tool.name}'s execute did not resolve`).toBeDefined();
+      const proposedChange = proposal as ProposedChange;
+      expect(proposedChange.status, `${tool.name}'s proposal is not PENDING`).toBe("PENDING");
+      expect(proposedChange.toolName, `${tool.name}'s proposal names the wrong tool`).toBe(tool.name);
+      expect(
+        Array.isArray(proposedChange.summary),
+        `${tool.name}'s proposal has no summary array`,
+      ).toBe(true);
+      // A populated summary, not merely an array: an approval card with zero
+      // rows gives the human nothing to judge.
+      expect(
+        proposedChange.summary.length,
+        `${tool.name}'s proposal has an empty summary`,
+      ).toBeGreaterThan(0);
+      // The exact two fields ruling P35 exists for: proposalId minted by
+      // newId("prop", ...), proposedAt from the injectable clock -- never
+      // `new Date()`. The test clock is frozen (helpers.ts), so a `new Date()`
+      // proposedAt would fail the second assertion immediately.
+      expect(proposedChange.proposalId, `${tool.name}'s proposalId is not prop_-prefixed`).toMatch(/^prop_/);
+      expect(proposedChange.proposedAt, `${tool.name}'s proposedAt did not come from context.now()`).toBe(
+        context.now().toISOString(),
+      );
+    },
+  );
 });
 
 describe("set_billing", () => {
