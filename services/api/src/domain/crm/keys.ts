@@ -102,3 +102,12 @@ export function reviewItemPartitionKey(tenantId: string, reviewItemId: string): 
 export function reviewQueueGsi1Pk(tenantId: string, reviewStatus: string): string {
   return `TENANT#${tenantId}#REVIEW_STATUS#${reviewStatus}`;
 }
+
+/**
+ * A tenant-wide reference record, not a case: one checklist per destination
+ * country rather than per case, so every case bound for that country reads
+ * the same list of required documents.
+ */
+export function countryChecklistPartitionKey(tenantId: string, countryCode: string): string {
+  return `TENANT#${tenantId}#COUNTRY#${countryCode}`;
+}

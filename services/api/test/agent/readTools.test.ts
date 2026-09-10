@@ -45,7 +45,7 @@ describe("the read tool registry", () => {
     const registry = new ToolRegistry(READ_TOOLS);
     expect(registry.writeTools()).toHaveLength(0);
     expect(registry.readTools().map((tool) => tool.name).sort()).toEqual(
-      ["find_traveller", "get_case", "list_partners", "search_cases"],
+      ["aggregate", "find_traveller", "get_case", "get_country_checklist", "list_partners", "search_cases"],
     );
   });
 

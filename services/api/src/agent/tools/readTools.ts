@@ -3,6 +3,8 @@ import { crm } from "@rgs/shared";
 import { getCase, listCasesByPartner, listCasesByStatus } from "../../domain/crm/cases";
 import { listPartners } from "../../domain/crm/partners";
 import { findTravellerByName, findTravellerByPassport } from "../../domain/crm/travellers";
+import { aggregateTool } from "./aggregate";
+import { getCountryChecklistTool } from "./checklist";
 import type { AgentTool } from "./registry";
 
 const SEARCH_CASES_PAGE_LIMIT = 50;
@@ -81,4 +83,6 @@ export const READ_TOOLS: AgentTool[] = [
   searchCasesTool,
   findTravellerTool,
   listPartnersTool,
+  aggregateTool,
+  getCountryChecklistTool,
 ];

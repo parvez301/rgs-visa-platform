@@ -390,6 +390,76 @@ export async function listCaseRefsByStatus(
   return { storedCaseRefs, unreadableCaseIds };
 }
 
+/**
+ * The fields a "how many cases" question can group and count by. Every one of
+ * these lives directly on the case META item -- `writeCase` (`caseStore.ts`)
+ * spreads `...caseBody` onto it -- so counting never needs a case reassembled.
+ */
+export const CASE_COUNT_GROUP_BY_FIELDS = [
+  "caseStatus",
+  "destinationCountry",
+  "billingStatus",
+  "partnerId",
+] as const;
+export type CaseCountGroupByField = (typeof CASE_COUNT_GROUP_BY_FIELDS)[number];
+
+/**
+ * A count-by-field result plus the ids of the rows it could not count. Named
+ * rather than dropped in silence, for the same reason `CaseListing` names its
+ * unreadable rows: a case missing from a count an owner will act on is worse
+ * than one missing from a list, because nothing about a bare number signals
+ * that some cases never made it into it.
+ */
+export interface CaseCountByField {
+  counts: Record<string, number>;
+  total: number;
+  uncountedCaseIds: string[];
+}
+
+/**
+ * Counts every case in the tenant by one field, grouped by that field's
+ * value, without reassembling a single case.
+ *
+ * `listCasesByStatus` cannot answer a "how many" question cheaply: it hands
+ * every META item to `readCase`, which costs one strongly-consistent GetItem
+ * plus one strongly-consistent Query per case -- on the real ledger, 7,156
+ * partition reads to answer a question the GSI1 query per status already
+ * answered on its own. Every field this counts by is already sitting on the
+ * META item that query returns, so the GSI1 query -- one per `CASE_STATUSES`
+ * entry -- is the entire cost. No `context.table.get` or `context.table.query`
+ * (the base-table, partition-scoped reads) ever runs.
+ *
+ * A META item whose counted field is missing or not a string is named in
+ * `uncountedCaseIds` rather than counted under a bogus `"undefined"` key or
+ * silently skipped -- the same rule `listCaseRefsByStatus` follows for a
+ * missing `caseRef`.
+ */
+export async function countCasesByField(
+  context: AppContext,
+  tenantId: string,
+  groupByField: CaseCountGroupByField,
+): Promise<CaseCountByField> {
+  const counts: Record<string, number> = {};
+  const uncountedCaseIds: string[] = [];
+  let total = 0;
+
+  for (const caseStatus of crm.CASE_STATUSES) {
+    const metaItems = await context.table.queryGsi("GSI1", caseStatusGsi1Pk(tenantId, caseStatus));
+    for (const metaItem of metaItems) {
+      if (metaItem["SK"] !== META_SORT_KEY) continue;
+      const groupFieldValue = metaItem[groupByField];
+      if (typeof groupFieldValue === "string" && groupFieldValue.length > 0) {
+        counts[groupFieldValue] = (counts[groupFieldValue] ?? 0) + 1;
+        total += 1;
+        continue;
+      }
+      uncountedCaseIds.push(caseIdOfMetaItem(metaItem) ?? metaItem.PK);
+    }
+  }
+
+  return { counts, total, uncountedCaseIds };
+}
+
 export async function listCasesByPartner(
   context: AppContext,
   tenantId: string,
