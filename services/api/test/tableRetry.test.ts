@@ -312,6 +312,56 @@ describe("buildProductionContext", () => {
       process.env = savedEnvironment;
     }
   }, 15_000);
+
+  // task-11-controller-notes.md §3: llmProviderConfigFromEnvironment
+  // (agent/providers/config.ts) THROWS when LLM_PROVIDER/LLM_MODEL/
+  // LLM_API_KEY is missing -- built eagerly and uncaught here, every
+  // non-agent route (and the migration CLI, which shares this exact
+  // function) would die at cold start in any deployment that has not
+  // configured the agent yet.
+  it("still builds a working context with llm undefined when no LLM environment variables are set", async () => {
+    const savedEnvironment = { ...process.env };
+    process.env["TABLE_NAME"] = "rgs-table";
+    process.env["DOCUMENTS_BUCKET"] = "rgs-documents";
+    process.env["EMAIL_SENDER"] = "noreply@rgs.test";
+    process.env["ADMIN_NOTIFICATION_EMAIL"] = "info@rgs.test";
+    delete process.env["LLM_PROVIDER"];
+    delete process.env["LLM_MODEL"];
+    delete process.env["LLM_API_KEY"];
+    try {
+      const { buildProductionContext } = await import("../src/http/handler");
+      const productionContext = buildProductionContext();
+
+      expect(productionContext.llm).toBeUndefined();
+      // The rest of the context must still be fully wired -- a deployment
+      // with no LLM configuration is not a broken deployment.
+      expect(productionContext.adminNotificationAddress).toBe("info@rgs.test");
+    } finally {
+      process.env = savedEnvironment;
+    }
+  });
+
+  it("builds a real llm provider when the LLM environment variables are present", async () => {
+    const savedEnvironment = { ...process.env };
+    process.env["TABLE_NAME"] = "rgs-table";
+    process.env["DOCUMENTS_BUCKET"] = "rgs-documents";
+    process.env["EMAIL_SENDER"] = "noreply@rgs.test";
+    process.env["ADMIN_NOTIFICATION_EMAIL"] = "info@rgs.test";
+    process.env["LLM_PROVIDER"] = "anthropic";
+    process.env["LLM_MODEL"] = "claude-test-model";
+    process.env["LLM_API_KEY"] = "test-key";
+    delete process.env["LLM_FALLBACK_PROVIDER"];
+    delete process.env["LLM_THINKING"];
+    try {
+      const { buildProductionContext } = await import("../src/http/handler");
+      const productionContext = buildProductionContext();
+
+      expect(productionContext.llm).toBeDefined();
+      expect(productionContext.llm?.name).toBe("anthropic");
+    } finally {
+      process.env = savedEnvironment;
+    }
+  });
 });
 
 describe("writeRetryOptionsFromEnvironment", () => {
