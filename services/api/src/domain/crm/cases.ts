@@ -4,7 +4,7 @@ import type { AppContext } from "../../lib/context";
 import type { TableItem } from "../../lib/db";
 import { badRequest, conflict, corruptRecord, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
-import { collectReadableRecords } from "../../lib/storedRecords";
+import { collectReadableRecords, describeFirstZodIssue } from "../../lib/storedRecords";
 import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
 import {
@@ -108,6 +108,84 @@ export async function getCase(
   caseId: string,
 ): Promise<crm.CrmCase> {
   return readCaseOrThrow(context, tenantId, caseId);
+}
+
+/**
+ * The fields `updateCaseDetails` is allowed to touch. `caseStatus`, per-
+ * applicant `custody`, per-applicant `outcome` and `billingStatus` each have a
+ * state machine and their own mutator (`changeCaseStatus`,
+ * `changeApplicantCustody`, `changeApplicantOutcome`, `changeBillingStatus`
+ * below) -- a general "update any field" route would let a caller walk around
+ * every one of them.
+ */
+export interface UpdateCaseDetailsInput {
+  visaType?: crm.VisaType;
+  entryType?: crm.EntryType;
+  processing?: crm.ProcessingSpeed;
+  submissionDate?: string;
+  appointmentDate?: string;
+  expectedCollectionDate?: string;
+}
+
+/**
+ * Updates the six plain-field, non-state-machine details on a case.
+ *
+ * The update is built one named field at a time -- never by spreading `input`
+ * onto the case and deleting the axes it must not touch -- because a
+ * delete-list is one forgotten key away from letting `caseStatus` or
+ * `billingStatus` move through this route. Picking the six names explicitly
+ * means a caller cannot smuggle either axis through no matter what extra
+ * properties its input object carries.
+ */
+export async function updateCaseDetails(
+  context: AppContext,
+  tenantId: string,
+  caseId: string,
+  input: UpdateCaseDetailsInput,
+  actorEmail: string,
+): Promise<crm.CrmCase> {
+  const currentCase = await readCaseOrThrow(context, tenantId, caseId);
+
+  const changedFieldNames: string[] = [];
+  if (input.visaType !== undefined) changedFieldNames.push("visaType");
+  if (input.entryType !== undefined) changedFieldNames.push("entryType");
+  if (input.processing !== undefined) changedFieldNames.push("processing");
+  if (input.submissionDate !== undefined) changedFieldNames.push("submissionDate");
+  if (input.appointmentDate !== undefined) changedFieldNames.push("appointmentDate");
+  if (input.expectedCollectionDate !== undefined) changedFieldNames.push("expectedCollectionDate");
+
+  // Unwrapped, a ZodError here is not an ApiError, and router.ts maps only
+  // ApiError subclasses -- so a caller-supplied date that fails CrmCaseSchema's
+  // isoDate check (or a visaType offered to a non-VISA case) would answer a
+  // bare 500 instead of a 400 naming the problem. Same guard as createCase.
+  let updatedCase: crm.CrmCase;
+  try {
+    updatedCase = crm.CrmCaseSchema.parse({
+      ...currentCase,
+      ...(input.visaType !== undefined ? { visaType: input.visaType } : {}),
+      ...(input.entryType !== undefined ? { entryType: input.entryType } : {}),
+      ...(input.processing !== undefined ? { processing: input.processing } : {}),
+      ...(input.submissionDate !== undefined ? { submissionDate: input.submissionDate } : {}),
+      ...(input.appointmentDate !== undefined ? { appointmentDate: input.appointmentDate } : {}),
+      ...(input.expectedCollectionDate !== undefined
+        ? { expectedCollectionDate: input.expectedCollectionDate }
+        : {}),
+      updatedAt: context.now().toISOString(),
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw badRequest(describeFirstZodIssue(error));
+    }
+    throw error;
+  }
+
+  await writeCase(context, updatedCase);
+  await recordCrmEvent(context, tenantId, caseId, "CASE_UPDATED", actorEmail, {
+    // meta values are scalars only (crmEvents.ts) -- a joined string is how an
+    // array of changed field names travels through that constraint.
+    changedFields: changedFieldNames.join(","),
+  });
+  return updatedCase;
 }
 
 export async function changeCaseStatus(

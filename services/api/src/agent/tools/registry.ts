@@ -22,6 +22,12 @@ export interface AgentTool<TInput = Record<string, unknown>> {
     input: TInput,
     actorEmail: string,
   ): Promise<unknown>;
+  /**
+   * The domain mutation this tool stands for. Present on every write tool and on
+   * no read tool. `execute` only ever PROPOSES; this is the half that writes, and
+   * the approval gate (Task 8) is its only caller.
+   */
+  apply?(context: AppContext, tenantId: string, input: TInput, actorEmail: string): Promise<unknown>;
 }
 
 /**
