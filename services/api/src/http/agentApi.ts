@@ -105,6 +105,13 @@ const AgentMessageBody = z
     role: z.enum(["user", "assistant", "tool_result"]),
     content: z.string().max(MAX_CONVERSATION_MESSAGE_LENGTH),
     toolCalls: z.array(AgentToolCallBody).max(MAX_TOOL_CALLS_PER_MESSAGE).optional(),
+    // Belt and suspenders, and knowingly unreachable today: the pairing
+    // refinement below forces a tool_result's id to equal one of the
+    // preceding assistant turn's call ids, and AgentToolCallBody already caps
+    // those -- so no id long enough to trip THIS cap can also pair, and
+    // deleting it reddens nothing. Kept anyway, because it stops being
+    // redundant the moment the pairing rule is relaxed, and the cost is one
+    // line. Same call Task 10 made for the redundant HIGH_STAKES_TOOLS check.
     toolCallId: z.string().max(MAX_TOOL_CALL_ID_LENGTH).optional(),
     toolName: z.string().optional(),
   })

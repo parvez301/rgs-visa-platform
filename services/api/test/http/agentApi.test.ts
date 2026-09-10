@@ -1535,6 +1535,11 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
     );
 
     expect(response.statusCode).toBe(400);
+    // Named, not just refused: with only a status assertion this test passed
+    // identically when the missing-toolCallId guard was deleted, because the
+    // membership check below it refuses `undefined` too. Two guards, one
+    // assertion, no way to tell them apart.
+    expect(JSON.stringify(response.payload)).toContain("must carry toolCallId");
     expect(provider.receivedRequests).toHaveLength(0);
   });
 
@@ -1573,7 +1578,11 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
     const context = buildTestContext();
     const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
-    const oversizedId = "x".repeat(500_000);
+    // Just over the 256-character cap, and nowhere near the 100,000-character
+    // total bound -- so the cap is the ONLY rule that can refuse this. At
+    // 500,000 the total bound refused it too, and deleting the cap reddened
+    // nothing.
+    const oversizedId = "x".repeat(300);
 
     const onTheCall = await call(
       router,
@@ -1632,6 +1641,53 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
     expect(response.statusCode).toBe(400);
     expect(JSON.stringify(response.payload)).toContain("total conversation content length");
     expect(provider.receivedRequests).toHaveLength(0);
+  });
+
+  it("counts a tool_result's own toolCallId too -- the call side alone stays under the bound", async () => {
+    const context = buildTestContext();
+    const provider = new FakeLlmProvider([{ text: "under the bound", toolCalls: [] }]);
+    const router = buildRouter(contextWithFakeLlm(context, provider));
+
+    // 11 messages x 32 calls x (256 id + 9 name + 2 input) = 93,984: under the
+    // 100,000 bound on the call side alone. Echoing 24 of the last message's
+    // ids back as results adds 24 x 256 = 6,144, which tips it to 100,128.
+    // Pairing forces a result's id to equal its call's, so this two-step shape
+    // is the only way to isolate the result side of the accounting at all.
+    const paddedId = (messageIndex: number, callIndex: number) =>
+      `toolu_${messageIndex}_${callIndex}_`.padEnd(256, "x");
+    const assistantMessages = Array.from({ length: 11 }, (_unused, messageIndex) => ({
+      role: "assistant",
+      content: "",
+      toolCalls: Array.from({ length: 32 }, (_alsoUnused, callIndex) => ({
+        toolCallId: paddedId(messageIndex, callIndex),
+        toolName: "aggregate",
+        input: {},
+      })),
+    }));
+
+    const withoutResults = await call(
+      router,
+      "POST",
+      "/api/v1/admin/crm/agent/turn",
+      orphanReplayBody(assistantMessages),
+    );
+    expect(withoutResults.statusCode).toBe(200);
+
+    const echoedResults = Array.from({ length: 24 }, (_unused, callIndex) => ({
+      role: "tool_result",
+      content: "",
+      toolCallId: paddedId(10, callIndex),
+      toolName: "aggregate",
+    }));
+    const withResults = await call(
+      router,
+      "POST",
+      "/api/v1/admin/crm/agent/turn",
+      orphanReplayBody([...assistantMessages, ...echoedResults]),
+    );
+
+    expect(withResults.statusCode).toBe(400);
+    expect(JSON.stringify(withResults.payload)).toContain("total conversation content length");
   });
 
   it("treats a client-supplied toolCall as transcript only -- it is history, never an instruction to run anything", async () => {
