@@ -41,21 +41,77 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
  */
 const FORCED_RESPONSE_TOOL_NAME = "respond";
 
+/**
+ * The provider-agnostic transcript, in the shape the Messages API requires.
+ *
+ * Two vendor rules are enforced here rather than left to the caller (branch
+ * review C1 and M3):
+ *
+ * 1. An assistant turn that made tool calls maps to a content-block array
+ *    carrying a `tool_use` block per call, so the `tool_result` blocks that
+ *    follow have something to name. A `tool_use_id` matching nothing in the
+ *    request is an `invalid_request_error`.
+ * 2. Every `tool_result` answering one assistant turn goes in a SINGLE user
+ *    message. The API refuses them spread across consecutive user messages,
+ *    which is what a 1:1 mapping produced whenever a model called two tools
+ *    in one turn.
+ *
+ * Consecutive `tool_result` messages are exactly "the results of one
+ * iteration": the loop pushes an assistant turn before every batch of
+ * results (loop.ts), so a run of them can only ever answer the assistant
+ * turn immediately above it. Batching HERE rather than in the loop also
+ * covers a client that replays history through the turn route as separate
+ * tool_result messages -- which `AgentMessageBody` (http/agentApi.ts) accepts
+ * and the loop itself never sees.
+ */
 export function mapMessagesToAnthropic(messages: AgentMessage[]): Record<string, unknown>[] {
-  return messages.map((message) => {
+  const mappedMessages: Record<string, unknown>[] = [];
+  let pendingToolResultBlocks: Record<string, unknown>[] = [];
+
+  function flushPendingToolResults(): void {
+    if (pendingToolResultBlocks.length === 0) return;
+    mappedMessages.push({ role: "user", content: pendingToolResultBlocks });
+    pendingToolResultBlocks = [];
+  }
+
+  for (const message of messages) {
     if (message.role === "tool_result") {
       if (message.toolCallId === undefined) {
         throw new Error("a tool_result message needs a toolCallId to attribute it to its call");
       }
-      return {
-        role: "user",
-        content: [
-          { type: "tool_result", tool_use_id: message.toolCallId, content: message.content },
-        ],
-      };
+      pendingToolResultBlocks.push({
+        type: "tool_result",
+        tool_use_id: message.toolCallId,
+        content: message.content,
+      });
+      continue;
     }
-    return { role: message.role, content: message.content };
-  });
+
+    flushPendingToolResults();
+
+    if (message.role === "assistant" && message.toolCalls !== undefined && message.toolCalls.length > 0) {
+      mappedMessages.push({
+        role: "assistant",
+        // The text block is omitted when there was none: a pure tool-calling
+        // turn has no text, and an empty text block is not a thing to send.
+        content: [
+          ...(message.content !== "" ? [{ type: "text", text: message.content }] : []),
+          ...message.toolCalls.map((toolCall) => ({
+            type: "tool_use",
+            id: toolCall.toolCallId,
+            name: toolCall.toolName,
+            input: toolCall.input,
+          })),
+        ],
+      });
+      continue;
+    }
+
+    mappedMessages.push({ role: message.role, content: message.content });
+  }
+
+  flushPendingToolResults();
+  return mappedMessages;
 }
 
 export interface MapAnthropicResponseOptions {

@@ -49,6 +49,17 @@ const MAX_USER_MESSAGE_LENGTH = 8_000;
 const MAX_CONVERSATION_MESSAGE_LENGTH = 20_000;
 const MAX_TURN_CONVERSATION_MESSAGES = 200;
 const MAX_TURN_CONVERSATION_TOTAL_LENGTH = 100_000;
+/**
+ * A model can call several tools in one turn, but not an unbounded number:
+ * MAX_TOOL_ITERATIONS caps iterations, never the width of any one of them,
+ * and `toolCalls` arrives from the network like every other body field. The
+ * serialized `input` of each call counts toward
+ * MAX_TURN_CONVERSATION_TOTAL_LENGTH below for the same reason `content`
+ * does -- it is replayed into every model call of the next turn and billed
+ * by the token, so leaving it out of the cost bound would reopen the hole
+ * that bound exists to close.
+ */
+const MAX_TOOL_CALLS_PER_MESSAGE = 32;
 
 /**
  * Mirrors AgentMessage (agent/providers/types.ts) exactly. A route accepting
@@ -61,17 +72,50 @@ const MAX_TURN_CONVERSATION_TOTAL_LENGTH = 100_000;
  * id, and throws without one, so a client-supplied tool_result with no
  * toolName would reach the model as a message it cannot use. Refused here as
  * an ordinary 400 instead of surfacing as an opaque provider error mid-turn.
+ *
+ * `toolCalls` is the same kind of invariant on the other half of the pair
+ * (branch review C1). A client replaying `conversation` has to be able to
+ * supply the assistant turn that MADE the calls, or the transcript it sends
+ * back has tool results answering nothing and both providers refuse the
+ * request -- which is precisely the defect the loop was fixed for, walked
+ * back in through the route. It is meaningful only on an assistant message,
+ * and the refinement below says so rather than letting a caller attach calls
+ * to a user turn where neither adapter would map them.
  */
+const AgentToolCallBody = z.object({
+  toolCallId: z.string().min(1),
+  toolName: z.string().min(1),
+  input: z.record(z.unknown()),
+});
+
 const AgentMessageBody = z
   .object({
     role: z.enum(["user", "assistant", "tool_result"]),
     content: z.string().max(MAX_CONVERSATION_MESSAGE_LENGTH),
+    toolCalls: z.array(AgentToolCallBody).max(MAX_TOOL_CALLS_PER_MESSAGE).optional(),
     toolCallId: z.string().optional(),
     toolName: z.string().optional(),
   })
   .refine((message) => message.role !== "tool_result" || message.toolName !== undefined, {
     message: "a tool_result message must carry toolName",
+  })
+  .refine((message) => message.toolCalls === undefined || message.role === "assistant", {
+    message: "only an assistant message may carry toolCalls",
   });
+
+/**
+ * What one replayed message costs to send to the model again: its text, plus
+ * the serialized arguments of any tool calls it carries. See
+ * MAX_TOOL_CALLS_PER_MESSAGE above.
+ */
+function replayedMessageLength(message: z.infer<typeof AgentMessageBody>): number {
+  const toolCallsLength = (message.toolCalls ?? []).reduce(
+    (runningTotal, toolCall) =>
+      runningTotal + toolCall.toolName.length + JSON.stringify(toolCall.input).length,
+    0,
+  );
+  return message.content.length + toolCallsLength;
+}
 
 const RunTurnBody = z
   .object({
@@ -80,7 +124,7 @@ const RunTurnBody = z
   })
   .superRefine((body, context) => {
     const totalConversationLength = (body.conversation ?? []).reduce(
-      (runningTotal, message) => runningTotal + message.content.length,
+      (runningTotal, message) => runningTotal + replayedMessageLength(message),
       0,
     );
     if (totalConversationLength > MAX_TURN_CONVERSATION_TOTAL_LENGTH) {

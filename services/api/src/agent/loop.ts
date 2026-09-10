@@ -140,12 +140,21 @@ export async function runAgentTurn(
       break;
     }
 
-    // Preserved as history for the next iteration -- omitted when empty so a
-    // model that calls tools silently does not leave a blank assistant turn
-    // sitting in the transcript.
-    if (completion.text !== "") {
-      messages.push({ role: "assistant", content: completion.text });
-    }
+    // Preserved as history for the next iteration, and pushed
+    // UNCONDITIONALLY once the model has called anything -- including when
+    // `completion.text` is "" (the common case for a pure tool-calling turn).
+    //
+    // This message is what carries the calls themselves (`toolCalls`), and
+    // every tool_result pushed below answers one of them. Omitting it -- as
+    // this loop did until branch review C1 -- left every result in the
+    // transcript referring to a call that was never transmitted, which both
+    // real providers reject on the next model call: Anthropic requires a
+    // `tool_result` block's `tool_use_id` to name a `tool_use` block in the
+    // immediately preceding assistant message, and Gemini pairs a
+    // `functionResponse` with a `functionCall` part in the preceding model
+    // turn. Empty text is not a reason to drop the turn; it is a turn whose
+    // whole content is the calls.
+    messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls });
 
     for (const toolCall of completion.toolCalls) {
       const matchedTool = registry.get(toolCall.toolName);

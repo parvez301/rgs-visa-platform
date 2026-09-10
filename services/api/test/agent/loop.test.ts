@@ -748,7 +748,15 @@ describe("runAgentTurn", () => {
     await runAgentTurn(contextWithLlm, TENANT_ID, { userMessage: "look it up", conversation: [], actorEmail: ACTOR });
 
     const secondRequestMessages = contextWithLlm.llm.receivedRequests[1]?.messages ?? [];
-    expect(secondRequestMessages).toContainEqual({ role: "assistant", content: "Let me check that case for you." });
+    const narrationMessage = secondRequestMessages.find((message) => message.role === "assistant");
+    expect(narrationMessage?.content).toBe("Let me check that case for you.");
+    // Branch review C1: the narration and the call it introduced are the SAME
+    // assistant turn, and the turn has to carry both -- the text for the
+    // model's own context (MIN-4), the calls so the tool_result that follows
+    // has something to be paired with.
+    expect(narrationMessage?.toolCalls).toEqual([
+      { toolCallId: "c1", toolName: "get_case", input: { caseId: seededCase.caseId } },
+    ]);
   });
 
   // A1 / MAJ-6: applyApprovedChange can throw AFTER stageProposal already

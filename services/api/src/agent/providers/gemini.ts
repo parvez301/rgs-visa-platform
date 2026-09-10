@@ -33,8 +33,25 @@ export interface GeminiRawResponse {
   };
 }
 
+/**
+ * The provider-agnostic transcript, in the shape generateContent requires --
+ * the Gemini twin of `mapMessagesToAnthropic`, enforcing the same two rules
+ * for the same reasons (branch review C1 and M3): a model turn that made tool
+ * calls carries a `functionCall` part per call, and every `functionResponse`
+ * answering one model turn sits in a single user turn rather than spread
+ * across consecutive ones.
+ */
 export function mapMessagesToGemini(messages: AgentMessage[]): Record<string, unknown>[] {
-  return messages.map((message) => {
+  const mappedContents: Record<string, unknown>[] = [];
+  let pendingFunctionResponseParts: Record<string, unknown>[] = [];
+
+  function flushPendingFunctionResponses(): void {
+    if (pendingFunctionResponseParts.length === 0) return;
+    mappedContents.push({ role: "user", parts: pendingFunctionResponseParts });
+    pendingFunctionResponseParts = [];
+  }
+
+  for (const message of messages) {
     if (message.role === "tool_result") {
       if (message.toolCallId === undefined) {
         throw new Error("a tool_result message needs a toolCallId to attribute it to its call");
@@ -48,16 +65,45 @@ export function mapMessagesToGemini(messages: AgentMessage[]): Record<string, un
       // synthesised id like "get_case-0" where it requires the declared
       // function name "get_case"; toolName is the field the seam carries for
       // exactly this.
-      return {
-        role: "user",
-        parts: [{ functionResponse: { name: message.toolName, response: { result: message.content } } }],
-      };
+      pendingFunctionResponseParts.push({
+        functionResponse: { name: message.toolName, response: { result: message.content } },
+      });
+      continue;
     }
-    return {
+
+    flushPendingFunctionResponses();
+
+    if (message.role === "assistant" && message.toolCalls !== undefined && message.toolCalls.length > 0) {
+      mappedContents.push({
+        role: "model",
+        parts: [
+          ...(message.content !== "" ? [{ text: message.content }] : []),
+          // NAME AND ARGS ONLY, deliberately no `id`: the functionResponse
+          // half above is name-attributed (see its comment), and
+          // mapGeminiResponse SYNTHESISES an id ("get_case-0") whenever the
+          // vendor omits one -- echoing a synthesised id back to the vendor
+          // as though it had issued it is a claim we cannot support. The
+          // known cost of name-only attribution, on both halves, is that two
+          // calls to the SAME tool in one turn are indistinguishable to
+          // Gemini; that is a pre-existing property of the response mapping,
+          // not something introduced here, and closing it needs the vendor id
+          // carried through both halves together.
+          ...message.toolCalls.map((toolCall) => ({
+            functionCall: { name: toolCall.toolName, args: toolCall.input },
+          })),
+        ],
+      });
+      continue;
+    }
+
+    mappedContents.push({
       role: message.role === "assistant" ? "model" : "user",
       parts: [{ text: message.content }],
-    };
-  });
+    });
+  }
+
+  flushPendingFunctionResponses();
+  return mappedContents;
 }
 
 export function mapGeminiResponse(response: GeminiRawResponse): LlmCompletionResponse {
