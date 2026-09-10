@@ -346,6 +346,66 @@ function domainCallChanged(caseBeforeApply: crm.CrmCase | undefined, domainResul
 }
 
 /**
+ * The approval card for a proposal a human EDITED before approving.
+ *
+ * `summary` is the field whose entire purpose is telling a human what
+ * happened, and until branch review I2 an edited approval stored the card
+ * `execute` built from the MODEL's original input -- so approving an
+ * `add_line_item` with the price edited from ₹1,000 to ₹100,000 charged the
+ * client ₹100,000 and filed a record saying ₹1,000. In the one subsystem
+ * whose purpose is audit, the record disagreed with the act, and it
+ * disagreed in the direction of understating money. Same defect the project
+ * has already ruled on three times (NEW-4's abort message, P33's
+ * `lineTotalInr`, P56's stripped `input`).
+ *
+ * Rebuilt by re-running the tool's own summary-building half -- its
+ * `execute` -- against the input actually being applied. That is the one
+ * function that knows how to describe this tool's change, so the card cannot
+ * drift from the tool the way a second, hand-written description would.
+ * `execute` proposes and never writes (pinned across every branch of every
+ * tool by readTools.test.ts / writeTools.test.ts), so this costs one read and
+ * nothing else; the freshly minted proposalId/proposedAt it also returns are
+ * discarded -- only the summary is taken.
+ *
+ * Called BEFORE `apply`, so "from" describes the same pre-apply world the
+ * original card did.
+ *
+ * If the rebuild throws -- an edit that is schema-valid but that `execute`
+ * refuses (`update_case` edited down to just a caseId), or a memory row that
+ * will not parse -- the approval still proceeds, and the card says plainly
+ * that it could not be rebuilt. What must never happen is the stale card
+ * surviving: naming a superseded figure is worse than naming none.
+ */
+async function summaryForEditedApproval(
+  context: AppContext,
+  tenantId: string,
+  writeTool: AgentTool,
+  effectiveInput: Record<string, unknown>,
+  actorEmail: string,
+): Promise<ProposedChange["summary"]> {
+  try {
+    const rebuiltProposal = (await writeTool.execute(
+      context,
+      tenantId,
+      effectiveInput,
+      actorEmail,
+    )) as ProposedChange;
+    return rebuiltProposal.summary;
+  } catch (error) {
+    const rebuildErrorMessage = error instanceof Error ? error.message : String(error);
+    return [
+      {
+        field: "summary",
+        from: "(superseded by the approver's edit)",
+        to:
+          `(could not be rebuilt from the edit: ${rebuildErrorMessage}) -- ` +
+          "this proposal's `input` is what was applied",
+      },
+    ];
+  }
+}
+
+/**
  * The ONLY path from a proposal to the database. Every write tool's
  * `execute` only ever proposes; this is what calls a write tool's `apply`,
  * looked up through the registry rather than a `switch (toolName)`
@@ -436,6 +496,15 @@ export async function applyApprovedChange(
   const caseBeforeApply =
     proposal.caseId !== undefined ? await getCase(context, tenantId, proposal.caseId) : undefined;
 
+  // Rebuilt from what is actually being applied whenever a human edited it,
+  // never carried through from the model's original input (branch review I2 --
+  // see summaryForEditedApproval above). Before `apply`, so its "from" side
+  // describes the same pre-apply world `caseBeforeApply` was snapshotted from.
+  const approvedSummary =
+    editedInput !== undefined
+      ? await summaryForEditedApproval(context, tenantId, writeTool, effectiveInput, actorEmail)
+      : proposal.summary;
+
   const decidedAt = context.now().toISOString();
   const approvedProposal: ProposedChange = {
     ...proposal,
@@ -448,6 +517,7 @@ export async function applyApprovedChange(
     // overwrites it, with the validated copy of what the human actually
     // supplied.
     input: editedInput !== undefined ? effectiveInput : proposal.input,
+    summary: approvedSummary,
     status: "APPROVED",
     decidedBy: actorEmail,
     decidedAt,

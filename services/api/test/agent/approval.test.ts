@@ -565,6 +565,101 @@ describe("applyApprovedChange", () => {
     expect(approvalEvent?.meta.edited).toBe(true);
   });
 
+  // Branch review I2. `summary` is the approval card -- the field whose whole
+  // purpose is telling a human what happened, and the one Plan 5's Today
+  // screen renders as "what was approved". An edited approval used to store
+  // the card `execute` built from the MODEL's original input, so this exact
+  // scenario charged the client 100,000 and filed a record saying 1,000.
+  // Storing an EMPTY summary instead reddened 0 of 629: nothing anywhere
+  // observed the stored card at all.
+  it("rebuilds an edited approval's stored summary from the edit, so the card cannot understate the money", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    const tool = new ToolRegistry(WRITE_TOOLS).get("add_line_item")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seeded.caseId, lineItemCode: "VISA_SERVICE_FEE", quantity: 1, unitPriceInr: 1000 },
+      ACTOR,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+    // The card as staged names the model's figure.
+    expect(JSON.stringify(staged.summary)).toContain("1000");
+
+    await applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR, {
+      caseId: seeded.caseId,
+      lineItemCode: "VISA_SERVICE_FEE",
+      quantity: 1,
+      unitPriceInr: 100_000,
+    });
+
+    // What actually happened to the client's bill.
+    const chargedCase = await getCase(context, TENANT_ID, seeded.caseId);
+    expect(chargedCase.totalInr).toBe(100_000);
+
+    // What the stored record says happened. Read back from the store, not
+    // from the return value: the row is what a human (and Plan 5) will read.
+    const approved = await getProposal(context, TENANT_ID, staged.proposalId);
+    const storedCard = JSON.stringify(approved?.summary);
+    expect(storedCard).toContain("100000");
+    // A populated card, never merely a non-stale one: an empty summary would
+    // also fail to name the superseded figure, and is not the fix.
+    expect(approved?.summary.length).toBeGreaterThan(0);
+    expect(storedCard).not.toContain("@ 1000/unit");
+  });
+
+  // The other half: a NON-edited approval's card must be left exactly as
+  // staged. Rebuilding it unconditionally would re-read the world and could
+  // quietly change the record of a change nobody edited -- the same class of
+  // silent overwrite P56 refused for `input`.
+  it("leaves a non-edited approval's stored summary byte-identical to what was staged", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context, "80009");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("add_line_item")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seeded.caseId, lineItemCode: "VISA_SERVICE_FEE", quantity: 1, unitPriceInr: 1000 },
+      ACTOR,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    await applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR);
+
+    const approved = await getProposal(context, TENANT_ID, staged.proposalId);
+    expect(approved?.summary).toEqual(staged.summary);
+  });
+
+  // The rebuild runs the tool's own `execute`, which can legitimately refuse
+  // an input its schema accepts -- `update_case` edited down to just a caseId
+  // is the reachable case. The approval must still go through (the human
+  // approved it; refusing here would be a new 400 on a path that used to
+  // succeed), and the card must say plainly that it could not be rebuilt
+  // rather than keeping the stale one.
+  it("marks the card as unrebuildable rather than keeping a stale one, when the edit is one execute refuses", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context, "80010");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seeded.caseId, processing: "EXPRESS" },
+      ACTOR,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    // Schema-valid (every field but caseId is optional), but `execute`
+    // refuses it: "update_case needs at least one field to change".
+    await applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR, { caseId: seeded.caseId });
+
+    const approved = await getProposal(context, TENANT_ID, staged.proposalId);
+    expect(approved?.status).toBe("APPROVED");
+    const storedCard = JSON.stringify(approved?.summary);
+    expect(storedCard).toContain("could not be rebuilt");
+    // The superseded value is gone either way -- that is the invariant.
+    expect(storedCard).not.toContain("EXPRESS");
+  });
+
   it("refuses an edit that fails the tool's own schema, and writes nothing", async () => {
     const context = buildTestContext();
     const seeded = await seedOneCase(context);
