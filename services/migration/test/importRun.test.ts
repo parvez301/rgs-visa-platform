@@ -1263,6 +1263,77 @@ describe("runImport", () => {
     expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual(["31376"]);
   });
 
+  // NEW-3's own symptom, narrowed to a single half-written member: a group
+  // is only re-proposed while at least one of its refs is genuinely
+  // unaccounted for. A ref held by an unreadable stored case IS accounted
+  // for -- the operator already has an UNREADABLE_STORED_CASE item naming
+  // it, and a fresh PROPOSED_GROUP does not help them repair it -- so it
+  // must count as settled here exactly like an already-imported ref does.
+  //
+  // The case-status sweep alone cannot be allowed to prove this: a
+  // half-written case's META item carries a readable caseRef and status, so
+  // an UNLAGGED sweep can find "31376" on its own and mask a broken
+  // `caseRefsHeldByStoredCases.add` on the UNREADABLE_STORED_CASE branch.
+  // The run that matters is run with `tableWithLaggingGsi1`, exactly as
+  // NEW-3's own lag test does, so the group check has nothing to lean on but
+  // that add.
+  it("does not re-propose a group whose only unsettled member is a half-written case, even when the index lags", async () => {
+    const context = buildTestContext();
+    const halfWrittenRow = buildMappedRow({ caseRef: "31376", sourceRow: 2 });
+    const cleanlyImportedRow = buildMappedRow({
+      caseRef: "31377",
+      sourceRow: 3,
+      passportNumber: "V2404481",
+    });
+    const proposedGroups = [
+      {
+        caseRefs: ["31376", "31377"],
+        partnerName: "VWI Mumbai",
+        destinationCountry: "TR",
+        receivedDate: "2025-01-02",
+      },
+    ];
+
+    // Establish the two settled states independently, as production traffic
+    // would: one case imports cleanly, the other dies between its META put
+    // and its applicant put (same fault as "never re-imports the ref of a
+    // half-written case, and flags it instead" above), leaving its ref
+    // reserved but unreadable.
+    await runImport(context, "rgs", { ...baseInput, mappedRows: [cleanlyImportedRow] });
+    const halfWritingContext = {
+      ...context,
+      table: tableFailingPuts(context.table, (item) => item.SK.startsWith("APPLICANT#")),
+    };
+    await expect(
+      runImport(halfWritingContext, "rgs", { ...baseInput, mappedRows: [halfWrittenRow] }),
+    ).rejects.toThrow(/simulated write timeout/);
+
+    // The run that matters: GSI1 answers nothing, so the case-status sweep
+    // cannot vouch for either ref -- only the per-ref reservation reads (for
+    // "31377") and the UNREADABLE_STORED_CASE branch's own bookkeeping (for
+    // "31376") can. Both group members are settled -- one already imported,
+    // one held by an unreadable stored case -- so the group must not be
+    // re-proposed.
+    const laggingContext = { ...context, table: tableWithLaggingGsi1(context.table) };
+    const summary = await runImport(laggingContext, "rgs", {
+      ...baseInput,
+      mappedRows: [halfWrittenRow, cleanlyImportedRow],
+      proposedGroups,
+    });
+    expect(summary.casesSkippedUnreadable).toBe(1);
+    expect(summary.casesSkippedAlreadyImported).toBe(1);
+    expect(summary.groupsProposed).toBe(0);
+
+    // And it stays quiet: unchanged members must not get a different answer
+    // on a following run, index still lagging.
+    const repeatedSummary = await runImport(laggingContext, "rgs", {
+      ...baseInput,
+      mappedRows: [halfWrittenRow, cleanlyImportedRow],
+      proposedGroups,
+    });
+    expect(repeatedSummary.groupsProposed).toBe(0);
+  });
+
   /**
    * N11, checkpointing half. The finding asked for resumable checkpointing.
    * Before building one, the question is whether the caseRef reservation index
