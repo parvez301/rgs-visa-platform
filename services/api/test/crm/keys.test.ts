@@ -113,7 +113,11 @@ describe("crm keys", () => {
   // Every quote JavaScript has, not just the double one: the guard used to
   // require a leading `"`, so a template literal — the very form a key built
   // from a tenant id takes — walked straight past it.
-  const KEY_LITERAL_PATTERN = /["'`](META|APPLICANT#|NOTE#|EVENT#|TENANT#)/g;
+  //
+  // CRM_MEMORY# (fix round 1, Minor 4): the memory keyspace's own infix,
+  // added alongside the others rather than left to rely solely on the
+  // TENANT# alternative catching a full literal built elsewhere.
+  const KEY_LITERAL_PATTERN = /["'`](META|APPLICANT#|NOTE#|EVENT#|TENANT#|CRM_MEMORY#)/g;
 
   function keyLiteralsIn(source: string): string[] {
     return source.match(KEY_LITERAL_PATTERN) ?? [];
@@ -128,6 +132,8 @@ describe("crm keys", () => {
       1,
     );
     expect(keyLiteralsIn("const applicantKey = `APPLICANT#${index}`;")).toHaveLength(1);
+    // The memory keyspace's own infix -- would have slipped past before Minor 4's fix.
+    expect(keyLiteralsIn("const memoryInfix = `CRM_MEMORY#${scope}`;")).toHaveLength(1);
   });
 
   it("does not fire on prose that merely names a key", () => {

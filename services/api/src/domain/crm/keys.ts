@@ -141,3 +141,16 @@ export function proposalStatusGsi1Pk(tenantId: string, proposalStatus: string): 
 export function memoryPartitionKey(tenantId: string, scope: string): string {
   return `TENANT#${tenantId}#CRM_MEMORY#${scope}`;
 }
+
+/**
+ * The three shapes a memory `scope` string takes (fix round 1, Minor 4):
+ * these are as much a piece of the key layout as `memoryPartitionKey` above
+ * -- the scope half of `TENANT#<t>#CRM_MEMORY#<scope>` -- so they live here,
+ * the one file allowed a CRM key literal, rather than in `memory.ts`.
+ * `memory.ts`'s `memoryScope`/`parseMemoryScope` import these; they stay
+ * domain logic and stay there -- this file owns the literals, not the
+ * semantics of building or parsing a composite scope.
+ */
+export const MEMORY_ORG_SCOPE = "ORG";
+export const MEMORY_PARTNER_SCOPE_PREFIX = "PARTNER#";
+export const MEMORY_USER_SCOPE_PREFIX = "USER#";

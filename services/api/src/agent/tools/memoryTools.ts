@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  MEMORY_RECALL_PAGE_LIMIT,
   MEMORY_SCOPE_KINDS,
   forgetMemory,
   getMemoryOrUndefined,
@@ -16,9 +17,18 @@ import type { AgentTool } from "./registry";
 
 const memoryScopeKindSchema = z.enum(MEMORY_SCOPE_KINDS);
 
-/** Sentinel for a remember/forget proposal's "from" when no prior memory exists under this key. */
+/** Sentinel for a remember proposal's "from" when no prior memory exists under this key. */
 const NO_PRIOR_MEMORY_FROM = "(new memory)";
 const FORGOTTEN_MEMORY_TO = "(forgotten)";
+/**
+ * Forget's own "from" sentinel for a memoryKey nothing occupies -- distinct
+ * from NO_PRIOR_MEMORY_FROM, which paired with a "to" of real text reads as
+ * a creation. Pairing NO_PRIOR_MEMORY_FROM with FORGOTTEN_MEMORY_TO instead
+ * rendered "(new memory) -> (forgotten)", which reads as though something
+ * were being created and then immediately destroyed -- misleading on an
+ * approval card for a call that in fact changes nothing.
+ */
+const NOTHING_TO_FORGET_FROM = "(nothing remembered)";
 
 /**
  * Mints the two generated fields every proposal needs and assembles the
@@ -60,6 +70,22 @@ function proposalFrom(
  * approver's identity, and that second call is the one that reaches
  * storage -- so a USER-scope remember/forget always lands under whoever
  * actually applies it, never under a name either side merely typed.
+ *
+ * That re-derivation is a deliberate, pinned choice (see
+ * "the acting identity" tests in memory.test.ts) with a real cost, not only
+ * a benefit: threading the PROPOSER's identity through to `apply` instead
+ * would mean widening `AgentTool.apply`'s signature (and the gate that
+ * calls it) across all seven write tools, to serve a role this product does
+ * not have yet -- a distinct approver acting on someone else's behalf. The
+ * accepted cost until that role exists: in a split propose/approve flow, a
+ * USER-scope memory lands under the APPROVER, not the person who asked for
+ * it, so a staff member's private note approved by a supervisor is filed
+ * under the supervisor and the staff member never gets it back from
+ * `recall`. A second, related consequence: `execute` (above call site)
+ * builds the approval card's diff from the PROPOSER's own scope, while
+ * `apply` (below call site) writes under the APPROVER's -- so in a split
+ * flow the card's "from" value describes a different row than the one the
+ * write actually lands on.
  */
 function resolveMemoryScope(
   scopeKind: MemoryScopeKind,
@@ -78,26 +104,27 @@ function resolveMemoryScope(
   return memoryScope("ORG");
 }
 
-type RecallToolInput = { scopes: MemoryScopeKind[]; partnerId?: string };
+type RecallToolInput = { scopes: MemoryScopeKind[]; partnerId?: string; limit?: number };
 
 export const recallTool: AgentTool<RecallToolInput> = {
   name: "recall",
   kind: "read",
   description:
     "Recall what the desk has taught you, across the ORG, PARTNER (needs partnerId) and USER " +
-    "scopes you name. USER scope always resolves to whoever is asking -- there is no way to read " +
-    "another user's memories. The result carries unreadableMemoryKeys: memoryKeys that exist in a " +
-    "requested scope but could not be read back -- if it is not empty you MUST say so in your " +
-    "answer.",
+    `scopes you name. Returns at most ${MEMORY_RECALL_PAGE_LIMIT} per named scope. USER scope ` +
+    "always resolves to whoever is asking -- there is no way to read another user's memories. " +
+    "The result carries unreadableMemoryKeys: memoryKeys that exist in a requested scope but " +
+    "could not be read back -- if it is not empty you MUST say so in your answer.",
   inputSchema: z.object({
     scopes: z.array(memoryScopeKindSchema).min(1),
     partnerId: z.string().min(1).optional(),
+    limit: z.number().int().positive().max(MEMORY_RECALL_PAGE_LIMIT).optional(),
   }),
   execute: async (context, tenantId, input, actorEmail) => {
     const resolvedScopes = input.scopes.map((scopeKind) =>
       resolveMemoryScope(scopeKind, input.partnerId, actorEmail),
     );
-    return recallMemories(context, tenantId, resolvedScopes);
+    return recallMemories(context, tenantId, resolvedScopes, input.limit ?? MEMORY_RECALL_PAGE_LIMIT);
   },
 };
 
@@ -133,7 +160,20 @@ export const rememberTool: AgentTool<RememberToolInput> = {
       context,
       "remember",
       input,
-      [{ field: "text", from: existingMemory?.text ?? NO_PRIOR_MEMORY_FROM, to: input.text }],
+      // The scope KIND, not the composite: house style puts the target in
+      // the field name (set_custody's `applicants.${ref}.custody`,
+      // writeTools.ts), and an ORG-scope and a USER-scope remember of the
+      // same text must not render as the same card. The composite is
+      // approver-derived (resolveMemoryScope's doc comment above) and
+      // genuinely unknowable at propose time in a split flow, so the kind
+      // -- always known here -- is what the field name can honestly show.
+      [
+        {
+          field: `${input.scope}/${input.memoryKey}`,
+          from: existingMemory?.text ?? NO_PRIOR_MEMORY_FROM,
+          to: input.text,
+        },
+      ],
       actorEmail,
     );
   },
@@ -175,7 +215,15 @@ export const forgetTool: AgentTool<ForgetToolInput> = {
       context,
       "forget",
       input,
-      [{ field: "text", from: existingMemory?.text ?? NO_PRIOR_MEMORY_FROM, to: FORGOTTEN_MEMORY_TO }],
+      // Same field-naming rule as remember, above: the scope KIND, not the
+      // composite.
+      [
+        {
+          field: `${input.scope}/${input.memoryKey}`,
+          from: existingMemory?.text ?? NOTHING_TO_FORGET_FROM,
+          to: FORGOTTEN_MEMORY_TO,
+        },
+      ],
       actorEmail,
     );
   },

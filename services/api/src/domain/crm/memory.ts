@@ -10,7 +10,13 @@ import {
   storedRecordId,
   stripStorageKeys,
 } from "../../lib/storedRecords";
-import { memoryPartitionKey } from "./keys";
+import { recordCrmEvent } from "./crmEvents";
+import {
+  MEMORY_ORG_SCOPE,
+  MEMORY_PARTNER_SCOPE_PREFIX,
+  MEMORY_USER_SCOPE_PREFIX,
+  memoryPartitionKey,
+} from "./keys";
 
 /**
  * What the desk has taught the agent, at three scopes (spec "Memory"
@@ -29,18 +35,24 @@ import { memoryPartitionKey } from "./keys";
 export const MEMORY_SCOPE_KINDS = ["ORG", "PARTNER", "USER"] as const;
 export type MemoryScopeKind = (typeof MEMORY_SCOPE_KINDS)[number];
 
-const ORG_SCOPE = "ORG";
-const PARTNER_SCOPE_PREFIX = "PARTNER#";
-const USER_SCOPE_PREFIX = "USER#";
+/**
+ * The default, overridable page size for `recallMemories` -- one requested
+ * scope can hold arbitrarily many rows, and a busy ORG scope would otherwise
+ * put every memory the desk ever taught into one prompt. Mirrors
+ * `SEARCH_CASES_PAGE_LIMIT` (readTools.ts) rather than a second, independent
+ * literal, so the tool's input-schema cap and the domain default cannot
+ * drift apart (fix round 1, Minor 2).
+ */
+export const MEMORY_RECALL_PAGE_LIMIT = 50;
 
 export function memoryScope(kind: "ORG"): string;
 export function memoryScope(kind: "PARTNER" | "USER", key: string): string;
 export function memoryScope(kind: MemoryScopeKind, key?: string): string {
-  if (kind === "ORG") return ORG_SCOPE;
+  if (kind === "ORG") return MEMORY_ORG_SCOPE;
   if (key === undefined || key.length === 0) {
     throw badRequest(kind === "PARTNER" ? "PARTNER scope needs a partnerId" : "USER scope needs an email");
   }
-  return kind === "PARTNER" ? `${PARTNER_SCOPE_PREFIX}${key}` : `${USER_SCOPE_PREFIX}${key}`;
+  return kind === "PARTNER" ? `${MEMORY_PARTNER_SCOPE_PREFIX}${key}` : `${MEMORY_USER_SCOPE_PREFIX}${key}`;
 }
 
 export interface ParsedMemoryScope {
@@ -50,12 +62,12 @@ export interface ParsedMemoryScope {
 
 /** The inverse of `memoryScope`. Throws badRequest on a string that is none of the three shapes. */
 export function parseMemoryScope(scope: string): ParsedMemoryScope {
-  if (scope === ORG_SCOPE) return { kind: "ORG" };
-  if (scope.startsWith(PARTNER_SCOPE_PREFIX)) {
-    return { kind: "PARTNER", key: scope.slice(PARTNER_SCOPE_PREFIX.length) };
+  if (scope === MEMORY_ORG_SCOPE) return { kind: "ORG" };
+  if (scope.startsWith(MEMORY_PARTNER_SCOPE_PREFIX)) {
+    return { kind: "PARTNER", key: scope.slice(MEMORY_PARTNER_SCOPE_PREFIX.length) };
   }
-  if (scope.startsWith(USER_SCOPE_PREFIX)) {
-    return { kind: "USER", key: scope.slice(USER_SCOPE_PREFIX.length) };
+  if (scope.startsWith(MEMORY_USER_SCOPE_PREFIX)) {
+    return { kind: "USER", key: scope.slice(MEMORY_USER_SCOPE_PREFIX.length) };
   }
   throw badRequest(`Unrecognized memory scope "${scope}"`);
 }
@@ -119,6 +131,16 @@ export async function rememberMemory(
     ...(actorEmail !== "" ? { createdByEmail: actorEmail } : {}),
   });
   await writeMemory(context, tenantId, memory);
+  // The case that taught the agent something should show a trace of it on
+  // its own timeline, the same way addLineItem/the case mutators record
+  // theirs (fix round 1, Minor 5) -- only when there IS a case to record
+  // against: a memory can be ORG/PARTNER-taught with no sourceCaseId at all.
+  if (memory.sourceCaseId !== undefined) {
+    await recordCrmEvent(context, tenantId, memory.sourceCaseId, "MEMORY_REMEMBERED", actorEmail, {
+      scope: memory.scope,
+      memoryKey: memory.memoryKey,
+    });
+  }
   return memory;
 }
 
@@ -133,6 +155,11 @@ export async function forgetMemory(
   // Idempotent, like DynamoDB's own delete: forgetting a memoryKey nobody
   // ever remembered is not an error, it is simply a no-op.
   await context.table.delete(memoryPartitionKey(tenantId, scope), memoryKey);
+  // No recordCrmEvent here, on purpose, not by oversight: unlike remember,
+  // forget's own signature carries no case reference at all (only scope +
+  // memoryKey) -- a forgotten memory may never have cited one, and even when
+  // it did, this function has no way to recover which case that was. There
+  // is nothing to record against.
 }
 
 export interface MemoryListing {
@@ -153,16 +180,24 @@ export interface MemoryListing {
  * argument: resolving a USER scope to the right identity is the caller's
  * job -- the `recall` tool, which never takes it from tool input -- and this
  * function has no `actorEmail` to check one against.
+ *
+ * Deduplicates `scopes` first (fix round 1, Minor 1): querying the same
+ * scope twice used to hand the model the same memory twice, which is
+ * exactly the near-duplicate problem `memoryKey` exists to prevent (§4.1.1).
+ * `limit` caps each scope's own query, mirroring `listCasesByStatus`/
+ * `listCasesByPartner`'s per-query `limit` -- a busy ORG scope should not be
+ * able to put its entire history into one recall.
  */
 export async function recallMemories(
   context: AppContext,
   tenantId: string,
   scopes: string[],
+  limit: number = MEMORY_RECALL_PAGE_LIMIT,
 ): Promise<MemoryListing> {
   const memories: crm.CrmMemory[] = [];
   const unreadableMemoryKeys: string[] = [];
-  for (const scope of scopes) {
-    const storedItems = await context.table.query(memoryPartitionKey(tenantId, scope));
+  for (const scope of new Set(scopes)) {
+    const storedItems = await context.table.query(memoryPartitionKey(tenantId, scope), { limit });
     const { records, unreadableRecordIds } = await collectReadableRecords(storedItems, parseStoredMemory, {
       entityDescription: "CRM memory",
       scopeDescription: `tenant ${tenantId} scope ${scope}`,
