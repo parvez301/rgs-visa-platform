@@ -120,7 +120,18 @@ const AgentMessageBody = z
   })
   .refine((message) => message.toolCalls === undefined || message.role === "assistant", {
     message: "only an assistant message may carry toolCalls",
-  });
+  })
+  // branch-fix re-review N5, and the last member of N2's family: an assistant
+  // turn with neither text nor calls maps to an empty content block, which
+  // both vendors refuse. The loop cannot build one -- it pushes an assistant
+  // turn only once the model has called something -- so this is reachable
+  // only from a replayed transcript, and belongs with the rest of the
+  // client-supplied malformations refused here as a 400.
+  .refine(
+    (message) =>
+      message.role !== "assistant" || message.content !== "" || (message.toolCalls ?? []).length > 0,
+    { message: "an assistant message must carry text, tool calls, or both" },
+  );
 
 /**
  * What one replayed message costs to send to the model again: its text, plus

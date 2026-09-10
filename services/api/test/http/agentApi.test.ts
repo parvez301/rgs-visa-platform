@@ -1726,3 +1726,40 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
     expect(turnResult.appliedChanges ?? []).toHaveLength(0);
   });
 });
+
+describe("agent turn route: an assistant turn must carry something (branch-fix re-review N5)", () => {
+  it("400s a replayed assistant message with neither text nor tool calls, which both vendors refuse", async () => {
+    const context = buildTestContext();
+    const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
+    const router = buildRouter(contextWithFakeLlm(context, provider));
+
+    const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "and now?",
+      conversation: [{ role: "assistant", content: "" }],
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.stringify(response.payload)).toContain("must carry text, tool calls, or both");
+    expect(provider.receivedRequests).toHaveLength(0);
+  });
+
+  it("still accepts an assistant turn carrying only tool calls -- the shape the loop itself builds", async () => {
+    const context = buildTestContext();
+    const provider = new FakeLlmProvider([{ text: "continuing", toolCalls: [] }]);
+    const router = buildRouter(contextWithFakeLlm(context, provider));
+
+    const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "and now?",
+      conversation: [
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ toolCallId: "toolu_only", toolName: "aggregate", input: { groupBy: "caseStatus" } }],
+        },
+        { role: "tool_result", content: '{"total":1}', toolCallId: "toolu_only", toolName: "aggregate" },
+      ],
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+});
