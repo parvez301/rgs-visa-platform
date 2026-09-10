@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { InMemoryTableClient, type TableClient, type TableItem } from "../src/lib/db";
+import { DynamoTableClient, InMemoryTableClient, type TableClient, type TableItem } from "../src/lib/db";
 import {
   DEFAULT_WRITE_RETRY_OPTIONS,
   WRITE_RETRY_INITIAL_DELAY_VARIABLE,
@@ -251,6 +251,28 @@ describe("writeRetryDelayMs", () => {
     expect(writeRetryDelayMs(3, options, 0)).toBe(0);
     expect(writeRetryDelayMs(3, options, 0.5)).toBe(500);
     expect(writeRetryDelayMs(3, options, 1)).toBe(1_000);
+  });
+});
+
+describe("buildProductionContext", () => {
+  it("puts the retry seam in front of the real table client", async () => {
+    const savedEnvironment = { ...process.env };
+    process.env["TABLE_NAME"] = "rgs-table";
+    process.env["DOCUMENTS_BUCKET"] = "rgs-documents";
+    process.env["EMAIL_SENDER"] = "noreply@rgs.test";
+    process.env["ADMIN_NOTIFICATION_EMAIL"] = "info@rgs.test";
+    try {
+      const { buildProductionContext } = await import("../src/http/handler");
+      const productionContext = buildProductionContext();
+      // The wiring belongs here and nowhere else: `services/migration/src/cli.ts`
+      // builds its context from this same function, so the import and the API
+      // share one seam and neither carries a retry decision at a call site. A
+      // bare DynamoTableClient coming back would mean the migration writes are
+      // unprotected however good the wrapper is.
+      expect(productionContext.table).not.toBeInstanceOf(DynamoTableClient);
+    } finally {
+      process.env = savedEnvironment;
+    }
   });
 });
 
