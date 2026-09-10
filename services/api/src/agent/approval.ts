@@ -1,3 +1,4 @@
+import { crm } from "@rgs/shared";
 import { z } from "zod";
 import type { AppContext } from "../lib/context";
 import type { TableItem } from "../lib/db";
@@ -79,12 +80,20 @@ export const HIGH_STAKES_TOOLS: ReadonlySet<string> = new Set(["add_line_item", 
  * DENY-list is also silent, but what THAT silently permits is an unreviewed
  * write reaching the database -- which is why HIGH_STAKES_TOOLS alone is not
  * enough to gate auto-apply, and Task 10 must consult this set first.
+ *
+ * Deliberately NOT required to cover `WRITE_TOOLS` (fix-round-1 ruling): a
+ * union-covers assertion forces every non-high-stakes tool into this set by
+ * construction, which collapses "not high-stakes" into "auto-appliable" and
+ * defeats the default-deny property the set exists for. A write tool may be
+ * absent from BOTH sets on purpose -- staged for a reason other than money
+ * or a terminal state.
+ *
+ * `create_case` is one such absence, on purpose: opening a brand-new case
+ * with no human in the loop is not obviously low-stakes, and spec §7's
+ * level-2 wording does not compel auto-applying it. Do not "fix" this gap by
+ * adding it back without a deliberate decision to do so.
  */
-export const AUTO_APPLIABLE_TOOLS: ReadonlySet<string> = new Set([
-  "create_case",
-  "update_case",
-  "set_custody",
-]);
+export const AUTO_APPLIABLE_TOOLS: ReadonlySet<string> = new Set(["update_case", "set_custody"]);
 
 /** Built once from the same WRITE_TOOLS array the loop and the tests use. */
 const writeToolRegistry = new ToolRegistry(WRITE_TOOLS);
@@ -98,9 +107,21 @@ const writeToolRegistry = new ToolRegistry(WRITE_TOOLS);
 function requireWriteTool(toolName: string): AgentTool {
   const tool = writeToolRegistry.get(toolName);
   if (tool === undefined) {
-    throw notFound(`Write tool "${toolName}"`);
+    // A stored proposal that exists (readProposalOrThrow above already found
+    // it) and names a tool this registry does not have is a corrupt record,
+    // not a missing one -- the same distinction parseStoredRecord makes for
+    // a row that will not reassemble. `conflict` (409), not `notFound`, so
+    // this is distinguishable from the 404 a genuinely absent proposal id
+    // returns (m5).
+    throw conflict(`Proposal names an unregistered write tool "${toolName}"`);
   }
   if (tool.kind !== "write" || tool.apply === undefined) {
+    // Unreachable by construction: writeToolRegistry (above) is built only
+    // from WRITE_TOOLS, and writeTools.test.ts already pins every member's
+    // `kind` as "write" with a defined `apply`. Kept anyway, and documented
+    // rather than deleted, so a future change to how this registry is built
+    // (e.g. making it injectable) fails loudly here instead of silently
+    // reaching `apply` on a non-write tool (Minor 3).
     throw badRequest(`"${toolName}" is not a write tool and cannot be applied`);
   }
   return tool;
@@ -202,37 +223,31 @@ function extractCaseId(domainResult: unknown): string | undefined {
   return typeof caseId === "string" ? caseId : undefined;
 }
 
-function extractUpdatedAt(domainResult: unknown): string | undefined {
-  if (typeof domainResult !== "object" || domainResult === null || !("updatedAt" in domainResult)) {
-    return undefined;
-  }
-  const updatedAt = (domainResult as { updatedAt: unknown }).updatedAt;
-  return typeof updatedAt === "string" ? updatedAt : undefined;
-}
-
 /**
  * Whether `apply` actually moved anything (ruling P53).
  *
- * `updateCaseDetails` (ruling P51) returns the case exactly as it read it --
- * the identical `updatedAt` -- when every supplied field already matches
- * what's stored, rather than performing a no-op write. Every mutator in
- * `cases.ts` that DOES write sets `updatedAt` from `context.now()`, so a real
- * change always advances it. Comparing the case's `updatedAt` immediately
- * before `apply` runs against the domain result's own `updatedAt` afterward
- * is the cheapest honest signal available without coupling this function to
- * any one tool's internals.
+ * `updateCaseDetails` (ruling P51) returns the case exactly as it read it
+ * when every supplied field already matches what's stored, rather than
+ * performing a no-op write. A first version of this signal compared only
+ * `updatedAt` before vs. after -- cheap, but clock-racy: production runs a
+ * live clock (`context.now()` in `src/http/handler.ts`), but two calls close
+ * enough together can still land in the same millisecond, and a frozen test
+ * clock (as `buildTestContext()` provides) makes a REAL write's freshly
+ * recomputed `updatedAt` byte-identical to the snapshot whenever the test
+ * doesn't itself advance the clock -- silently reporting `changed: false`
+ * for a change that did happen (fix-round-1 Major 3).
+ *
+ * A full deep compare against the pre-apply snapshot has no such race: it is
+ * exact regardless of whether or how far the clock moved, and it is free --
+ * the snapshot read already happens for this signal, once per apply.
  *
  * A proposal with no `caseId` (only `create_case`) has nothing to compare
  * against and is definitionally a change -- a case now exists that did not
  * before.
  */
-function domainCallChanged(
-  caseIdBeforeApply: string | undefined,
-  caseUpdatedAtBeforeApply: string | undefined,
-  domainResult: unknown,
-): boolean {
-  if (caseIdBeforeApply === undefined) return true;
-  return extractUpdatedAt(domainResult) !== caseUpdatedAtBeforeApply;
+function domainCallChanged(caseBeforeApply: crm.CrmCase | undefined, domainResult: unknown): boolean {
+  if (caseBeforeApply === undefined) return true;
+  return JSON.stringify(domainResult) !== JSON.stringify(caseBeforeApply);
 }
 
 /**
@@ -257,25 +272,26 @@ export async function applyApprovedChange(
 
   const writeTool = requireWriteTool(proposal.toolName);
 
-  // The human's edit wins over the model's original suggestion (AX
-  // Principle 3), but it is untrusted input like any other input this system
-  // accepts: re-validate it against the tool's own schema before it reaches
-  // `apply`, so a schema-violating edit is refused with nothing written,
-  // rather than handed straight to the domain function.
-  let effectiveInput: Record<string, unknown> = proposal.input;
-  if (editedInput !== undefined) {
-    const parsedEdit = writeTool.inputSchema.safeParse(editedInput);
-    if (!parsedEdit.success) {
-      throw badRequest(`Edited input for proposal ${proposalId}: ${describeFirstZodIssue(parsedEdit.error)}`);
-    }
-    effectiveInput = parsedEdit.data as Record<string, unknown>;
+  // Untrusted input like any other, whichever source it comes from: the
+  // human's edit wins over the model's original suggestion when supplied (AX
+  // Principle 3), but `proposal.input` is not pre-validated either --
+  // `stageProposal` checks only `status` -- so both sources get the same
+  // guarantee from one unconditional validation rather than only the edited
+  // one (Minor 2). A schema-violating input of either kind is refused with
+  // nothing written, never handed to `apply`.
+  const parsedInput = writeTool.inputSchema.safeParse(editedInput ?? proposal.input);
+  if (!parsedInput.success) {
+    throw badRequest(`Input for proposal ${proposalId}: ${describeFirstZodIssue(parsedInput.error)}`);
   }
+  const effectiveInput = parsedInput.data as Record<string, unknown>;
 
-  // Snapshotted before `apply` runs -- it is the "before" side of the
-  // comparison `domainCallChanged` needs, and reading it after `apply` would
-  // just read back whatever `apply` itself did or didn't do.
-  const caseUpdatedAtBeforeApply =
-    proposal.caseId !== undefined ? (await getCase(context, tenantId, proposal.caseId)).updatedAt : undefined;
+  // Snapshotted before `apply` runs -- the "before" side of the deep compare
+  // `domainCallChanged` needs; reading it after `apply` would just read back
+  // whatever `apply` itself did or didn't do. This also means a case that
+  // has vanished between staging and approval surfaces as a 404 raised HERE
+  // by the audit-trail read, rather than from inside `apply`.
+  const caseBeforeApply =
+    proposal.caseId !== undefined ? await getCase(context, tenantId, proposal.caseId) : undefined;
 
   const domainResult = await writeTool.apply!(context, tenantId, effectiveInput, actorEmail);
 
@@ -289,7 +305,7 @@ export async function applyApprovedChange(
   };
   await putProposal(context, tenantId, approvedProposal);
 
-  const changed = domainCallChanged(proposal.caseId, caseUpdatedAtBeforeApply, domainResult);
+  const changed = domainCallChanged(caseBeforeApply, domainResult);
   // create_case has no caseId at stage time -- the case does not exist until
   // `apply` returns. Recording only `if (proposal.caseId !== undefined)`
   // would leave the single highest-consequence approval in the system with
@@ -332,6 +348,15 @@ export async function discardProposal(
   };
   await putProposal(context, tenantId, discardedProposal);
 
+  // Unlike the APPROVED side (P42), there is no domain result to take a
+  // caseId off of here when `proposal.caseId` is undefined -- a discarded
+  // `create_case` proposal never ran `apply`, so no case was ever created to
+  // scope an event to. The trace is not lost, though (Minor 6): the
+  // discarded proposal itself -- with its `discardReason` -- persists under
+  // `proposalPartitionKey` and stays queryable via
+  // `proposalStatusGsi1Pk(tenantId, "DISCARDED")`. A future reader (Plan 5's
+  // Today screen) that wants rejected proposals in a timeline should read
+  // the proposal partition rather than conclude the trace is missing.
   if (proposal.caseId !== undefined) {
     await recordCrmEvent(context, tenantId, proposal.caseId, "PROPOSAL_DISCARDED", actorEmail, {
       proposalId,

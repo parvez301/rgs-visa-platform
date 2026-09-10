@@ -11,7 +11,7 @@ import {
   stageProposal,
   type ProposedChange,
 } from "../../src/agent/approval";
-import { createCase, getCase, updateCaseDetails } from "../../src/domain/crm/cases";
+import { changeBillingStatus, createCase, getCase, updateCaseDetails } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import {
   PROPOSAL_SORT_KEY,
@@ -138,6 +138,51 @@ function sampleInputFor(
   }
 }
 
+/**
+ * The mutation-visibility half of the property test (fix-round-1 Major 1).
+ * `sampleInputFor`'s twin: an equally exhaustive, no-`default` switch, so a
+ * sixth write tool fails this file to compile until someone states what its
+ * mutation looks like -- not merely that `apply` "resolved" or that a read
+ * agrees with whatever `apply` returned, both of which a tool whose `apply`
+ * only reads would also satisfy (this is exactly how the reviewer's
+ * `probe_sixth` -- a read-only `apply` -- passed the property test outright
+ * before this fix). Every assertion targets a value OFF the fixture's
+ * default, per the same rule Task 7's fix round established: `seedOneCase`
+ * case is `billingStatus: "UNBILLED"`, `lineItems: []` / `totalInr: 0`,
+ * `appointmentDate` unset, and applicant `A1`'s `custody` defaults to
+ * `"NOT_HELD"` (`packages/shared/src/crm/schemas.ts:87`).
+ */
+function expectMutationVisible(toolName: WriteToolName, storedCase: crm.CrmCase): void {
+  switch (toolName) {
+    case "create_case":
+      expect(storedCase.caseRef, "create_case: the stored case is not the one apply should have created").toBe(
+        "80099",
+      );
+      break;
+    case "update_case":
+      expect(storedCase.appointmentDate, "update_case: appointmentDate never moved off its unset default").toBe(
+        "2026-10-01",
+      );
+      break;
+    case "add_line_item":
+      expect(storedCase.lineItems, "add_line_item: lineItems is still the seed's empty array").toHaveLength(1);
+      expect(storedCase.totalInr, "add_line_item: totalInr is still the seed's 0").toBe(1000);
+      break;
+    case "set_custody": {
+      const applicant = storedCase.applicants.find((candidate) => candidate.applicantRef === "A1");
+      expect(applicant?.custody, "set_custody: applicant A1's custody is still the schema default NOT_HELD").toBe(
+        "WITH_RGS",
+      );
+      break;
+    }
+    case "set_billing":
+      expect(storedCase.billingStatus, "set_billing: billingStatus is still the seed's UNBILLED").toBe(
+        "BILL_SENT",
+      );
+      break;
+  }
+}
+
 describe("an approved change is the only thing that writes", () => {
   // The property, over EVERY registered write tool: staging never reaches a
   // case, and applyApprovedChange is what makes the mutation real and
@@ -194,6 +239,12 @@ describe("an approved change is the only thing that writes", () => {
       );
       expect(storedProposal?.status, `${writeTool.name}'s proposal did not move to APPROVED`).toBe("APPROVED");
       expect(storedProposal?.GSI1PK).toBe(proposalStatusGsi1Pk(TENANT_ID, "APPROVED"));
+      // Major 5: who decided, and when -- the two fields that make the
+      // transition auditable, not just its end state.
+      expect(storedProposal?.decidedBy, `${writeTool.name}'s proposal has no decidedBy`).toBe(ACTOR);
+      expect(storedProposal?.decidedAt, `${writeTool.name}'s proposal has no decidedAt`).toBe(
+        context.now().toISOString(),
+      );
 
       // The mutation is not only returned but durable: re-reading the case
       // (via the domain result's own caseId, since create_case has none of
@@ -201,6 +252,12 @@ describe("an approved change is the only thing that writes", () => {
       const resultCaseId = (domainResult as { caseId?: string }).caseId ?? seededCase.caseId;
       const storedCase = await getCase(context, TENANT_ID, resultCaseId);
       expect(storedCase).toEqual(domainResult);
+
+      // Major 1: durability alone cannot tell "apply wrote the change" apart
+      // from "apply was never called and this is just a read" -- a plain
+      // getCase() would satisfy toEqual(domainResult) too. Pin a value that
+      // only a REAL mutation produces, off the fixture's default.
+      expectMutationVisible(writeTool.name as WriteToolName, storedCase);
     },
   );
 });
@@ -224,7 +281,7 @@ describe("stageProposal", () => {
 });
 
 describe("applyApprovedChange", () => {
-  it("invokes the tool's apply and marks the proposal APPROVED", async () => {
+  it("invokes the tool's apply, marks the proposal APPROVED, and records a non-edited approval", async () => {
     const context = buildTestContext();
     const seeded = await seedOneCase(context);
     expect(seeded.billingStatus).toBe("UNBILLED");
@@ -237,11 +294,29 @@ describe("applyApprovedChange", () => {
     )) as ProposedChange;
     const staged = await stageProposal(context, TENANT_ID, proposal);
 
+    // Advanced before approving so decidedAt is provably distinguishable
+    // from proposedAt (Major 5) -- otherwise it is just another value that
+    // happens to already be sitting in the record.
+    context.advanceClock(60_000);
     const updated = (await applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR)) as crm.CrmCase;
     expect(updated.billingStatus).toBe("BILL_SENT");
 
     const { proposals } = await listPendingProposals(context, TENANT_ID);
     expect(proposals.find((pending) => pending.proposalId === staged.proposalId)).toBeUndefined();
+
+    const storedProposal = await context.table.get(
+      proposalPartitionKey(TENANT_ID, staged.proposalId),
+      PROPOSAL_SORT_KEY,
+    );
+    expect(storedProposal?.decidedBy).toBe(ACTOR);
+    expect(storedProposal?.decidedAt).toBe(context.now().toISOString());
+    expect(storedProposal?.decidedAt).not.toBe(staged.proposedAt);
+
+    // Major 6: `edited` has to be false here, or it means nothing -- a flag
+    // that is always true (or never checked) is not a signal.
+    const events = await listCaseEvents(context, TENANT_ID, seeded.caseId);
+    const approvalEvent = events.find((event) => event.eventType === "PROPOSAL_APPROVED");
+    expect(approvalEvent?.meta.edited).toBe(false);
   });
 
   it("refuses an unknown proposal id", async () => {
@@ -302,7 +377,11 @@ describe("applyApprovedChange", () => {
     });
   });
 
-  it("refuses a proposal naming a tool that is not registered", async () => {
+  // Distinct from "refuses an unknown proposal id" above: that is a missing
+  // ROW (404). This proposal exists and was staged successfully -- it is the
+  // TOOL NAME on it that is bogus, which is a corrupt record, not a missing
+  // one (Minor 5 ruling). The two must not collide on the same status code.
+  it("refuses a proposal naming a tool that is not registered, distinctly from a missing proposal", async () => {
     const context = buildTestContext();
     const seeded = await seedOneCase(context);
     const proposal: ProposedChange = {
@@ -317,7 +396,7 @@ describe("applyApprovedChange", () => {
     };
     await stageProposal(context, TENANT_ID, proposal);
     await expect(applyApprovedChange(context, TENANT_ID, "prop_phantom_tool", ACTOR)).rejects.toMatchObject({
-      statusCode: 404,
+      statusCode: 409,
     });
   });
 
@@ -325,10 +404,18 @@ describe("applyApprovedChange", () => {
     const context = buildTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    // The model's original input must be a LEGAL alternative
+    // (UNBILLED -> WRITTEN_OFF, stateMachines.ts), not an illegal one like
+    // PAID: under mutation #3 (effectiveInput = proposal.input, discarding
+    // the edit), an illegal original makes changeBillingStatus itself throw
+    // a 409 before the `updated.billingStatus` assertion ever runs, so the
+    // test would go red for "the state machine refused" rather than for "the
+    // edit was ignored" -- indistinguishable causes (Minor 1, the identical
+    // trap already fixed for the double-approval test one test above).
     const proposal = (await tool.execute(
       context,
       TENANT_ID,
-      { caseId: seeded.caseId, billingStatus: "PAID" },
+      { caseId: seeded.caseId, billingStatus: "WRITTEN_OFF" },
       ACTOR,
     )) as ProposedChange;
     const staged = await stageProposal(context, TENANT_ID, proposal);
@@ -339,11 +426,23 @@ describe("applyApprovedChange", () => {
     })) as crm.CrmCase;
 
     expect(updated.billingStatus).toBe("BILL_SENT");
+
+    // Major 6: the flip side of the non-edited assertion above -- `edited`
+    // only means something if it is true on an edited approval AND false on
+    // a non-edited one.
+    const events = await listCaseEvents(context, TENANT_ID, seeded.caseId);
+    const approvalEvent = events.find((event) => event.eventType === "PROPOSAL_APPROVED");
+    expect(approvalEvent?.meta.edited).toBe(true);
   });
 
   it("refuses an edit that fails the tool's own schema, and writes nothing", async () => {
     const context = buildTestContext();
     const seeded = await seedOneCase(context);
+    // Move billingStatus off its UNBILLED default first -- the "unchanged"
+    // snapshot comparison below would otherwise pass even if a tool that
+    // never read the case at all reported the default back.
+    await changeBillingStatus(context, TENANT_ID, seeded.caseId, "BILL_SENT", ACTOR);
+
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
       context,
@@ -353,6 +452,8 @@ describe("applyApprovedChange", () => {
     )) as ProposedChange;
     const staged = await stageProposal(context, TENANT_ID, proposal);
 
+    const caseBeforeRefusal = await getCase(context, TENANT_ID, seeded.caseId);
+
     await expect(
       applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR, {
         caseId: seeded.caseId,
@@ -360,8 +461,14 @@ describe("applyApprovedChange", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 400 });
 
-    // Nothing written: the case is exactly as seedOneCase left it, and the
-    // proposal is still PENDING and therefore still approvable.
+    // Major 2: "writes nothing" has to mean the CASE is untouched, not
+    // merely that the proposal is still pending -- a real write inserted
+    // right before the throw would leave the proposal-pending check green
+    // while the case moved. Compare the whole record, not one field, so a
+    // write to any part of it is caught.
+    expect(await getCase(context, TENANT_ID, seeded.caseId)).toEqual(caseBeforeRefusal);
+
+    // And the proposal itself is unaffected: still PENDING, still approvable.
     const { proposals } = await listPendingProposals(context, TENANT_ID);
     expect(proposals.find((pending) => pending.proposalId === staged.proposalId)).toBeDefined();
   });
@@ -415,6 +522,17 @@ describe("applyApprovedChange", () => {
     )) as ProposedChange;
     const staged = await stageProposal(context, TENANT_ID, proposal);
 
+    // Major 3(a): without this, a mutation that deletes updateCaseDetails's
+    // P51 no-op short-circuit (so every call genuinely writes) leaves this
+    // test green on a frozen clock -- the rewritten record's `updatedAt`
+    // lands on the same millisecond as the snapshot and a JSON-string
+    // comparison of two structurally-different-only-in-timestamp objects
+    // still differs, correctly flipping `changed` to true UNLESS the clock
+    // never moved, in which case nothing at all distinguishes "no-op" from
+    // "real write that happened to land in the same millisecond". Advancing
+    // the clock here is what makes that distinction observable, mirroring
+    // `test/crm/updateCaseDetails.test.ts:104`.
+    context.advanceClock(60_000);
     await applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR);
 
     const events = await listCaseEvents(context, TENANT_ID, seeded.caseId);
@@ -423,7 +541,9 @@ describe("applyApprovedChange", () => {
     expect(approvalEvent?.meta.changed).toBe(false);
 
     // The proposal is still terminal -- a decision was made even though
-    // nothing moved, so re-approving it must stay refused.
+    // nothing moved, so re-approving it must stay refused. (This is a
+    // SEPARATE assertion from the one above -- Major 7 / mutation #1 reddens
+    // this test via either one, and each is named for what it actually pins.)
     await expect(applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR)).rejects.toMatchObject({
       statusCode: 409,
     });
@@ -443,12 +563,11 @@ describe("applyApprovedChange", () => {
     )) as ProposedChange;
     const staged = await stageProposal(context, TENANT_ID, proposal);
 
-    // The "changed" signal is `updatedAt` moving (see approval.ts's
-    // domainCallChanged) -- advance the clock so a real write's freshly
-    // computed `updatedAt` is genuinely distinguishable from the snapshot
-    // read a moment earlier, the same idiom updateCaseDetails.test.ts uses
-    // to prove `updatedAt` really moved rather than landing in the same
-    // frozen millisecond.
+    // Not load-bearing for correctness any more (domainCallChanged is a deep
+    // compare, clock-independent -- fix-round-1 Major 3), but kept: it is
+    // still a genuine gap between staging and approval, the same as in
+    // production, and removing it should not turn this test green for the
+    // wrong reason either.
     context.advanceClock(60_000);
     await applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR);
 
@@ -459,7 +578,7 @@ describe("applyApprovedChange", () => {
 });
 
 describe("discardProposal", () => {
-  it("records a reason and never invokes the tool's apply", async () => {
+  it("records a reason on the event, leaves the PENDING partition, and never invokes the tool's apply", async () => {
     const context = buildTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
@@ -471,6 +590,9 @@ describe("discardProposal", () => {
     )) as ProposedChange;
     const staged = await stageProposal(context, TENANT_ID, proposal);
 
+    // Advanced so decidedAt is provably distinguishable from proposedAt
+    // (Major 5), the same reasoning as the approve-path test above.
+    context.advanceClock(60_000);
     const discarded = await discardProposal(context, TENANT_ID, staged.proposalId, ACTOR, "wrong case");
     expect(discarded.status).toBe("DISCARDED");
     expect(discarded.discardReason).toBe("wrong case");
@@ -479,8 +601,34 @@ describe("discardProposal", () => {
       statusCode: 409,
     });
 
+    // Major 4: GSI1PK re-derivation, mirroring the two assertions the
+    // property test already makes for the APPROVED transition. Without this,
+    // a discarded proposal forced back onto the PENDING partition leaves the
+    // whole suite green while `listPendingProposals` keeps returning it
+    // forever -- the exact bug reviewQueue.ts:201-210 documents.
+    const { proposals: pendingAfterDiscard } = await listPendingProposals(context, TENANT_ID);
+    expect(pendingAfterDiscard.map((pending) => pending.proposalId)).not.toContain(staged.proposalId);
+    const storedProposal = await context.table.get(
+      proposalPartitionKey(TENANT_ID, staged.proposalId),
+      PROPOSAL_SORT_KEY,
+    );
+    expect(storedProposal?.status).toBe("DISCARDED");
+    expect(storedProposal?.GSI1PK).toBe(proposalStatusGsi1Pk(TENANT_ID, "DISCARDED"));
+
+    // Major 5: decidedBy/decidedAt on the discard path too, and genuinely
+    // distinct from proposedAt.
+    expect(storedProposal?.decidedBy).toBe(ACTOR);
+    expect(storedProposal?.decidedAt).toBe(context.now().toISOString());
+    expect(storedProposal?.decidedAt).not.toBe(staged.proposedAt);
+
     const events = await listCaseEvents(context, TENANT_ID, seeded.caseId);
-    expect(events.map((event) => event.eventType)).toContain("PROPOSAL_DISCARDED");
+    const discardEvent = events.find((event) => event.eventType === "PROPOSAL_DISCARDED");
+    expect(discardEvent, "no PROPOSAL_DISCARDED event was recorded").toBeDefined();
+    // Major 6: the reason is "the only part a human wrote" (notes §3) -- an
+    // event of the right TYPE existing is not the same as it carrying what
+    // the human actually said.
+    expect(discardEvent?.meta.reason).toBe("wrong case");
+    expect(discardEvent?.meta.proposalId).toBe(staged.proposalId);
     // set_billing's apply is changeBillingStatus, which always writes a
     // BILLING_CHANGED event when it runs -- its absence is the evidence apply
     // was never called.
@@ -590,8 +738,48 @@ describe("listPendingProposals", () => {
   });
 });
 
+// Minor 4: house convention (test/crm/partners.test.ts:129,
+// test/crm/crmEvents.test.ts:48) is an explicit "other-tenant" case for
+// every module that partitions by tenantId. The approval gate had none --
+// the behaviour is already correct (the tenant is inside the partition key)
+// but was unpinned, and this is the module where a cross-tenant apply would
+// be worst.
+describe("tenant isolation", () => {
+  it("keeps a proposal invisible to, and inapplicable/undiscardable by, a different tenant", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seeded.caseId, billingStatus: "BILL_SENT" },
+      ACTOR,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    const otherTenantListing = await listPendingProposals(context, "other-tenant");
+    expect(otherTenantListing.proposals).toEqual([]);
+
+    await expect(
+      applyApprovedChange(context, "other-tenant", staged.proposalId, ACTOR),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    await expect(
+      discardProposal(context, "other-tenant", staged.proposalId, ACTOR, "wrong tenant"),
+    ).rejects.toMatchObject({ statusCode: 404 });
+
+    // And the proposal is untouched by either rejected attempt: still
+    // reachable, still PENDING, under its real tenant.
+    const { proposals } = await listPendingProposals(context, TENANT_ID);
+    expect(proposals.map((pending) => pending.proposalId)).toContain(staged.proposalId);
+  });
+});
+
 describe("HIGH_STAKES_TOOLS / AUTO_APPLIABLE_TOOLS", () => {
-  it("classifies every registered write tool into exactly one of the two sets, and names neither a phantom", () => {
+  // Fix-round-1 ruling: no union-covers-WRITE_TOOLS assertion any more (see
+  // approval.ts's AUTO_APPLIABLE_TOOLS doc comment) -- a write tool may be
+  // classified into neither set on purpose. Disjointness and no-phantom-names
+  // are the two properties that still have to hold unconditionally.
+  it("keeps the two sets disjoint, and names neither a phantom tool", () => {
     const registeredWriteToolNames = new ToolRegistry(WRITE_TOOLS).writeTools().map((tool) => tool.name);
 
     for (const highStakesName of HIGH_STAKES_TOOLS) {
@@ -610,12 +798,14 @@ describe("HIGH_STAKES_TOOLS / AUTO_APPLIABLE_TOOLS", () => {
         `"${autoAppliableName}" is in both HIGH_STAKES_TOOLS and AUTO_APPLIABLE_TOOLS`,
       ).toBe(false);
     }
-    for (const writeToolName of registeredWriteToolNames) {
-      const isClassified = HIGH_STAKES_TOOLS.has(writeToolName) || AUTO_APPLIABLE_TOOLS.has(writeToolName);
-      expect(
-        isClassified,
-        `write tool "${writeToolName}" is in neither HIGH_STAKES_TOOLS nor AUTO_APPLIABLE_TOOLS`,
-      ).toBe(true);
-    }
+  });
+
+  // create_case is deliberately unclassified (fix-round-1 ruling) -- pin
+  // that it is absent from BOTH sets, so removing it from AUTO_APPLIABLE_TOOLS
+  // without ALSO removing it here silently "fixes" the deliberate gap back
+  // into a covered one.
+  it("leaves create_case out of both sets, on purpose", () => {
+    expect(HIGH_STAKES_TOOLS.has("create_case")).toBe(false);
+    expect(AUTO_APPLIABLE_TOOLS.has("create_case")).toBe(false);
   });
 });
