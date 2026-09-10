@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { READ_TOOLS } from "../../src/agent/tools/readTools";
 import { WRITE_TOOLS } from "../../src/agent/tools/writeTools";
 import { ToolRegistry } from "../../src/agent/tools/registry";
-import { createCase } from "../../src/domain/crm/cases";
+import { changeApplicantCustody, createCase, updateCaseDetails } from "../../src/domain/crm/cases";
+import { addLineItem } from "../../src/domain/crm/lineItems";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import type { AppContext } from "../../src/lib/context";
@@ -89,6 +90,38 @@ describe("the write tool registry", () => {
       expect(readTool.apply, `${readTool.name} is in READ_TOOLS but declares an apply`).toBeUndefined();
     }
   });
+
+  // zodObjectToJsonSchema (registry.ts) used to map every array to
+  // {type: "array", items: {type: "string"}} regardless of what it actually
+  // held, so create_case's advertised schema said applicants was an array of
+  // strings. A schema-obedient provider would then hand back
+  // applicants: ["A1"], and ["A1"].map(a => a.applicantRef).join(", ") is ""
+  // -- an approval card reading "applicants: (new case) -> "" for a create.
+  it("describes create_case's applicants as an array of objects, not an array of strings", () => {
+    const definitions = new ToolRegistry(WRITE_TOOLS).toolDefinitions();
+    const createCaseDefinition = definitions.find((definition) => definition.name === "create_case");
+    expect(createCaseDefinition?.inputSchema).toMatchObject({
+      properties: {
+        applicants: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              applicantRef: { type: "string" },
+              travellerId: { type: "string" },
+              passportNumber: { type: "string" },
+            },
+            required: expect.arrayContaining(["applicantRef", "travellerId"]),
+          },
+        },
+      },
+    });
+    // passportNumber is optional -- required must name exactly the other two.
+    const applicantsSchema = (
+      createCaseDefinition?.inputSchema as { properties: { applicants: { items: { required: string[] } } } }
+    ).properties.applicants.items.required;
+    expect(applicantsSchema.sort()).toEqual(["applicantRef", "travellerId"]);
+  });
 });
 
 /**
@@ -171,6 +204,20 @@ describe("every WRITE_TOOLS tool proposes without writing", () => {
       Array.isArray(proposedChange.summary),
       `${tool.name}'s proposal has no summary array`,
     ).toBe(true);
+    // A populated summary, not merely an array: an approval card with zero
+    // rows gives the human nothing to judge.
+    expect(
+      proposedChange.summary.length,
+      `${tool.name}'s proposal has an empty summary`,
+    ).toBeGreaterThan(0);
+    // The exact two fields ruling P35 exists for: proposalId minted by
+    // newId("prop", ...), proposedAt from the injectable clock -- never
+    // `new Date()`. The test clock is frozen (helpers.ts), so a `new Date()`
+    // proposedAt would fail the second assertion immediately.
+    expect(proposedChange.proposalId, `${tool.name}'s proposalId is not prop_-prefixed`).toMatch(/^prop_/);
+    expect(proposedChange.proposedAt, `${tool.name}'s proposedAt did not come from context.now()`).toBe(
+      context.now().toISOString(),
+    );
   });
 });
 
@@ -215,25 +262,28 @@ describe("set_billing", () => {
     expect(anotherSeededCase.billingStatus).toBe("UNBILLED");
     await expect(
       tool.apply!(context, TENANT_ID, { caseId: anotherSeededCase.caseId, billingStatus: "PAID" }, ACTOR),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ statusCode: 409 });
   });
 });
 
 describe("set_custody", () => {
-  it("reads the applicant's from value off the stored case", async () => {
+  it("reads the applicant's from value off the stored case, not the schema default", async () => {
     const context = buildTestContext();
     const seededCase = await seedOneCase(context);
+    // NOT_HELD is CaseApplicantSchema's default -- moving custody off it first
+    // is what stops a hardcoded "NOT_HELD" from passing this assertion.
+    await changeApplicantCustody(context, TENANT_ID, seededCase.caseId, "A1", "WITH_RGS", ACTOR);
 
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_custody")!;
     const proposal = (await tool.execute(
       context,
       TENANT_ID,
-      { caseId: seededCase.caseId, applicantRef: "A1", custody: "WITH_RGS" },
+      { caseId: seededCase.caseId, applicantRef: "A1", custody: "AT_EMBASSY" },
       ACTOR,
     )) as ProposedChange;
 
     expect(proposal.summary).toEqual([
-      { field: "applicants.A1.custody", from: "NOT_HELD", to: "WITH_RGS" },
+      { field: "applicants.A1.custody", from: "WITH_RGS", to: "AT_EMBASSY" },
     ]);
   });
 
@@ -242,9 +292,57 @@ describe("set_custody", () => {
     const seededCase = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_custody")!;
 
+    // toMatchObject({ statusCode: 404 }), not a bare rejects.toThrow(): delete
+    // the notFound guard this pins and currentApplicant.custody throws a raw
+    // TypeError instead -- which also satisfies a bare toThrow().
     await expect(
       tool.execute(context, TENANT_ID, { caseId: seededCase.caseId, applicantRef: "NOPE", custody: "WITH_RGS" }, ACTOR),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("applies through changeApplicantCustody, honouring the custody state machine and the auto-CLOSED derivation", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context);
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_custody")!;
+
+    // NOT_HELD -> WITH_RGS is the one legal first move (stateMachines.ts
+    // CUSTODY_TRANSITIONS).
+    const afterFirstMove = (await tool.apply!(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, applicantRef: "A1", custody: "WITH_RGS" },
+      ACTOR,
+    )) as crm.CrmCase;
+    expect(afterFirstMove.applicants[0]?.custody).toBe("WITH_RGS");
+
+    // NOT_HELD -> RETURNED, skipping WITH_RGS, is not a legal edge on a fresh
+    // case -- apply must be the real mutator honouring CUSTODY_TRANSITIONS,
+    // not a shortcut that writes whatever custody it is given.
+    const anotherSeededCase = await seedOneCase(context, "80003");
+    await expect(
+      tool.apply!(
+        context,
+        TENANT_ID,
+        { caseId: anotherSeededCase.caseId, applicantRef: "A1", custody: "RETURNED" },
+        ACTOR,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    // Completing the journey (WITH_RGS -> RETURNED) once the bill is settled
+    // closes the case automatically -- a derivation changeApplicantCustody
+    // performs internally (cases.ts applyDerivedCaseStatusIfLegal), not
+    // something set_custody's tool code does itself.
+    const billingTool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    await billingTool.apply!(context, TENANT_ID, { caseId: seededCase.caseId, billingStatus: "BILL_SENT" }, ACTOR);
+    await billingTool.apply!(context, TENANT_ID, { caseId: seededCase.caseId, billingStatus: "PAID" }, ACTOR);
+    const afterReturned = (await tool.apply!(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, applicantRef: "A1", custody: "RETURNED" },
+      ACTOR,
+    )) as crm.CrmCase;
+    expect(afterReturned.applicants[0]?.custody).toBe("RETURNED");
+    expect(afterReturned.caseStatus).toBe("CLOSED");
   });
 });
 
@@ -252,21 +350,30 @@ describe("add_line_item", () => {
   it("describes the line being added and reports the stored total, without recomputing it", async () => {
     const context = buildTestContext();
     const seededCase = await seedOneCase(context);
-    expect(seededCase.totalInr).toBe(0);
+    // Seed one real line first -- lineItems: [] / totalInr: 0 is the schema
+    // default, and asserting against that default is indistinguishable from a
+    // tool that never reads the stored case at all.
+    await addLineItem(
+      context,
+      TENANT_ID,
+      seededCase.caseId,
+      { lineItemCode: "VISA_SERVICE_FEE", quantity: 2, unitPriceInr: 5000 },
+      ACTOR,
+    );
 
     const tool = new ToolRegistry(WRITE_TOOLS).get("add_line_item")!;
     const proposal = (await tool.execute(
       context,
       TENANT_ID,
-      { caseId: seededCase.caseId, lineItemCode: "VISA_SERVICE_FEE", quantity: 2, unitPriceInr: 5000 },
+      { caseId: seededCase.caseId, lineItemCode: "GOVT_FEE", quantity: 1, unitPriceInr: 1500 },
       ACTOR,
     )) as ProposedChange;
 
     expect(proposal.summary).toEqual([
       {
         field: "lineItems",
-        from: "0 line(s), totalInr 0",
-        to: "+2 x VISA_SERVICE_FEE @ 5000/unit",
+        from: "1 line(s), totalInr 10000",
+        to: "+1 x GOVT_FEE @ 1500/unit",
       },
     ]);
   });
@@ -287,7 +394,7 @@ describe("add_line_item", () => {
 });
 
 describe("update_case", () => {
-  it("reports (not set) for a field with no prior value, and the stored value otherwise", async () => {
+  it("reports (not set) for a field with no prior value", async () => {
     const context = buildTestContext();
     const seededCase = await seedOneCase(context);
     expect(seededCase.appointmentDate).toBeUndefined();
@@ -305,10 +412,77 @@ describe("update_case", () => {
     ]);
   });
 
+  it("reports the stored value as from when a prior value exists, not (not set)", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context);
+    await updateCaseDetails(context, TENANT_ID, seededCase.caseId, { appointmentDate: "2026-09-09" }, ACTOR);
+
+    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, appointmentDate: "2026-10-01" },
+      ACTOR,
+    )) as ProposedChange;
+
+    expect(proposal.summary).toEqual([
+      { field: "appointmentDate", from: "2026-09-09", to: "2026-10-01" },
+    ]);
+  });
+
+  it("reads visaType's from off the stored case too, not only appointmentDate's", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context);
+    // seedOneCase sets visaType at creation -- already off the "unset" state,
+    // so this covers a second of the six from-branches for free.
+    expect(seededCase.visaType).toBe("EVISA_TOURIST");
+
+    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, visaType: "TOURIST" },
+      ACTOR,
+    )) as ProposedChange;
+
+    expect(proposal.summary).toEqual([
+      { field: "visaType", from: "EVISA_TOURIST", to: "TOURIST" },
+    ]);
+  });
+
+  it("refuses a call with no fields to change instead of proposing an empty diff", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context);
+    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
+
+    await expect(
+      tool.execute(context, TENANT_ID, { caseId: seededCase.caseId }, ACTOR),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("applies through updateCaseDetails, which still ignores the state-machine axes", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context);
+    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
+
+    const updatedCase = (await tool.apply!(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, appointmentDate: "2026-10-01", caseStatus: "DECIDED" } as never,
+      ACTOR,
+    )) as crm.CrmCase;
+
+    expect(updatedCase.appointmentDate).toBe("2026-10-01");
+    expect(updatedCase.caseStatus).toBe(seededCase.caseStatus);
+  });
+
   // The tool's own input schema is the first gate: it declares no
-  // caseStatus/billingStatus property at all, and zod's default (non-strict)
-  // object parse strips unknown keys rather than passing them through -- so
-  // apply() never sees either axis even if a caller's raw JSON carries one.
+  // caseStatus/billingStatus property at all. This is a property of the
+  // SCHEMA that a future call path relying on `inputSchema.parse` will get
+  // for free -- nothing in src/ calls it yet (grep -rn "inputSchema"
+  // services/api/src shows it read only by zodObjectToJsonSchema); the
+  // enforcement that IS load-bearing today is updateCaseDetails's own
+  // allow-list (see cases.ts, and the apply test above).
   it("strips a state-machine-axis key instead of passing it through", () => {
     const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
     const parsed = tool.inputSchema.parse({ caseId: "case_1", caseStatus: "DECIDED" }) as Record<
@@ -350,7 +524,6 @@ describe("create_case", () => {
     expect(proposal.summary.length).toBeGreaterThan(0);
     for (const summaryLine of proposal.summary) {
       expect(summaryLine.from).toBe("(new case)");
-      expect(summaryLine.from).not.toBe("unknown");
     }
   });
 

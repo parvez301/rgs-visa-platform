@@ -146,13 +146,39 @@ export async function updateCaseDetails(
 ): Promise<crm.CrmCase> {
   const currentCase = await readCaseOrThrow(context, tenantId, caseId);
 
+  // Named for the audit trail: a field that actually MOVED, not merely one the
+  // caller supplied. Re-supplying a value the case already has must not read
+  // back as a change nobody made.
   const changedFieldNames: string[] = [];
-  if (input.visaType !== undefined) changedFieldNames.push("visaType");
-  if (input.entryType !== undefined) changedFieldNames.push("entryType");
-  if (input.processing !== undefined) changedFieldNames.push("processing");
-  if (input.submissionDate !== undefined) changedFieldNames.push("submissionDate");
-  if (input.appointmentDate !== undefined) changedFieldNames.push("appointmentDate");
-  if (input.expectedCollectionDate !== undefined) changedFieldNames.push("expectedCollectionDate");
+  if (input.visaType !== undefined && input.visaType !== currentCase.visaType) {
+    changedFieldNames.push("visaType");
+  }
+  if (input.entryType !== undefined && input.entryType !== currentCase.entryType) {
+    changedFieldNames.push("entryType");
+  }
+  if (input.processing !== undefined && input.processing !== currentCase.processing) {
+    changedFieldNames.push("processing");
+  }
+  if (input.submissionDate !== undefined && input.submissionDate !== currentCase.submissionDate) {
+    changedFieldNames.push("submissionDate");
+  }
+  if (input.appointmentDate !== undefined && input.appointmentDate !== currentCase.appointmentDate) {
+    changedFieldNames.push("appointmentDate");
+  }
+  if (
+    input.expectedCollectionDate !== undefined &&
+    input.expectedCollectionDate !== currentCase.expectedCollectionDate
+  ) {
+    changedFieldNames.push("expectedCollectionDate");
+  }
+
+  // Nothing moved -- an empty input, or every supplied value already matches
+  // what's stored. Returning the case as-is, before the parse/write/event
+  // below, is what keeps a no-op call from bumping updatedAt and recording a
+  // CASE_UPDATED event that names no real change.
+  if (changedFieldNames.length === 0) {
+    return currentCase;
+  }
 
   // Unwrapped, a ZodError here is not an ApiError, and router.ts maps only
   // ApiError subclasses -- so a caller-supplied date that fails CrmCaseSchema's

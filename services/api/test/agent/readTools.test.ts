@@ -7,7 +7,9 @@ import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { createCase } from "../../src/domain/crm/cases";
 import { writeCase } from "../../src/domain/crm/caseStore";
+import { putCountryChecklist } from "../../src/domain/crm/countryChecklist";
 import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "../../src/domain/crm/keys";
+import type { AppContext } from "../../src/lib/context";
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
@@ -40,6 +42,62 @@ async function seedUnparseablePartnerItem(
   return partnerId;
 }
 
+/**
+ * Wraps a real context's table so a read still works but any put/delete
+ * throws immediately. Identical in shape to the helper of the same name in
+ * writeTools.test.ts -- duplicated rather than imported because that file
+ * exports nothing, and a read tool reaching a write is exactly the bug this
+ * counterpart property test exists to catch (P49): a read tool has no
+ * `apply`, so the only seam an accidental write could ever occur on is
+ * inside `execute` itself.
+ */
+function refuseWrites(context: TestContext, toolNameForMessage: string): AppContext {
+  return {
+    ...context,
+    table: {
+      get: (partitionKey, sortKey, options) => context.table.get(partitionKey, sortKey, options),
+      query: (partitionKey, options) => context.table.query(partitionKey, options),
+      queryGsi: (indexName, partitionKey, options) =>
+        context.table.queryGsi(indexName, partitionKey, options),
+      put: () => {
+        throw new Error(`read tool "${toolNameForMessage}"'s execute reached put()`);
+      },
+      delete: () => {
+        throw new Error(`read tool "${toolNameForMessage}"'s execute reached delete()`);
+      },
+    },
+  };
+}
+
+/**
+ * One valid, minimal input per read tool, built against fixtures seeded
+ * through the real (write-allowed) context. Keyed by tool name so the
+ * property test below can drive every tool in READ_TOOLS without knowing its
+ * shape up front -- and so a read tool added later with no entry here fails
+ * loudly instead of silently skipping the property it exists to prove.
+ */
+function minimalInputForReadTool(
+  toolName: string,
+  seededCase: { caseId: string },
+): Record<string, unknown> {
+  switch (toolName) {
+    case "get_case":
+      return { caseId: seededCase.caseId };
+    case "search_cases":
+      return { caseStatus: "NEW" };
+    case "find_traveller":
+      return { fullName: "ASHA RAO" };
+    case "list_partners":
+      return {};
+    case "aggregate":
+      return { groupBy: "caseStatus" };
+    case "get_country_checklist":
+      return { countryCode: "JP" };
+    default:
+      throw new Error(`no minimal input registered for read tool "${toolName}" -- add one above`);
+  }
+}
+
 describe("the read tool registry", () => {
   it("declares every read tool as kind 'read'", () => {
     const registry = new ToolRegistry(READ_TOOLS);
@@ -54,6 +112,46 @@ describe("the read tool registry", () => {
     const getCaseDefinition = definitions.find((definition) => definition.name === "get_case");
     expect(getCaseDefinition?.inputSchema).toMatchObject({ type: "object" });
     expect(getCaseDefinition?.description.length).toBeGreaterThan(10);
+  });
+});
+
+// The read-side counterpart of writeTools.test.ts's "every WRITE_TOOLS tool
+// proposes without writing" property test (P49). Write tools are gated by
+// construction -- execute takes a write-refusing context and apply is the
+// only path to the table -- but nothing enforced the same for reads until
+// now: a read tool that slipped a put/delete into its execute would pass
+// every other test in this file, because none of them run against a
+// write-refusing context.
+describe("every READ_TOOLS tool resolves without ever reaching the table's write side", () => {
+  it.each(READ_TOOLS)("$name: execute resolves without reaching put() or delete()", async (tool) => {
+    const context = buildTestContext();
+    const partner = await createPartner(
+      context,
+      TENANT_ID,
+      { canonicalName: "Ozzy Travels", partnerType: "AGENCY" },
+      ACTOR,
+    );
+    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "ASHA RAO" });
+    const seededCase = await createCase(
+      context,
+      TENANT_ID,
+      {
+        caseRef: "40099",
+        caseType: "VISA",
+        visaType: "EVISA_TOURIST",
+        partnerId: partner.partnerId,
+        destinationCountry: "JP",
+        receivedDate: "2026-09-01",
+        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
+      },
+      ACTOR,
+    );
+    await putCountryChecklist(context, TENANT_ID, { countryCode: "JP", requiredDocuments: ["PASSPORT"] }, ACTOR);
+
+    const input = minimalInputForReadTool(tool.name, seededCase);
+    const writeRefusingContext = refuseWrites(context, tool.name);
+
+    await expect(tool.execute(writeRefusingContext, TENANT_ID, input, ACTOR)).resolves.toBeDefined();
   });
 });
 

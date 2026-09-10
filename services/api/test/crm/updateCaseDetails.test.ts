@@ -73,6 +73,9 @@ describe("updateCaseDetails", () => {
     const context = buildTestContext();
     const seeded = await seedOneCase(context);
 
+    // Both fields start unset on a freshly seeded case, so "moved" and
+    // "present in the input" agree here -- that distinction is what the two
+    // tests below this one exist to pull apart.
     await updateCaseDetails(
       context,
       TENANT_ID,
@@ -88,6 +91,54 @@ describe("updateCaseDetails", () => {
     // pass a toContain("appointmentDate") assertion, which proves nothing.
     expect(updateEvent?.meta["changedFields"]).toBe("appointmentDate,expectedCollectionDate");
     expect(updateEvent?.actorEmail).toBe(ACTOR);
+  });
+
+  it("names only the field that actually moved when one supplied value already matches storage", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    await updateCaseDetails(context, TENANT_ID, seeded.caseId, { appointmentDate: "2026-10-01" }, ACTOR);
+
+    // Two events minted in the same frozen millisecond sort by their random
+    // id suffix, not by insertion order -- advance the clock so the second
+    // event's SK genuinely sorts after the first and events[1] is reliably it.
+    context.advanceClock(60_000);
+
+    // Re-supplying the SAME appointmentDate alongside a genuinely new
+    // expectedCollectionDate: present-in-input semantics would have named
+    // both; moved-fields semantics names only the one that changed.
+    await updateCaseDetails(
+      context,
+      TENANT_ID,
+      seeded.caseId,
+      { appointmentDate: "2026-10-01", expectedCollectionDate: "2026-10-15" },
+      ACTOR,
+    );
+
+    const events = (await listCaseEvents(context, TENANT_ID, seeded.caseId)).filter(
+      (event) => event.eventType === "CASE_UPDATED",
+    );
+    expect(events).toHaveLength(2);
+    expect(events[1]?.meta["changedFields"]).toBe("expectedCollectionDate");
+  });
+
+  it("is a no-op -- no write, no event -- when nothing actually changes", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+
+    const resultOnEmptyInput = await updateCaseDetails(context, TENANT_ID, seeded.caseId, {}, ACTOR);
+    expect(resultOnEmptyInput).toEqual(seeded);
+
+    await updateCaseDetails(context, TENANT_ID, seeded.caseId, { appointmentDate: "2026-10-01" }, ACTOR);
+    await updateCaseDetails(context, TENANT_ID, seeded.caseId, { appointmentDate: "2026-10-01" }, ACTOR);
+
+    const updateEvents = (await listCaseEvents(context, TENANT_ID, seeded.caseId)).filter(
+      (event) => event.eventType === "CASE_UPDATED",
+    );
+    // Exactly one real event: the appointmentDate move. Neither the empty
+    // input nor the unchanged re-supply recorded anything -- under the old
+    // present-in-input semantics both of those would have added their own
+    // CASE_UPDATED event too, giving three instead of one.
+    expect(updateEvents).toHaveLength(1);
   });
 
   // The one that matters: caseStatus and billingStatus each have their own
@@ -112,15 +163,18 @@ describe("updateCaseDetails", () => {
   it("rejects a malformed date instead of a bare 500", async () => {
     const context = buildTestContext();
     const seeded = await seedOneCase(context);
+    // toMatchObject({ statusCode }), not a bare rejects.toThrow(): an
+    // unwrapped ZodError throws too, so a bare toThrow() cannot tell the 400
+    // this guard exists to produce apart from the 500 it exists to prevent.
     await expect(
       updateCaseDetails(context, TENANT_ID, seeded.caseId, { appointmentDate: "not-a-date" }, ACTOR),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it("404s on a caseId that does not exist", async () => {
     const context = buildTestContext();
     await expect(
       updateCaseDetails(context, TENANT_ID, "case_missing", { appointmentDate: "2026-10-01" }, ACTOR),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 });

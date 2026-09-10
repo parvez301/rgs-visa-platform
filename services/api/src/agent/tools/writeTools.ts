@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
-import { notFound } from "../../lib/errors";
+import { badRequest, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import {
   changeApplicantCustody,
@@ -197,10 +197,37 @@ const updateCaseTool: AgentTool<UpdateCaseToolInput> = {
         to: input.expectedCollectionDate,
       });
     }
+    // Every field this tool can touch is optional, so `{ caseId }` alone is a
+    // legal call -- and an approval card with zero rows gives the human
+    // nothing to judge. Refuse it here rather than proposing an empty diff.
+    if (summary.length === 0) {
+      throw badRequest("update_case needs at least one field to change");
+    }
     return proposalFrom(context, "update_case", input, summary, actorEmail, input.caseId);
   },
   apply: async (context, tenantId, input, actorEmail) =>
-    updateCaseDetails(context, tenantId, input.caseId, input, actorEmail),
+    // A six-field literal, not `input` itself: `input` is `UpdateCaseToolInput`,
+    // which also carries `caseId`, and it only *happens* to be safe to hand to
+    // `updateCaseDetails` wholesale because that function is allow-list based.
+    // The design premise here is "never trust the caller's object shape" --
+    // keeping the two independent means a future field added to one cannot
+    // silently reach the other.
+    updateCaseDetails(
+      context,
+      tenantId,
+      input.caseId,
+      {
+        ...(input.visaType !== undefined ? { visaType: input.visaType } : {}),
+        ...(input.entryType !== undefined ? { entryType: input.entryType } : {}),
+        ...(input.processing !== undefined ? { processing: input.processing } : {}),
+        ...(input.submissionDate !== undefined ? { submissionDate: input.submissionDate } : {}),
+        ...(input.appointmentDate !== undefined ? { appointmentDate: input.appointmentDate } : {}),
+        ...(input.expectedCollectionDate !== undefined
+          ? { expectedCollectionDate: input.expectedCollectionDate }
+          : {}),
+      },
+      actorEmail,
+    ),
 };
 
 type AddLineItemToolInput = {

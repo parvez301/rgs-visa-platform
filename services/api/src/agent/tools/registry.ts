@@ -32,9 +32,11 @@ export interface AgentTool<TInput = Record<string, unknown>> {
 
 /**
  * Minimal Zod -> JSON Schema. Deliberately not a dependency: the tool inputs in
- * this plan are flat objects of strings, numbers, booleans, enums and arrays of
- * strings, and a whole library to convert those is weight we do not need.
- * If a tool ever needs a nested object, extend this and its test together.
+ * this plan are flat objects of strings, numbers, booleans, enums, arrays of
+ * those, and -- since `create_case.applicants` -- one level of arrays of
+ * nested objects, and a whole library to convert those is weight we do not
+ * need. If a tool ever needs a shape beyond this, extend this and its test
+ * together.
  */
 export function zodObjectToJsonSchema(schema: z.ZodType<unknown>): Record<string, unknown> {
   const objectSchema = schema as unknown as z.ZodObject<z.ZodRawShape>;
@@ -47,20 +49,38 @@ export function zodObjectToJsonSchema(schema: z.ZodType<unknown>): Record<string
     if (!(propertySchema instanceof z.ZodOptional)) {
       requiredPropertyNames.push(propertyName);
     }
-    if (unwrapped instanceof z.ZodEnum) {
-      properties[propertyName] = { type: "string", enum: unwrapped.options };
-    } else if (unwrapped instanceof z.ZodNumber) {
-      properties[propertyName] = { type: "number" };
-    } else if (unwrapped instanceof z.ZodBoolean) {
-      properties[propertyName] = { type: "boolean" };
-    } else if (unwrapped instanceof z.ZodArray) {
-      properties[propertyName] = { type: "array", items: { type: "string" } };
-    } else {
-      properties[propertyName] = { type: "string" };
-    }
+    properties[propertyName] = jsonSchemaForZodType(unwrapped);
   }
 
   return { type: "object", properties, required: requiredPropertyNames };
+}
+
+/**
+ * The per-property half of the conversion above, factored out so an array's
+ * element schema recurses through the same rules a top-level property uses.
+ * `create_case.applicants` -- an array of `{applicantRef, travellerId,
+ * passportNumber?}` objects -- is the one shape in this plan that needs the
+ * `ZodArray` branch to recurse rather than fall back to the string default;
+ * without it, the schema handed to a provider described every array as an
+ * array of strings regardless of what it actually held.
+ */
+function jsonSchemaForZodType(zodType: z.ZodTypeAny): Record<string, unknown> {
+  if (zodType instanceof z.ZodObject) {
+    return zodObjectToJsonSchema(zodType);
+  }
+  if (zodType instanceof z.ZodArray) {
+    return { type: "array", items: jsonSchemaForZodType(zodType.element) };
+  }
+  if (zodType instanceof z.ZodEnum) {
+    return { type: "string", enum: zodType.options };
+  }
+  if (zodType instanceof z.ZodNumber) {
+    return { type: "number" };
+  }
+  if (zodType instanceof z.ZodBoolean) {
+    return { type: "boolean" };
+  }
+  return { type: "string" };
 }
 
 export class ToolRegistry {
