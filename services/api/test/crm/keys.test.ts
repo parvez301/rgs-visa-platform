@@ -150,10 +150,13 @@ describe("crm keys", () => {
     expect(keyLiteralsIn("import { META_SORT_KEY } from './keys';")).toEqual([]);
   });
 
-  // Recursive, not a flat `readdir`: both directories this scan covers have
-  // subdirectories (domain/crm has none today, but src/agent/ has
-  // providers/ and tools/) and a scan that only sees the top level would
-  // pass a key literal planted one directory deeper without complaint.
+  // Recursive, not a flat `readdir`: one of the two directories this scan
+  // covers already has subdirectories today (src/agent/ has providers/ and
+  // tools/; domain/crm/ has none yet, but nothing stops it growing one), and
+  // a scan that only sees the top level would pass a key literal planted one
+  // directory deeper without complaint (fix-round-2 NEW-5: this comment used
+  // to claim "both...have subdirectories" and then contradict itself in its
+  // own parenthesis).
   async function collectTsFilesRecursively(directoryUrl: URL): Promise<string[]> {
     const entries = await readdir(directoryUrl, { recursive: true });
     return entries.filter((entryName) => entryName.endsWith(".ts"));

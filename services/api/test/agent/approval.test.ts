@@ -7,6 +7,7 @@ import {
   HIGH_STAKES_TOOLS,
   applyApprovedChange,
   discardProposal,
+  getProposal,
   listPendingProposals,
   stageProposal,
   type ProposedChange,
@@ -889,6 +890,35 @@ describe("listPendingProposals", () => {
 
     const { unreadableProposalIds } = await listPendingProposals(context, TENANT_ID);
     expect(unreadableProposalIds).toEqual([]);
+  });
+});
+
+// fix-round-2 N1: `getProposal` is the read-back `loop.ts`'s trust ladder now
+// uses instead of inferring an outcome from the fact that `applyApprovedChange`
+// threw. Unlike `applyApprovedChange`'s own internal read, this one must work
+// at ANY status -- that is the entire point of it.
+describe("getProposal", () => {
+  it("reads a proposal back at whatever status it is actually stored at", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seeded.caseId, processing: "EXPRESS" },
+      ACTOR,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    await expect(getProposal(context, TENANT_ID, staged.proposalId)).resolves.toMatchObject({ status: "PENDING" });
+
+    await applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR);
+    await expect(getProposal(context, TENANT_ID, staged.proposalId)).resolves.toMatchObject({ status: "APPROVED" });
+  });
+
+  it("returns undefined for a proposal id nothing was ever staged under, rather than throwing", async () => {
+    const context = buildTestContext();
+    await expect(getProposal(context, TENANT_ID, "prop_never_existed")).resolves.toBeUndefined();
   });
 });
 

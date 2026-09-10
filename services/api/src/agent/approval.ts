@@ -213,16 +213,41 @@ export async function listPendingProposals(
   return { proposals: records, unreadableProposalIds: unreadableRecordIds };
 }
 
+/**
+ * Reads a proposal back at whatever status the store actually holds, rather
+ * than the PENDING `readProposalOrThrow` below requires. `undefined` only
+ * when the row is genuinely absent -- a read or parse failure still throws,
+ * the same as `readProposalOrThrow`, because both are "the read-back itself
+ * failed" from a caller's point of view, not "nothing is there."
+ *
+ * Exported for `loop.ts`'s trust ladder (fix-round-2, finding N1): after
+ * `applyApprovedChange` throws, the only way to know whether it failed
+ * before or after the domain mutation actually ran is to look, not to
+ * assume -- see the comment on `applyApprovedChange`'s catch site in
+ * `loop.ts` for the reasoning, and `services/migration/src/importCli.ts`'s
+ * `tableRecordingWrites` for the precedent this follows (observe the
+ * outcome, do not infer it from the fact that something threw).
+ */
+export async function getProposal(
+  context: AppContext,
+  tenantId: string,
+  proposalId: string,
+): Promise<ProposedChange | undefined> {
+  const storedItem = await context.table.get(proposalPartitionKey(tenantId, proposalId), PROPOSAL_SORT_KEY);
+  if (storedItem === undefined) return undefined;
+  return parseStoredProposal(storedItem);
+}
+
 async function readProposalOrThrow(
   context: AppContext,
   tenantId: string,
   proposalId: string,
 ): Promise<ProposedChange> {
-  const storedItem = await context.table.get(proposalPartitionKey(tenantId, proposalId), PROPOSAL_SORT_KEY);
-  if (storedItem === undefined) {
+  const proposal = await getProposal(context, tenantId, proposalId);
+  if (proposal === undefined) {
     throw notFound(`Proposal ${proposalId}`);
   }
-  return parseStoredProposal(storedItem);
+  return proposal;
 }
 
 function extractCaseId(domainResult: unknown): string | undefined {

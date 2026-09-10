@@ -5,6 +5,7 @@ import {
 } from "../../src/agent/providers/config";
 import { FakeLlmProvider } from "../../src/agent/providers/fake";
 import { createLlmProvider } from "../../src/agent/providers/index";
+import type { AgentMessage } from "../../src/agent/providers/types";
 
 describe("llmProviderConfigFromEnvironment", () => {
   it("reads provider, model and key from the environment", () => {
@@ -120,6 +121,27 @@ describe("FakeLlmProvider", () => {
     await expect(
       fakeProvider.complete({ system: "s", messages: [], tools: [] }),
     ).rejects.toThrow(/scripted/);
+  });
+
+  // fix-round-2 NEW-2: `runAgentTurn` passes the SAME `messages` array to
+  // every `llm.complete()` call in a turn, appending to it between calls.
+  // Without its own snapshot, `receivedRequests[n].messages` would alias
+  // that live array -- every entry showing whatever the array looks like by
+  // the time the LAST call happened, not what was actually sent on call n.
+  // Reverting the fix's one line (`messages: [...request.messages]` back to
+  // `push(request)`) leaves the rest of this suite green (fix-round-1's A2
+  // fix has no test of its own at HEAD), which is exactly why this test
+  // exists: it fails on that revert alone, with no second defect required.
+  it("snapshots the messages it was called with, so a caller that keeps appending cannot rewrite history", async () => {
+    const fakeProvider = new FakeLlmProvider([
+      { text: "a", toolCalls: [] },
+      { text: "b", toolCalls: [] },
+    ]);
+    const liveMessages: AgentMessage[] = [{ role: "user", content: "first" }];
+    await fakeProvider.complete({ system: "s", messages: liveMessages, tools: [] });
+    liveMessages.push({ role: "assistant", content: "added after the call" });
+
+    expect(fakeProvider.receivedRequests[0]?.messages).toEqual([{ role: "user", content: "first" }]);
   });
 });
 

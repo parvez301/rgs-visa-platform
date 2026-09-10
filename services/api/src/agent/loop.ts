@@ -6,6 +6,7 @@ import {
   AUTO_APPLIABLE_TOOLS,
   HIGH_STAKES_TOOLS,
   applyApprovedChange,
+  getProposal,
   stageProposal,
   type ProposedChange,
 } from "./approval";
@@ -231,16 +232,22 @@ export async function runAgentTurn(
           await stageProposal(context, tenantId, proposedChange);
           // A SEPARATE try around only the apply half (fix-round-1 A1 /
           // MAJ-6): `applyApprovedChange` can still throw after staging
-          // succeeded -- any domain-level refusal inside `apply` does this,
-          // e.g. `set_custody` proposing a custody transition its own
-          // `execute` never validates. The row it wrote is real and PENDING,
-          // not gone, so the outer catch's generic "something failed"
-          // message would misdescribe what happened and the proposal would
-          // be named in neither `proposals` nor `appliedChanges` while a
-          // real row sat in the queue -- an orphan the caller cannot see or
-          // approve. Recording it here keeps the turn's result honest: the
-          // write is staged, waiting on a human, exactly like any other
-          // proposal that never attempted auto-apply.
+          // succeeded. Round 1's fix recorded every such throw as "still
+          // PENDING", inferred from the mere fact that something threw --
+          // right for a domain-level refusal inside `apply()` itself (e.g.
+          // `set_custody` proposing a custody transition its own `execute`
+          // never validates: nothing moved, the row really is still
+          // PENDING), but exactly backwards for a failure in one of the two
+          // writes `applyApprovedChange` makes AFTER `apply()` already
+          // succeeded (the approval write, or the audit event) -- there the
+          // row is already APPROVED and the case really moved (fix-round-2
+          // finding N1: round 1's fix for a dishonest turn result
+          // introduced a differently dishonest one). The catch below reads
+          // the row back and believes what it says instead of what the
+          // catch assumes -- the same lesson
+          // `services/migration/src/importCli.ts`'s `tableRecordingWrites`
+          // already paid for once (observe whether a write happened; do not
+          // deduce it from how far the code got before throwing).
           try {
             await applyApprovedChange(context, tenantId, proposedChange.proposalId, input.actorEmail, undefined, true);
             appliedChanges.push({
@@ -258,15 +265,58 @@ export async function runAgentTurn(
             );
           } catch (applyError) {
             const applyErrorMessage = applyError instanceof Error ? applyError.message : String(applyError);
-            proposals.push(proposedChange);
-            messages.push(
-              toolResultMessage(
-                toolCall.toolCallId,
-                matchedTool.name,
-                `Could not apply this automatically (${applyErrorMessage}). Staged for human approval instead ` +
-                  `(proposalId: ${proposedChange.proposalId}).`,
-              ),
-            );
+            // Observed, not inferred: read the row back and classify it by
+            // the status the store actually holds. A read-back failure of
+            // its own is reported as indeterminate below, naming the
+            // proposalId rather than guessing in either direction.
+            let observedProposal: ProposedChange | undefined;
+            try {
+              observedProposal = await getProposal(context, tenantId, proposedChange.proposalId);
+            } catch {
+              observedProposal = undefined;
+            }
+
+            if (observedProposal?.status === "APPROVED") {
+              // `apply()` ran and the approval write landed; a write AFTER
+              // that point failed (in practice, the audit event). The
+              // change is real -- say so, not the opposite.
+              appliedChanges.push(observedProposal);
+              messages.push(
+                toolResultMessage(
+                  toolCall.toolCallId,
+                  matchedTool.name,
+                  `Applied on your behalf (proposalId: ${proposedChange.proposalId}), though recording it hit an ` +
+                    `error afterwards (${applyErrorMessage}). You can still undo this.`,
+                ),
+              );
+            } else if (observedProposal?.status === "PENDING") {
+              // Nothing moved -- the row this loop staged is still exactly
+              // that.
+              proposals.push(observedProposal);
+              messages.push(
+                toolResultMessage(
+                  toolCall.toolCallId,
+                  matchedTool.name,
+                  `Could not apply this automatically (${applyErrorMessage}). Staged for human approval instead ` +
+                    `(proposalId: ${proposedChange.proposalId}).`,
+                ),
+              );
+            } else {
+              // The read-back itself failed, or the row is in a state this
+              // branch cannot explain (DISCARDED, or missing). Do not guess
+              // which way this went -- name the id so a human can look it up
+              // directly instead of trusting a turn result that might be
+              // wrong either way.
+              messages.push(
+                toolResultMessage(
+                  toolCall.toolCallId,
+                  matchedTool.name,
+                  `Something went wrong applying this (${applyErrorMessage}), and I could not confirm whether it ` +
+                    `went through. Please check proposal ${proposedChange.proposalId} directly rather than ` +
+                    `assuming either way.`,
+                ),
+              );
+            }
           }
         } else {
           await stageProposal(context, tenantId, proposedChange);

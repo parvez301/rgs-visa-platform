@@ -598,16 +598,33 @@ describe("runAgentTurn", () => {
   // instead of `input.actorEmail` reddened nothing, because every test's
   // caller and every test's seeded prefs happened to share ACTOR's own
   // literal. The real caller here (REAL_CALLER) is deliberately a THIRD
-  // identity, distinct from both ACTOR (who is opted in to auto-apply) and
-  // any constant the loop might hardcode -- so the write must stay staged
-  // (proving prefs were read for the real caller, not for ACTOR) and the
-  // proposal must name REAL_CALLER as its proposer (proving the identity
-  // threaded into execute() is the real one, not a stand-in).
+  // identity, distinct from ACTOR (who is opted in to auto-apply) and from
+  // the two constants the loop hardcoded before B6/N3 closed them (fix-
+  // round-2 NEW-6: the prior wording claimed this was distinct from "any
+  // constant the loop might hardcode", which overstates what the test
+  // actually proves) -- so the write must stay staged (proving prefs were
+  // read for the real caller, not for ACTOR), the proposal must name
+  // REAL_CALLER as its proposer (proving the identity threaded into
+  // execute() is the real one, not a stand-in), and ACTOR's own private
+  // memory must not reach a prompt built for REAL_CALLER (fix-round-2 N3:
+  // the same USER-scope leak B3 closed inside `buildSystemPrompt`, one call
+  // frame earlier -- nothing previously pinned the identity handed TO it).
   it("reads trust-level prefs and records proposals under the actual caller's identity, not a hardcoded stand-in", async () => {
     const baseContext = buildTestContext();
     const seededCase = await seedOneCase(baseContext, "ID-01");
     const REAL_CALLER = "manager@rgs.local";
     await setUserPrefs(baseContext, TENANT_ID, ACTOR, { trustLevel: 2, autoApplyOptIn: true });
+    await rememberMemory(
+      baseContext,
+      TENANT_ID,
+      {
+        scope: memoryScope("USER", ACTOR),
+        memoryKey: "note_to_self",
+        text: "ACTOR's own private note -- REAL_CALLER must never see this.",
+        sourceCaseId: seededCase.caseId,
+      },
+      ACTOR,
+    );
     const contextWithLlm = Object.assign(baseContext, {
       llm: new FakeLlmProvider([
         {
@@ -633,6 +650,11 @@ describe("runAgentTurn", () => {
     expect(result.appliedChanges).toHaveLength(0);
     expect(result.proposals).toHaveLength(1);
     expect(result.proposals[0]?.proposedBy).toBe(REAL_CALLER);
+
+    // N3: the prompt itself must be built for REAL_CALLER, not ACTOR --
+    // proved separately from the proposal-identity assertions above.
+    const systemPrompt = contextWithLlm.llm.receivedRequests[0]?.system ?? "";
+    expect(systemPrompt).not.toContain("ACTOR's own private note");
   });
 
   // B8 / review Probe 1: the redundant !HIGH_STAKES_TOOLS.has(...) conjunct
@@ -774,5 +796,82 @@ describe("runAgentTurn", () => {
     const secondRequestMessages = context.llm.receivedRequests[1]?.messages ?? [];
     const toolResult = secondRequestMessages.find((message) => message.role === "tool_result");
     expect(toolResult?.content).toContain("Staged for human approval");
+  });
+
+  // fix-round-2 N1: the inverse of MAJ-6, and round 1's own fault (the
+  // coordinator's ruling, not the implementer's -- A1 said "record it in
+  // `proposals` when the subsequent apply throws" and never said what the
+  // catch may assume about WHERE in `applyApprovedChange` the throw came
+  // from). `applyApprovedChange` runs apply() -> putProposal(APPROVED) ->
+  // recordCrmEvent(PROPOSAL_APPROVED); a throw from the LAST of those three
+  // means the domain mutation already landed and the approval row is
+  // already APPROVED, so inferring "still PENDING" from the mere fact that
+  // something threw is exactly backwards here. Reproduced with the real
+  // loop, the real tools and the real state machine -- the only injected
+  // fault is one table write, chosen by its own `eventType`, so nothing
+  // about `update_case` or `applyApprovedChange` is mocked.
+  it("reads back what actually happened when apply succeeds but the write after it fails, instead of guessing", async () => {
+    const baseContext = buildTestContext();
+    const seededCase = await seedOneCase(baseContext, "N1-01");
+    const context = await contextAtTrustLevel(
+      2,
+      [
+        {
+          text: "",
+          toolCalls: [
+            {
+              toolCallId: "c1",
+              toolName: "update_case",
+              input: { caseId: seededCase.caseId, processing: "EXPRESS" },
+            },
+          ],
+        },
+        { text: "done", toolCalls: [] },
+      ],
+      { context: baseContext },
+    );
+
+    // The only injected fault: the audit-trail write specifically, chosen by
+    // its own eventType, so every other write in the turn (including the
+    // domain mutation itself) goes through untouched.
+    const realTablePut = context.table.put.bind(context.table);
+    context.table.put = async (item) => {
+      if (item["eventType"] === "PROPOSAL_APPROVED") {
+        throw new Error("audit write blew up");
+      }
+      return realTablePut(item);
+    };
+
+    const result = await runAgentTurn(context, TENANT_ID, {
+      userMessage: "switch to express",
+      conversation: [],
+      actorEmail: ACTOR,
+    });
+
+    const { proposals: pendingProposals } = await listPendingProposals(context, TENANT_ID);
+    const caseAfterTurn = await getCase(context, TENANT_ID, seededCase.caseId);
+
+    // All four together, because this defect is precisely a set of them
+    // disagreeing: the bucket the turn actually returns it in, the status
+    // the row is actually persisted at, whether the case actually moved,
+    // and what the model is actually told.
+    expect({
+      returnedApplied: result.appliedChanges.length,
+      returnedProposals: result.proposals.length,
+      persistedStatus: result.appliedChanges[0]?.status,
+      caseProcessing: caseAfterTurn.processing,
+      pendingRowsInStore: pendingProposals.length,
+    }).toEqual({
+      returnedApplied: 1,
+      returnedProposals: 0,
+      persistedStatus: "APPROVED",
+      caseProcessing: "EXPRESS",
+      pendingRowsInStore: 0,
+    });
+
+    const secondRequestMessages = context.llm.receivedRequests[1]?.messages ?? [];
+    const toolResult = secondRequestMessages.find((message) => message.role === "tool_result");
+    expect(toolResult?.content).toContain("Applied on your behalf");
+    expect(toolResult?.content).not.toContain("Staged for human approval");
   });
 });
