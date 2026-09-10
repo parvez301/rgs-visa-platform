@@ -71,7 +71,12 @@ const RawIntakeExtractionSchema = z.object({
 });
 type RawIntakeExtraction = z.infer<typeof RawIntakeExtractionSchema>;
 
-const INTAKE_EXTRACTION_RESPONSE_SCHEMA = zodObjectToJsonSchema(RawIntakeExtractionSchema);
+// Exported (not just module-private) so the call-shape test can assert the
+// exact schema sent to the provider, not merely that *some* value was sent
+// (task-12-review.md m1: `responseSchema: {}` -- which would make both
+// adapters' structured-output mechanism useless -- survived a `toBeDefined()`
+// assertion undetected).
+export const INTAKE_EXTRACTION_RESPONSE_SCHEMA = zodObjectToJsonSchema(RawIntakeExtractionSchema);
 
 /**
  * A schema-valid `CreateCaseInput` in shape, plus the three fields the
@@ -106,7 +111,16 @@ export interface IntakeDraft {
   /** Only travellers an existing passport actually matched. Never a minted record. */
   applicants: CreateCaseApplicantInput[];
   receivedDate: string;
-  caseType: crm.CaseType;
+  /** Absent, not defaulted (task-12-review.md m3): nothing this function extracts states a
+   * case type, so guessing "VISA" would be the one field on this draft holding a value the
+   * text never supported -- every other unstated field on IntakeDraft is absent for the same
+   * reason. A human confirms case type when they act on the draft. */
+  caseType?: crm.CaseType;
+  /** Present only when the destination resolved to a spelling the country map also flags as
+   * naming a specific product (task-12-review.md m4), e.g. "Sri Lanka ETA" -> E_VISA. This is
+   * `crm.normalizeCountry`'s own `visaTypeHint`, carried through rather than discarded --
+   * still just a hint for a human, since caseType itself is never asserted here. */
+  visaType?: crm.VisaType;
   missingDocuments: string[];
 }
 
@@ -213,18 +227,25 @@ export async function extractIntake(
 
   let destinationCountry: string | undefined;
   let unresolvedCountry: string | undefined;
+  let visaType: crm.VisaType | undefined;
   if (rawExtraction.destinationCountryRaw !== "") {
     // The same deterministic country map the migration importer uses
     // (packages/shared/src/crm/normalize/country.ts) -- not the model's own
-    // judgement. A model that faithfully copies "PASSPORT NEW" or
-    // "Myannmar" verbatim (as instructed) lands here and comes out
-    // unresolved, because neither string is a key in that map; a model that
-    // "helpfully" substitutes a real country name instead is the failure
-    // this whole eval exists to catch, and it would show up as a WRONG
-    // resolved country, not as a refusal.
+    // judgement. A model that faithfully copies a service line verbatim (as
+    // instructed) lands here and comes out unresolved, because that string
+    // is not a key in the map; a model that "helpfully" substitutes a real
+    // country name instead is the failure this whole eval exists to catch,
+    // and it would show up as a WRONG resolved country, not as a refusal. A
+    // model that faithfully copies an unambiguous misspelling of a real
+    // country name (e.g. "Myannmar") is expected to resolve here too --
+    // task-12-review.md A2: that is the desk reading a typo the way a human
+    // would, not a hallucination, and the map now carries it.
     const normalized = crm.normalizeCountry(rawExtraction.destinationCountryRaw);
     if (normalized.countryCode !== null) {
       destinationCountry = normalized.countryCode;
+      if (normalized.visaTypeHint !== null) {
+        visaType = normalized.visaTypeHint;
+      }
     } else {
       unresolvedCountry = rawExtraction.destinationCountryRaw;
     }
@@ -244,12 +265,8 @@ export async function extractIntake(
     // Filed as received today -- the desk is processing this paste now, and
     // nothing in a pasted enquiry states a different received date.
     receivedDate: context.now().toISOString().slice(0, 10),
-    // VISA is this desk's dominant case type (docs/migration-questions-for-
-    // rgs.md); a placeholder a human confirms or changes, not a claim the
-    // text supports -- intake does not attempt to classify case type from
-    // the eval's scope (the brief's expected fields name only traveller,
-    // passport, destination, partner and applicant count).
-    caseType: "VISA",
+    // caseType is intentionally absent -- see IntakeDraft's own doc comment.
+    ...(visaType !== undefined ? { visaType } : {}),
     missingDocuments: rawExtraction.missingDocuments,
   };
 }

@@ -84,6 +84,20 @@ describe("normalizeCountry", () => {
     expect(normalizeCountry("DUBAI").countryCode).toBe("AE");
   });
 
+  it("resolves Myanmar, including the workbook's 13-row misspelling (task-12 fix round A2)", () => {
+    // Myannmar appears 13 times in the real workbook -- Myanmar is a
+    // destination this business genuinely serves, and the spelling with two
+    // Ns is the only spelling the sheet actually contains, so both the
+    // correct spelling and the observed misspelling must resolve.
+    expect(normalizeCountry("Myanmar").countryCode).toBe("MM");
+    expect(normalizeCountry("Myannmar").countryCode).toBe("MM");
+  });
+
+  it("resolves Luxembourg, including the workbook's 7-row misspelling (task-12 fix round A2)", () => {
+    expect(normalizeCountry("Luxembourg").countryCode).toBe("LU");
+    expect(normalizeCountry("Lexumbourg").countryCode).toBe("LU");
+  });
+
   it("still refuses to guess at a service line sitting in the country column", () => {
     // "TRAVEL INSURANCE" (21 rows) and "PASSPORT NEW" (34) are not destinations.
     expect(normalizeCountry("TRAVEL INSURANCE").countryCode).toBeNull();

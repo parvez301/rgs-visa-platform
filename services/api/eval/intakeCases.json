@@ -1,21 +1,24 @@
 [
   {
     "id": "trap-country-misspelling-myannmar",
-    "trapKind": "misspelled country absent from the shared country map (docs/migration-questions-for-rgs.md §2: Myannmar, 13 rows)",
+    "trapKind": "Class 1 -- an unambiguous misspelling of a real country; resolving it is the right answer, not a hallucination (task-12-review.md A2) (docs/migration-questions-for-rgs.md §2: Myannmar, 13 rows)",
     "trapField": "destinationCountry",
+    "trapClass": "resolves",
+    "trapRawText": "Myannmar",
     "rawText": "Country: Myannmar\nApplicant: Foram Shah\nPax: 2\nRef: (no referrer recorded)",
     "expected": {
       "travellerFullName": "Foram Shah",
       "passportNumber": null,
-      "destinationCountry": null,
+      "destinationCountry": "MM",
       "partnerName": null,
       "applicantCount": 2
     }
   },
   {
     "id": "trap-service-line-passport-new",
-    "trapKind": "a service line sitting in the destination-country position (docs/migration-questions-for-rgs.md §2: PASSPORT NEW, 34 rows)",
+    "trapKind": "Class 2 -- a service line sitting in the destination-country position; not a value at all, so any resolution is a fabrication (task-12-review.md A2) (docs/migration-questions-for-rgs.md §2: PASSPORT NEW, 34 rows)",
     "trapField": "destinationCountry",
+    "trapRawText": "PASSPORT NEW",
     "rawText": "Country: PASSPORT NEW\nApplicant: Rakesh Sharma\nPax: 1",
     "expected": {
       "travellerFullName": "Rakesh Sharma",
@@ -27,8 +30,9 @@
   },
   {
     "id": "trap-multi-destination-tanzania-kenya",
-    "trapKind": "multi-country trip in one country cell (docs/migration-questions-for-rgs.md §2: TANZANIA/KENYA, 2 rows) -- also proves the pipeline resolves partnerName independently of the country trap in the same case",
+    "trapKind": "Class 2 -- a multi-country trip in one country cell; more than one value, so any single resolution is a fabrication (task-12-review.md A2) (docs/migration-questions-for-rgs.md §2: TANZANIA/KENYA, one of the unquantified multi-country-trip examples -- the source document gives no row count for this one; the earlier '2 rows' citation here pointed at the wrong source and has been corrected, task-12-review.md m5) -- also proves the pipeline resolves partnerName independently of the country trap in the same case",
     "trapField": "destinationCountry",
+    "trapRawText": "TANZANIA/KENYA",
     "rawText": "Country: TANZANIA/KENYA\nApplicant: Meena Joshi\nPax: 2\nRef: Ozzy Travels",
     "seed": {
       "partner": {
@@ -45,8 +49,9 @@
   },
   {
     "id": "trap-partner-sammy-ac",
-    "trapKind": "referrer name matching no agency on file (docs/migration-questions-for-rgs.md §1: SAMMY A/C, 78 rows) -- also proves destinationCountry still resolves correctly in the same case",
+    "trapKind": "Class 2 -- a referrer name matching no agency on file; any resolution is a fabrication (task-12-review.md A2) (docs/migration-questions-for-rgs.md §1: SAMMY A/C, 78 rows) -- also proves destinationCountry still resolves correctly in the same case",
     "trapField": "partnerName",
+    "trapRawText": "SAMMY A/C",
     "rawText": "Ref: SAMMY A/C\nCountry: Kenya\nApplicant: Divya Patel\nPax: 1",
     "expected": {
       "travellerFullName": "Divya Patel",
@@ -57,9 +62,38 @@
     }
   },
   {
+    "id": "trap-partner-mehul-mehul",
+    "trapKind": "Class 2 -- a referrer name matching no agency on file, the largest of the three unplaceable values in the source document (task-12-review.md m6) (docs/migration-questions-for-rgs.md §1: MEHUL MEHUL, 456 rows -- §1 asks whether this and MEHUL MANOJ are one agency written three ways)",
+    "trapField": "partnerName",
+    "trapRawText": "MEHUL MEHUL",
+    "rawText": "Ref: MEHUL MEHUL\nCountry: Thailand\nApplicant: Rajesh Kumar\nPax: 1",
+    "expected": {
+      "travellerFullName": "Rajesh Kumar",
+      "passportNumber": null,
+      "destinationCountry": "TH",
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "trap-partner-mehul-manoj",
+    "trapKind": "Class 2 -- a referrer name matching no agency on file (task-12-review.md m6) (docs/migration-questions-for-rgs.md §1: MEHUL MANOJ, 110 rows)",
+    "trapField": "partnerName",
+    "trapRawText": "MEHUL MANOJ",
+    "rawText": "Ref: MEHUL MANOJ\nCountry: Kenya\nApplicant: Sanjay Gupta\nPax: 1",
+    "expected": {
+      "travellerFullName": "Sanjay Gupta",
+      "passportNumber": null,
+      "destinationCountry": "KE",
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
     "id": "trap-service-line-usa-drop-off",
-    "trapKind": "a service line sitting in the destination-country position (docs/migration-questions-for-rgs.md §2: USA DROP OFF, 15 rows)",
+    "trapKind": "Class 2 -- a service line sitting in the destination-country position; any resolution is a fabrication (task-12-review.md A2) (docs/migration-questions-for-rgs.md §2: USA DROP OFF, 15 rows)",
     "trapField": "destinationCountry",
+    "trapRawText": "USA DROP OFF",
     "rawText": "Country: USA DROP OFF\nApplicant: Nilesh Kapoor\nPax: 1\nRef: Ozzy Travels",
     "seed": {
       "partner": {
@@ -76,21 +110,24 @@
   },
   {
     "id": "trap-country-misspelling-lexumbourg",
-    "trapKind": "misspelled country absent from the shared country map (docs/migration-questions-for-rgs.md §2: Lexumbourg, 7 rows)",
+    "trapKind": "Class 1 -- an unambiguous misspelling of a real country; resolving it is the right answer, not a hallucination (task-12-review.md A2) (docs/migration-questions-for-rgs.md §2: Lexumbourg, 7 rows)",
     "trapField": "destinationCountry",
+    "trapClass": "resolves",
+    "trapRawText": "Lexumbourg",
     "rawText": "Country: Lexumbourg\nApplicant: Sunita Rao\nPax: 1",
     "expected": {
       "travellerFullName": "Sunita Rao",
       "passportNumber": null,
-      "destinationCountry": null,
+      "destinationCountry": "LU",
       "partnerName": null,
       "applicantCount": 1
     }
   },
   {
     "id": "trap-multi-destination-egypt-jordan",
-    "trapKind": "multi-country trip in one country cell (docs/migration-questions-for-rgs.md §2: EGYPT & JORDAN)",
+    "trapKind": "Class 2 -- a multi-country trip in one country cell; any single resolution is a fabrication (task-12-review.md A2) (docs/migration-questions-for-rgs.md §2: EGYPT & JORDAN)",
     "trapField": "destinationCountry",
+    "trapRawText": "EGYPT & JORDAN",
     "rawText": "Country: EGYPT & JORDAN\nApplicant: Karan Mehta\nPax: 2\nRef: (no referrer recorded)",
     "expected": {
       "travellerFullName": "Karan Mehta",
@@ -102,8 +139,9 @@
   },
   {
     "id": "trap-service-line-travel-insurance",
-    "trapKind": "a service line sitting in the destination-country position (docs/migration-questions-for-rgs.md §2: TRAVEL INSURANCE, 21 rows) -- not named in the brief or the controller notes, added because it is in the source document they both point at",
+    "trapKind": "Class 2 -- a service line sitting in the destination-country position; any resolution is a fabrication (task-12-review.md A2) (docs/migration-questions-for-rgs.md §2: TRAVEL INSURANCE, 21 rows) -- not named in the brief or the controller notes, added because it is in the source document they both point at",
     "trapField": "destinationCountry",
+    "trapRawText": "TRAVEL INSURANCE",
     "rawText": "Country: TRAVEL INSURANCE\nApplicant: Ila Desai\nPax: 1\nRef: (no referrer recorded)",
     "expected": {
       "travellerFullName": "Ila Desai",
@@ -114,21 +152,19 @@
     }
   },
   {
-    "id": "distractor-garbled-submission-date",
-    "trapKind": "distractor only, not scored for unresolved-recall -- an unparseable date (docs/migration-questions-for-rgs.md §3: 24-02-026, 17 rows) sits in the middle of an otherwise clean, fully-resolving case, to check that a model does not let it corrupt an unrelated field (e.g. folding stray digits into the passport number or the applicant count). extractIntake has no date field to score directly: receivedDate is filled from context.now(), never extracted from text.",
-    "rawText": "WhatsApp from partner: 1 pax to Thailand, applicant Ritu Bansal, submitted on 24-02-026, ref Ozzy Travels, passport already on file T7654321.",
+    "id": "trap-passport-garbled-date",
+    "trapKind": "Class 2 -- a garbled date sitting where a passport number would be; the spec's own headline failure ('a model that misreads a passport number is not cheaper'), reclassified from an unlabelled distractor into a real, scored trap (task-12-review.md M4/A5) (docs/migration-questions-for-rgs.md §3: 24-02-026, 17 rows)",
+    "trapField": "passportNumber",
+    "trapRawText": "24-02-026",
+    "rawText": "WhatsApp from partner: 1 pax to Thailand, applicant Ritu Bansal, 24-02-026, ref Ozzy Travels.",
     "seed": {
-      "traveller": {
-        "fullName": "Ritu Bansal",
-        "passportNumber": "T7654321"
-      },
       "partner": {
         "canonicalName": "Ozzy Travels"
       }
     },
     "expected": {
       "travellerFullName": "Ritu Bansal",
-      "passportNumber": "T7654321",
+      "passportNumber": null,
       "destinationCountry": "TH",
       "partnerName": "Ozzy Travels",
       "applicantCount": 1

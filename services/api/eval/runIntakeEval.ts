@@ -1,6 +1,8 @@
 import { parseArgs } from "node:util";
 import { readFile, writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { crm } from "@rgs/shared";
 import { extractIntake, type IntakeDraft } from "../src/agent/intake";
 import { llmProviderConfigFromEnvironment } from "../src/agent/providers/config";
 import { createLlmProvider } from "../src/agent/providers/index";
@@ -24,6 +26,12 @@ import { upsertTraveller } from "../src/domain/crm/travellers";
  * LLM_PROVIDER -- a deliberate second gate against running against the wrong
  * vendor's key by mistake, given the whole point is a same-money comparison.
  *
+ * Everything this module exports below `main` is exported so a
+ * `FakeLlmProvider`-driven test can pin the scoring itself (task-12-
+ * review.md M2/m7): before this round, `main()` ran unconditionally at
+ * module scope with zero exports, so the code that will justify a purchasing
+ * decision could not be imported by a test without spending money running it.
+ *
  * Usage:
  *   LLM_PROVIDER=anthropic LLM_MODEL=<model id> LLM_API_KEY=<key> \
  *     pnpm --filter @rgs/api exec tsx eval/runIntakeEval.ts --provider anthropic
@@ -44,34 +52,62 @@ const EvalCaseExpectedSchema = z.object({
   applicantCount: z.number().int().nonnegative(),
 });
 
-const EvalCaseSchema = z.object({
-  id: z.string().min(1),
-  rawText: z.string().min(1),
-  // Extensions beyond task-12-brief.md's literal "{ id, rawText, expected }"
-  // shape -- additive, not a replacement of it. trapKind documents which
-  // measured row of docs/migration-questions-for-rgs.md a case exercises;
-  // trapField names which single expected field must stay unresolved for a
-  // formal trap case (a case can have other null-expected fields that are
-  // merely "not mentioned", not the trap under test -- see
-  // trap-multi-destination-tanzania-kenya and trap-partner-sammy-ac, each of
-  // which resolves ONE field correctly while its trapField stays refused).
-  trapKind: z.string().optional(),
-  trapField: z.enum(["destinationCountry", "partnerName"]).optional(),
-  seed: z
-    .object({
-      traveller: z.object({ fullName: z.string(), passportNumber: z.string() }).optional(),
-      partner: z.object({ canonicalName: z.string() }).optional(),
-    })
-    .optional(),
-  expected: EvalCaseExpectedSchema,
-});
-type EvalCase = z.infer<typeof EvalCaseSchema>;
+export const EvalCaseSchema = z
+  .object({
+    id: z.string().min(1),
+    rawText: z.string().min(1),
+    // Extensions beyond task-12-brief.md's literal "{ id, rawText, expected }"
+    // shape -- additive, not a replacement of it. trapKind documents which
+    // measured row of docs/migration-questions-for-rgs.md a case exercises;
+    // trapField names which single field is under test for a formal trap
+    // case (a case can have other null-expected fields that are merely "not
+    // mentioned", not the trap under test).
+    trapKind: z.string().optional(),
+    // Widened beyond {destinationCountry, partnerName} (task-12-review.md
+    // M4/A5): those two are the fields the IMPLEMENTATION resolves, but
+    // passportNumber and travellerFullName are copied straight from the
+    // model with no resolution step of their own, and the spec's own
+    // headline failure ("a model that misreads a passport number") can only
+    // be represented on one of them.
+    trapField: z.enum(["destinationCountry", "partnerName", "passportNumber", "travellerFullName"]).optional(),
+    // task-12-review.md A2: controller-notes §2 said every trap's correct
+    // answer is "stays unresolved" -- true for most, wrong for two.
+    // "resolves" (Myannmar, Lexumbourg): an unambiguous misspelling of a
+    // real value; the RIGHT answer is resolving it, same as a desk agent
+    // would. "unresolved" (the default): not a value at all, or more than
+    // one; any resolution is a fabrication.
+    trapClass: z.enum(["unresolved", "resolves"]).optional(),
+    // task-12-review.md C1: the exact substring of `rawText` a faithful,
+    // non-fabricating extraction must carry into the raw (pre-resolution)
+    // field when trapField is a "unresolved"-class trap on destinationCountry
+    // or partnerName. Compared via buildLookupKey normalization (case- and
+    // whitespace-insensitive), not literal string equality -- without this,
+    // "the model declined" and "the model invented a value the map also
+    // happens not to know" were the same observation to the scorer.
+    trapRawText: z.string().optional(),
+    seed: z
+      .object({
+        traveller: z.object({ fullName: z.string(), passportNumber: z.string() }).optional(),
+        partner: z.object({ canonicalName: z.string() }).optional(),
+      })
+      .optional(),
+    expected: EvalCaseExpectedSchema,
+  })
+  .refine((evalCase) => evalCase.trapClass === undefined || evalCase.trapField !== undefined, {
+    message: "trapClass requires trapField to be set",
+  });
+export type EvalCase = z.infer<typeof EvalCaseSchema>;
 
-const SCORED_STRING_FIELDS = ["travellerFullName", "passportNumber", "destinationCountry", "partnerName"] as const;
-type ScoredStringField = (typeof SCORED_STRING_FIELDS)[number];
+export const SCORED_STRING_FIELDS = [
+  "travellerFullName",
+  "passportNumber",
+  "destinationCountry",
+  "partnerName",
+] as const;
+export type ScoredStringField = (typeof SCORED_STRING_FIELDS)[number];
 
-interface FieldScore {
-  field: ScoredStringField | "applicantCount";
+export interface FieldScore {
+  field: ScoredStringField | "applicantCount" | "travellerResolution";
   expected: string | number | null;
   actual: string | number | null;
   correct: boolean;
@@ -81,30 +117,44 @@ interface FieldScore {
   hallucinated: boolean;
 }
 
-interface CaseResult {
+/** What a trap-labelled case's own field resolved to, after C1's raw-value
+ * fidelity check. `satisfied` is what feeds class1TrapAccuracy /
+ * class2TrapRecall; `fabricatedRaw` is true only for an "unresolved" trap
+ * whose field correctly stayed unresolved on the surface, but whose raw
+ * extracted text does not match what the source actually said. */
+export interface TrapOutcome {
+  field: NonNullable<EvalCase["trapField"]>;
+  trapClass: "unresolved" | "resolves";
+  satisfied: boolean;
+  fabricatedRaw: boolean;
+}
+
+export interface CaseResult {
   id: string;
   trapKind: string | undefined;
   trapField: EvalCase["trapField"];
+  trapClass: "unresolved" | "resolves" | undefined;
   rawText: string;
   draft: IntakeDraft;
   fieldScores: FieldScore[];
+  trapOutcome: TrapOutcome | undefined;
 }
 
 /** Case-insensitive, whitespace- and word-order-tolerant: "Ashok Kumar",
  * "ashok kumar" and an MRZ-order "Kumar Ashok" all count as the same name.
  * Only used for the two free-text name fields -- passportNumber and
  * destinationCountry are compared as exact codes, not names. */
-function namesMatch(expectedName: string, actualName: string): boolean {
+export function namesMatch(expectedName: string, actualName: string): boolean {
   const normalize = (value: string) =>
     value.trim().toLowerCase().split(/\s+/).filter((word) => word.length > 0).sort().join(" ");
   return normalize(expectedName) === normalize(actualName);
 }
 
-function codesMatch(expectedCode: string, actualCode: string): boolean {
+export function codesMatch(expectedCode: string, actualCode: string): boolean {
   return expectedCode.trim().toUpperCase() === actualCode.trim().toUpperCase();
 }
 
-function scoreStringField(
+export function scoreStringField(
   field: ScoredStringField,
   expected: string | null,
   actual: string | null,
@@ -115,7 +165,30 @@ function scoreStringField(
   return { field, expected, actual, correct, hallucinated: expected === null && actual !== null };
 }
 
-async function resolvedPartnerName(context: AppContext, draft: IntakeDraft): Promise<string | null> {
+/** task-12-review.md m2: traveller resolution (`draft.applicants`) was never
+ * scored -- only partner resolution was. A case that seeds a traveller under
+ * exactly the passport its `expected.passportNumber` states should see that
+ * traveller attached; every other case should see none attached at all. A
+ * build that deleted the `findTravellerByPassport` call entirely used to
+ * score 100% on this eval; it no longer does. */
+export function scoreTravellerResolution(evalCase: EvalCase, draft: IntakeDraft): FieldScore {
+  const seededPassport = evalCase.seed?.traveller?.passportNumber;
+  const shouldResolve = seededPassport !== undefined && seededPassport === evalCase.expected.passportNumber;
+  const actualPassport = draft.applicants.length === 0 ? null : (draft.applicants[0]?.passportNumber ?? null);
+  const correct = shouldResolve
+    ? draft.applicants.length === 1 && actualPassport === seededPassport
+    : draft.applicants.length === 0;
+
+  return {
+    field: "travellerResolution",
+    expected: shouldResolve ? (seededPassport ?? null) : null,
+    actual: actualPassport,
+    correct,
+    hallucinated: !shouldResolve && draft.applicants.length > 0,
+  };
+}
+
+export async function resolvedPartnerName(context: AppContext, draft: IntakeDraft): Promise<string | null> {
   if (draft.partnerId === undefined) return null;
   // The partner store is the single source of truth for what a resolved
   // partnerId is actually called -- extractIntake itself never carries a
@@ -126,11 +199,114 @@ async function resolvedPartnerName(context: AppContext, draft: IntakeDraft): Pro
   return partner.canonicalName;
 }
 
-async function scoreCase(context: AppContext, evalCase: EvalCase): Promise<CaseResult> {
+/** The model's raw, pre-resolution value for a trap field -- what C1 requires
+ * scoring against. destinationCountry/partnerName have a genuine two-tier
+ * resolved/unresolved split on `IntakeDraft`; passportNumber/travellerFullName
+ * do not (the draft carries them as-extracted either way), so the "raw value"
+ * for those is simply the field itself. */
+export function rawTrapValue(draft: IntakeDraft, field: NonNullable<EvalCase["trapField"]>): string | undefined {
+  switch (field) {
+    case "destinationCountry":
+      return draft.unresolvedCountry;
+    case "partnerName":
+      return draft.unresolvedPartnerName;
+    case "passportNumber":
+      return draft.passportNumber;
+    case "travellerFullName":
+      return draft.travellerFullName;
+  }
+}
+
+/** Whether the model produced ANY signal for this field -- a raw value that
+ * later failed to resolve counts as "attempted", same as one that resolved
+ * cleanly. Deliberately distinct from a FieldScore's post-resolution
+ * `actual`: computing coverage off the resolved value would count a
+ * correctly-declined Class 2 trap (destinationCountry stays undefined by
+ * design) as "not filled", conflating "the model said nothing" with "the
+ * model tried and the deterministic resolver correctly refused it" -- the
+ * same conflation C1 already fixes for hallucination, and coverage must not
+ * reintroduce it (task-12-review.md A4/M3). */
+export function wasFieldAttempted(draft: IntakeDraft, field: ScoredStringField): boolean {
+  switch (field) {
+    case "travellerFullName":
+      return draft.travellerFullName !== undefined;
+    case "passportNumber":
+      return draft.passportNumber !== undefined;
+    case "destinationCountry":
+      return draft.destinationCountry !== undefined || draft.unresolvedCountry !== undefined;
+    case "partnerName":
+      return draft.partnerId !== undefined || draft.unresolvedPartnerName !== undefined;
+  }
+}
+
+/**
+ * task-12-review.md C1 + A2. Judges whether a trap-labelled case's field was
+ * handled correctly, and corrects the field's own FieldScore in place when a
+ * "should stay unresolved" trap turns out to have been fed a fabricated raw
+ * value -- which also means C1's fix flows straight into the pre-existing
+ * `hallucinationRate` (any FieldScore with `expected === null` already feeds
+ * it), not just into a new, separate number.
+ */
+export function applyTrapFidelity(
+  evalCase: EvalCase,
+  draft: IntakeDraft,
+  fieldScores: FieldScore[],
+): { fieldScores: FieldScore[]; trapOutcome: TrapOutcome | undefined } {
+  if (evalCase.trapField === undefined) {
+    return { fieldScores, trapOutcome: undefined };
+  }
+  const trapClass = evalCase.trapClass ?? "unresolved";
+  const trapFieldIndex = fieldScores.findIndex((fieldScore) => fieldScore.field === evalCase.trapField);
+  if (trapFieldIndex === -1) {
+    throw new Error(`case ${evalCase.id} names trapField ${evalCase.trapField} but has no score for it`);
+  }
+  const trapFieldScore = fieldScores[trapFieldIndex];
+  if (trapFieldScore === undefined) {
+    throw new Error(`case ${evalCase.id} names trapField ${evalCase.trapField} but has no score for it`);
+  }
+
+  if (trapClass === "resolves") {
+    // Class 1: correct behaviour IS resolving to the expected value -- the
+    // ordinary post-resolution comparison already is the right test.
+    return {
+      fieldScores,
+      trapOutcome: { field: evalCase.trapField, trapClass, satisfied: trapFieldScore.correct, fabricatedRaw: false },
+    };
+  }
+
+  // Class 2 ("unresolved"): staying unresolved is necessary but not
+  // sufficient. When the case states the exact substring a faithful copy
+  // must carry, the model's raw output must match it -- up to
+  // buildLookupKey normalization -- or this is a fabrication that merely
+  // also failed to resolve.
+  const rawValue = rawTrapValue(draft, evalCase.trapField);
+  const fabricatedRaw =
+    trapFieldScore.actual === null &&
+    evalCase.trapRawText !== undefined &&
+    rawValue !== undefined &&
+    crm.buildLookupKey(rawValue) !== crm.buildLookupKey(evalCase.trapRawText);
+
+  if (!fabricatedRaw) {
+    return {
+      fieldScores,
+      trapOutcome: { field: evalCase.trapField, trapClass, satisfied: trapFieldScore.correct, fabricatedRaw: false },
+    };
+  }
+
+  const adjustedFieldScores = fieldScores.map((fieldScore, index) =>
+    index === trapFieldIndex ? { ...fieldScore, correct: false, hallucinated: true } : fieldScore,
+  );
+  return {
+    fieldScores: adjustedFieldScores,
+    trapOutcome: { field: evalCase.trapField, trapClass, satisfied: false, fabricatedRaw: true },
+  };
+}
+
+export async function scoreCase(context: AppContext, evalCase: EvalCase): Promise<CaseResult> {
   const draft = await extractIntake(context, TENANT_ID, evalCase.rawText, EVAL_ACTOR_EMAIL);
   const actualPartnerName = await resolvedPartnerName(context, draft);
 
-  const fieldScores: FieldScore[] = [
+  const baseFieldScores: FieldScore[] = [
     scoreStringField("travellerFullName", evalCase.expected.travellerFullName, draft.travellerFullName ?? null),
     scoreStringField("passportNumber", evalCase.expected.passportNumber, draft.passportNumber ?? null),
     scoreStringField(
@@ -146,28 +322,59 @@ async function scoreCase(context: AppContext, evalCase: EvalCase): Promise<CaseR
       correct: evalCase.expected.applicantCount === draft.applicantCount,
       hallucinated: false,
     },
+    scoreTravellerResolution(evalCase, draft),
   ];
 
-  return { id: evalCase.id, trapKind: evalCase.trapKind, trapField: evalCase.trapField, rawText: evalCase.rawText, draft, fieldScores };
+  const { fieldScores, trapOutcome } = applyTrapFidelity(evalCase, draft, baseFieldScores);
+
+  return {
+    id: evalCase.id,
+    trapKind: evalCase.trapKind,
+    trapField: evalCase.trapField,
+    trapClass: evalCase.trapField !== undefined ? (evalCase.trapClass ?? "unresolved") : undefined,
+    rawText: evalCase.rawText,
+    draft,
+    fieldScores,
+    trapOutcome,
+  };
 }
 
-interface ProviderScorecard {
+export interface ProviderScorecard {
   exactFieldAccuracy: number;
   fieldsScored: number;
   fieldsCorrect: number;
   hallucinationRate: number;
   hallucinationOpportunities: number;
   hallucinatedFields: number;
-  unresolvedRecall: number;
-  trapFieldsTotal: number;
-  trapFieldsCorrectlyUnresolved: number;
+  /** task-12-review.md A4/M3: what fraction of the extractable string fields
+   * (across every case, regardless of expected value) the model filled in at
+   * all. A model that returns the all-blank sentinel for everything used to
+   * take a perfect 0% hallucination rate and 100% unresolved-recall; this
+   * number is 0% for exactly that model, so silence is visible rather than
+   * rewarded. */
+  coverage: number;
+  fieldsFilled: number;
+  fieldsFillable: number;
+  /** Class 2 traps only (task-12-review.md A2): not a value at all, or more
+   * than one -- any resolution is a fabrication. This is the number a
+   * purchasing threshold should gate on (A7), not the blended accuracy. */
+  class2TrapRecall: number;
+  class2TrapsTotal: number;
+  class2TrapsSatisfied: number;
+  /** Class 1 traps only: an unambiguous misspelling of a real value --
+   * correctly resolving it is the right answer, not a hallucination. */
+  class1TrapAccuracy: number;
+  class1TrapsTotal: number;
+  class1TrapsSatisfied: number;
 }
 
-function summarize(caseResults: CaseResult[]): ProviderScorecard {
+export function summarize(caseResults: CaseResult[]): ProviderScorecard {
   let fieldsScored = 0;
   let fieldsCorrect = 0;
   let hallucinationOpportunities = 0;
   let hallucinatedFields = 0;
+  let stringFieldsScored = 0;
+  let stringFieldsFilled = 0;
 
   for (const caseResult of caseResults) {
     for (const fieldScore of caseResult.fieldScores) {
@@ -178,18 +385,19 @@ function summarize(caseResults: CaseResult[]): ProviderScorecard {
         if (fieldScore.hallucinated) hallucinatedFields += 1;
       }
     }
+    for (const scoredStringField of SCORED_STRING_FIELDS) {
+      stringFieldsScored += 1;
+      if (wasFieldAttempted(caseResult.draft, scoredStringField)) stringFieldsFilled += 1;
+    }
   }
 
-  const trapFieldResults = caseResults
-    .filter((caseResult) => caseResult.trapField !== undefined)
-    .map((caseResult) => {
-      const trapScore = caseResult.fieldScores.find((fieldScore) => fieldScore.field === caseResult.trapField);
-      if (trapScore === undefined) {
-        throw new Error(`case ${caseResult.id} names trapField ${caseResult.trapField} but has no score for it`);
-      }
-      return trapScore;
-    });
-  const trapFieldsCorrectlyUnresolved = trapFieldResults.filter((fieldScore) => fieldScore.correct).length;
+  const trapOutcomes = caseResults
+    .map((caseResult) => caseResult.trapOutcome)
+    .filter((trapOutcome): trapOutcome is TrapOutcome => trapOutcome !== undefined);
+  const class1Outcomes = trapOutcomes.filter((trapOutcome) => trapOutcome.trapClass === "resolves");
+  const class2Outcomes = trapOutcomes.filter((trapOutcome) => trapOutcome.trapClass === "unresolved");
+  const class1Satisfied = class1Outcomes.filter((trapOutcome) => trapOutcome.satisfied).length;
+  const class2Satisfied = class2Outcomes.filter((trapOutcome) => trapOutcome.satisfied).length;
 
   return {
     exactFieldAccuracy: fieldsScored === 0 ? 0 : fieldsCorrect / fieldsScored,
@@ -198,13 +406,53 @@ function summarize(caseResults: CaseResult[]): ProviderScorecard {
     hallucinationRate: hallucinationOpportunities === 0 ? 0 : hallucinatedFields / hallucinationOpportunities,
     hallucinationOpportunities,
     hallucinatedFields,
-    unresolvedRecall: trapFieldResults.length === 0 ? 0 : trapFieldsCorrectlyUnresolved / trapFieldResults.length,
-    trapFieldsTotal: trapFieldResults.length,
-    trapFieldsCorrectlyUnresolved,
+    coverage: stringFieldsScored === 0 ? 0 : stringFieldsFilled / stringFieldsScored,
+    fieldsFilled: stringFieldsFilled,
+    fieldsFillable: stringFieldsScored,
+    class2TrapRecall: class2Outcomes.length === 0 ? 0 : class2Satisfied / class2Outcomes.length,
+    class2TrapsTotal: class2Outcomes.length,
+    class2TrapsSatisfied: class2Satisfied,
+    class1TrapAccuracy: class1Outcomes.length === 0 ? 0 : class1Satisfied / class1Outcomes.length,
+    class1TrapsTotal: class1Outcomes.length,
+    class1TrapsSatisfied: class1Satisfied,
   };
 }
 
-function buildEvalContext(llmProvider: ReturnType<typeof createLlmProvider>): AppContext {
+/** task-12-review.md A7/m8: there used to be no pass/fail threshold anywhere,
+ * and `main()` always exited 0 -- a total guesser printed 92.7% accuracy (8
+ * trap fields averaged against 102 easy ones) and nothing said so. Gated on
+ * the class-2 numbers specifically, not the blended accuracy, per A7 -- plus
+ * a coverage floor, because A4/M3's all-blank model would otherwise still
+ * pass a class-2-only gate (it never guesses, so it never fails a class-2
+ * trap either; coverage is what actually exposes it). */
+export const EVAL_THRESHOLDS = {
+  class2TrapRecallMin: 0.75,
+  coverageMin: 0.5,
+} as const;
+
+export interface ThresholdResult {
+  passed: boolean;
+  failedChecks: string[];
+}
+
+export function evaluateThreshold(scorecard: ProviderScorecard): ThresholdResult {
+  const failedChecks: string[] = [];
+  if (scorecard.class2TrapRecall < EVAL_THRESHOLDS.class2TrapRecallMin) {
+    failedChecks.push(
+      `class-2 trap recall ${formatPercent(scorecard.class2TrapRecall)} is below the minimum ` +
+        `${formatPercent(EVAL_THRESHOLDS.class2TrapRecallMin)}`,
+    );
+  }
+  if (scorecard.coverage < EVAL_THRESHOLDS.coverageMin) {
+    failedChecks.push(
+      `coverage ${formatPercent(scorecard.coverage)} is below the minimum ${formatPercent(EVAL_THRESHOLDS.coverageMin)} ` +
+        "-- a provider this silent cannot be judged safe just because it never guessed",
+    );
+  }
+  return { passed: failedChecks.length === 0, failedChecks };
+}
+
+export function buildEvalContext(llmProvider: ReturnType<typeof createLlmProvider>): AppContext {
   return {
     table: new InMemoryTableClient(),
     documents: new InMemoryDocumentStore(),
@@ -223,7 +471,7 @@ function buildEvalContext(llmProvider: ReturnType<typeof createLlmProvider>): Ap
  * time -- while every case that names none exercises the honest "nothing on
  * file yet" path.
  */
-async function seedFixtures(context: AppContext, cases: EvalCase[]): Promise<void> {
+export async function seedFixtures(context: AppContext, cases: EvalCase[]): Promise<void> {
   const seededPassports = new Set<string>();
   const seededPartnerNames = new Set<string>();
   for (const evalCase of cases) {
@@ -248,11 +496,11 @@ async function seedFixtures(context: AppContext, cases: EvalCase[]): Promise<voi
   }
 }
 
-function formatPercent(fraction: number): string {
+export function formatPercent(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;
 }
 
-function printScorecard(providerName: string, model: string, scorecard: ProviderScorecard): void {
+export function printScorecard(providerName: string, model: string, scorecard: ProviderScorecard): void {
   console.log(`\nResults for ${providerName} (${model})`);
   console.table({
     "exact-field accuracy": {
@@ -263,11 +511,26 @@ function printScorecard(providerName: string, model: string, scorecard: Provider
       value: formatPercent(scorecard.hallucinationRate),
       detail: `${scorecard.hallucinatedFields}/${scorecard.hallucinationOpportunities} null-expected fields invented`,
     },
-    "unresolved-recall (traps)": {
-      value: formatPercent(scorecard.unresolvedRecall),
-      detail: `${scorecard.trapFieldsCorrectlyUnresolved}/${scorecard.trapFieldsTotal} trap fields correctly refused`,
+    coverage: {
+      value: formatPercent(scorecard.coverage),
+      detail: `${scorecard.fieldsFilled}/${scorecard.fieldsFillable} extractable string fields filled in at all`,
+    },
+    "class-2 trap recall": {
+      value: formatPercent(scorecard.class2TrapRecall),
+      detail: `${scorecard.class2TrapsSatisfied}/${scorecard.class2TrapsTotal} not-a-value/multi-value traps correctly refused`,
+    },
+    "class-1 trap accuracy": {
+      value: formatPercent(scorecard.class1TrapAccuracy),
+      detail: `${scorecard.class1TrapsSatisfied}/${scorecard.class1TrapsTotal} unambiguous misspellings correctly resolved`,
     },
   });
+
+  const threshold = evaluateThreshold(scorecard);
+  console.log(
+    `\nThreshold: class-2 trap recall >= ${formatPercent(EVAL_THRESHOLDS.class2TrapRecallMin)}, ` +
+      `coverage >= ${formatPercent(EVAL_THRESHOLDS.coverageMin)}`,
+  );
+  console.log(threshold.passed ? "PASS" : `FAIL -- ${threshold.failedChecks.join("; ")}`);
 }
 
 async function main(): Promise<void> {
@@ -314,17 +577,31 @@ async function main(): Promise<void> {
 
   const scorecard = summarize(caseResults);
   printScorecard(providerConfig.providerName, providerConfig.model, scorecard);
+  const threshold = evaluateThreshold(scorecard);
+  if (!threshold.passed) {
+    // A7: this runner informs a purchasing decision -- a provider that
+    // misses the bar must not report success just because nothing threw.
+    process.exitCode = 1;
+  }
 
-  const guessedTraps = caseResults.filter(
-    (caseResult) =>
-      caseResult.trapField !== undefined &&
-      caseResult.fieldScores.find((fieldScore) => fieldScore.field === caseResult.trapField)?.correct === false,
+  const failedTraps = caseResults.filter(
+    (caseResult) => caseResult.trapOutcome !== undefined && !caseResult.trapOutcome.satisfied,
   );
-  if (guessedTraps.length > 0) {
-    console.log("\nTrap cases where the model guessed instead of declining:");
-    for (const caseResult of guessedTraps) {
+  if (failedTraps.length > 0) {
+    console.log("\nTrap cases the model failed:");
+    for (const caseResult of failedTraps) {
+      if (caseResult.trapField === undefined || caseResult.trapOutcome === undefined) continue;
       const trapScore = caseResult.fieldScores.find((fieldScore) => fieldScore.field === caseResult.trapField);
-      console.log(`  - ${caseResult.id}: ${caseResult.trapField} -> "${trapScore?.actual}" (expected unresolved)`);
+      if (caseResult.trapOutcome.fabricatedRaw) {
+        const raw = rawTrapValue(caseResult.draft, caseResult.trapField);
+        console.log(`  - ${caseResult.id}: ${caseResult.trapField} fabricated raw text "${raw}"`);
+      } else if (caseResult.trapOutcome.trapClass === "resolves") {
+        console.log(
+          `  - ${caseResult.id}: ${caseResult.trapField} -> "${trapScore?.actual}" (expected "${trapScore?.expected}")`,
+        );
+      } else {
+        console.log(`  - ${caseResult.id}: ${caseResult.trapField} -> "${trapScore?.actual}" (expected unresolved)`);
+      }
     }
   }
 
@@ -339,6 +616,7 @@ async function main(): Promise<void> {
         generatedAt: new Date().toISOString(),
         caseCount: cases.length,
         scorecard,
+        threshold,
         cases: caseResults,
       },
       null,
@@ -349,7 +627,16 @@ async function main(): Promise<void> {
   console.log(`\nWrote ${resultsFileUrl.pathname}`);
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+// task-12-review.md m7: this used to call main() unconditionally at module
+// scope, so any future `import` of this module -- a test, a tooling script
+// -- ran the live-spending script. Guarded the same way Node's own docs
+// recommend detecting "this file was run directly", so the exports above can
+// be imported freely without ever calling main().
+const isRunDirectly =
+  typeof process.argv[1] === "string" && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isRunDirectly) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

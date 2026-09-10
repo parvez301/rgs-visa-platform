@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractIntake, type IntakeDraft } from "../../src/agent/intake";
+import { extractIntake, INTAKE_EXTRACTION_RESPONSE_SCHEMA, type IntakeDraft } from "../../src/agent/intake";
 import { FakeLlmProvider, type ScriptedTurn } from "../../src/agent/providers/fake";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
@@ -171,19 +171,22 @@ describe("extractIntake", () => {
     expect(draft.destinationCountry).toBeUndefined();
   });
 
-  // Real-workbook trap: a misspelling of a country the shared map does not
-  // even carry a correct spelling for (packages/shared/src/crm/normalize/
-  // country.ts has no MYANMAR entry at all) -- unresolved regardless of
-  // whether the model repeats the typo or "corrects" it.
-  it("a misspelled country not in the shared map surfaces as unresolvedCountry", async () => {
+  // Real-workbook trap, RECLASSIFIED by task-12-review.md A2: "Myannmar" is
+  // an unambiguous misspelling of a real value, not an ambiguous one --
+  // there is exactly one country it can mean, a desk agent reads it as
+  // Myanmar without hesitating, and the shared country map now carries the
+  // misspelling for exactly this reason. Resolving it is the RIGHT answer,
+  // not a hallucination; only a genuinely ambiguous or not-a-country string
+  // (PASSPORT NEW, TANZANIA/KENYA, SAMMY A/C) should stay unresolved.
+  it("resolves an unambiguous misspelling of a real country (Myannmar -> Myanmar) rather than refusing it", async () => {
     const context = buildTestContextWithFakeLlm([
       scriptedExtraction({ destinationCountryRaw: "Myannmar", applicantCount: 1 }),
     ]);
 
     const draft = await extractIntake(context, TENANT_ID, "irrelevant", ACTOR);
 
-    expect(draft.unresolvedCountry).toBe("Myannmar");
-    expect(draft.destinationCountry).toBeUndefined();
+    expect(draft.destinationCountry).toBe("MM");
+    expect(draft.unresolvedCountry).toBeUndefined();
   });
 
   // Real-workbook trap: a multi-destination trip. One case cannot carry two
@@ -210,10 +213,39 @@ describe("extractIntake", () => {
       applicantCount: 0,
       applicants: [],
       receivedDate: context.now().toISOString().slice(0, 10),
-      caseType: "VISA",
       missingDocuments: [],
     };
     expect(draft).toEqual(expectedDraft);
+    // caseType is the one field the original implementation invented
+    // (task-12-review.md m3); toEqual against a draft with no caseType key
+    // at all would still pass if caseType were merely `undefined`, so pin
+    // its absence explicitly too.
+    expect("caseType" in draft).toBe(false);
+  });
+
+  // task-12-review.md m4: normalizeCountry's visaTypeHint was computed and
+  // discarded. "Sri Lanka ETA" is the one spelling in the shared country map
+  // that carries a hint (LK + E_VISA) -- a model that copies it verbatim
+  // must see that hint survive onto the draft.
+  it("carries a visa-type hint through from the country map when the destination spelling names a specific product", async () => {
+    const context = buildTestContextWithFakeLlm([
+      scriptedExtraction({ destinationCountryRaw: "Sri Lanka ETA", applicantCount: 1 }),
+    ]);
+
+    const draft = await extractIntake(context, TENANT_ID, "irrelevant", ACTOR);
+
+    expect(draft.destinationCountry).toBe("LK");
+    expect(draft.visaType).toBe("E_VISA");
+  });
+
+  it("does not set a visa-type hint for a plain destination spelling that carries none", async () => {
+    const context = buildTestContextWithFakeLlm([
+      scriptedExtraction({ destinationCountryRaw: "Thailand", applicantCount: 1 }),
+    ]);
+
+    const draft = await extractIntake(context, TENANT_ID, "irrelevant", ACTOR);
+
+    expect(draft.visaType).toBeUndefined();
   });
 
   it("carries missingDocuments straight through from the extraction", async () => {
@@ -254,49 +286,106 @@ describe("extractIntake", () => {
     expect(context.llm.receivedRequests).toHaveLength(1);
     const sentRequest = context.llm.receivedRequests[0];
     expect(sentRequest?.tools).toEqual([]);
-    expect(sentRequest?.responseSchema).toBeDefined();
+    // Not just toBeDefined(): task-12-review.md m1 -- responseSchema: {}
+    // satisfies toBeDefined() but makes Anthropic's forced tool and Gemini's
+    // structured output both useless. This must be the real schema.
+    expect(sentRequest?.responseSchema).toEqual(INTAKE_EXTRACTION_RESPONSE_SCHEMA);
+    expect(
+      (sentRequest?.responseSchema as { properties?: Record<string, unknown> } | undefined)?.properties,
+    ).toMatchObject({
+      travellerFullName: expect.anything(),
+      passportNumber: expect.anything(),
+      destinationCountryRaw: expect.anything(),
+      partnerNameRaw: expect.anything(),
+      applicantCount: expect.anything(),
+      missingDocuments: expect.anything(),
+    });
     expect(sentRequest?.messages).toEqual([
       { role: "user", content: "Asha Rao, 1 pax, Japan" },
     ]);
   });
 
   // controller-notes §3: no exceptions. Proven the same way writeTools.test.ts
-  // proves it for every write tool -- reads succeed, but reaching put/delete
-  // throws immediately. Exercised with BOTH a resolving passport and a
-  // resolving partner name on the same call, so every read branch this
-  // function has runs against a table that would blow up on any write.
-  it("performs no table write at all, even when both the traveller and the partner resolve", async () => {
-    const seedContext = buildTestContext();
-    const traveller = await upsertTraveller(seedContext, TENANT_ID, {
-      fullName: "Priya Nair",
-      passportNumber: "K7654321",
-    });
-    const partner = await createPartner(
-      seedContext,
-      TENANT_ID,
-      { canonicalName: "Ozzy Travels", partnerType: "AGENCY" },
-      ACTOR,
+  // and readTools.test.ts prove it for every registered tool -- reads
+  // succeed, but reaching put/delete throws immediately -- run across all
+  // four passport-hit/miss x partner-hit/miss combinations, not just the
+  // both-resolve path. task-12-review.md M1: the two branches where a write
+  // is actually tempting are the unresolved-partner branch and the
+  // unresolved-passport branch, and a single hand-picked "both resolve" case
+  // never executes either of them against the write-refusing table -- a
+  // silent `table.put` (through the real key builders, so the `crm keys`
+  // literal scanner does not catch it either) and a silent `upsertTraveller`
+  // both survived undetected at 570/570 until this was widened.
+  describe("performs no table write at all, across every resolution combination", () => {
+    const resolutionCombinations = [
+      { description: "passport resolves, partner resolves", passportShouldResolve: true, partnerShouldResolve: true },
+      { description: "passport resolves, partner does not resolve", passportShouldResolve: true, partnerShouldResolve: false },
+      { description: "passport does not resolve, partner resolves", passportShouldResolve: false, partnerShouldResolve: true },
+      { description: "neither the passport nor the partner resolves", passportShouldResolve: false, partnerShouldResolve: false },
+    ];
+
+    it.each(resolutionCombinations)(
+      "$description",
+      async ({ passportShouldResolve, partnerShouldResolve }) => {
+        const seedContext = buildTestContext();
+
+        let seededTravellerId: string | undefined;
+        if (passportShouldResolve) {
+          const seededTraveller = await upsertTraveller(seedContext, TENANT_ID, {
+            fullName: "Priya Nair",
+            passportNumber: "K7654321",
+          });
+          seededTravellerId = seededTraveller.travellerId;
+        }
+
+        let seededPartnerId: string | undefined;
+        if (partnerShouldResolve) {
+          const seededPartner = await createPartner(
+            seedContext,
+            TENANT_ID,
+            { canonicalName: "Ozzy Travels", partnerType: "AGENCY" },
+            ACTOR,
+          );
+          seededPartnerId = seededPartner.partnerId;
+        }
+
+        // The extraction always claims the same passport and partner name --
+        // only whether they were SEEDED (and therefore resolve) varies. This
+        // is what puts each of the four scripted calls on a different branch
+        // of extractIntake's own resolution logic.
+        const contextWithLlm = Object.assign(seedContext, {
+          llm: new FakeLlmProvider([
+            scriptedExtraction({
+              travellerFullName: "Priya Nair",
+              passportNumber: "K7654321",
+              partnerNameRaw: "Ozzy Travels",
+              destinationCountryRaw: "Japan",
+              applicantCount: 1,
+            }),
+          ]),
+        });
+        const writeRefusingContext = refuseWrites(contextWithLlm);
+
+        const draft = await extractIntake(writeRefusingContext, TENANT_ID, "irrelevant", ACTOR);
+
+        if (passportShouldResolve) {
+          expect(draft.applicants).toEqual([
+            { applicantRef: "A1", travellerId: seededTravellerId, passportNumber: "K7654321" },
+          ]);
+        } else {
+          expect(draft.applicants).toEqual([]);
+        }
+
+        if (partnerShouldResolve) {
+          expect(draft.partnerId).toBe(seededPartnerId);
+          expect(draft.unresolvedPartnerName).toBeUndefined();
+        } else {
+          expect(draft.partnerId).toBeUndefined();
+          expect(draft.unresolvedPartnerName).toBe("Ozzy Travels");
+        }
+
+        expect(draft.destinationCountry).toBe("JP");
+      },
     );
-
-    const contextWithLlm = Object.assign(seedContext, {
-      llm: new FakeLlmProvider([
-        scriptedExtraction({
-          travellerFullName: "Priya Nair",
-          passportNumber: "K7654321",
-          partnerNameRaw: "Ozzy Travels",
-          destinationCountryRaw: "Japan",
-          applicantCount: 1,
-        }),
-      ]),
-    });
-    const writeRefusingContext = refuseWrites(contextWithLlm);
-
-    const draft = await extractIntake(writeRefusingContext, TENANT_ID, "irrelevant", ACTOR);
-
-    expect(draft.applicants).toEqual([
-      { applicantRef: "A1", travellerId: traveller.travellerId, passportNumber: "K7654321" },
-    ]);
-    expect(draft.partnerId).toBe(partner.partnerId);
-    expect(draft.destinationCountry).toBe("JP");
   });
 });
