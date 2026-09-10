@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import { notFound } from "../../lib/errors";
+import { badRequest, notFound } from "../../lib/errors";
 import { parseStoredRecord, stripStorageKeys } from "../../lib/storedRecords";
 import { META_SORT_KEY, countryChecklistPartitionKey } from "./keys";
 
@@ -33,15 +34,27 @@ export async function putCountryChecklist(
   input: PutCountryChecklistInput,
   actorEmail: string,
 ): Promise<CountryChecklist> {
-  const checklist: CountryChecklist = {
-    countryCode: input.countryCode,
-    requiredDocuments: input.requiredDocuments,
-    ...(input.notes !== undefined ? { notes: input.notes } : {}),
-    updatedAt: context.now().toISOString(),
-    updatedBy: actorEmail,
-  };
+  const nowIso = context.now().toISOString();
+  let checklist: CountryChecklist;
+  try {
+    checklist = CountryChecklistSchema.parse({
+      countryCode: input.countryCode,
+      requiredDocuments: input.requiredDocuments,
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      updatedAt: nowIso,
+      updatedBy: actorEmail,
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const firstIssue = error.issues[0];
+      throw badRequest(
+        firstIssue ? `${firstIssue.path.join(".")}: ${firstIssue.message}` : "Invalid country checklist",
+      );
+    }
+    throw error;
+  }
   await context.table.put({
-    PK: countryChecklistPartitionKey(tenantId, input.countryCode),
+    PK: countryChecklistPartitionKey(tenantId, checklist.countryCode),
     SK: META_SORT_KEY,
     ...checklist,
   });

@@ -103,4 +103,28 @@ describe("putCountryChecklist / getCountryChecklist", () => {
       code: "CORRUPT_RECORD",
     });
   });
+
+  it("rejects a malformed countryCode with 400, not a 500, and writes nothing", async () => {
+    const context = buildTestContext();
+    // A three-character code fails the schema's .length(2) constraint.
+    // The partition key is derived from this code, so a malformed code would
+    // write under a key that fails on every future read. The caller must see
+    // a 400 so it knows to retry with valid input, not a 500.
+    const malformedInput = {
+      countryCode: "XYZ",
+      requiredDocuments: ["Passport"],
+    };
+
+    await expect(putCountryChecklist(context, TENANT_ID, malformedInput, DESK_ACTOR))
+      .rejects.toMatchObject({
+        statusCode: 400,
+        code: "BAD_REQUEST",
+      });
+
+    // Verify nothing was written: a subsequent read must not find a row.
+    await expect(getCountryChecklist(context, TENANT_ID, "XYZ")).rejects.toMatchObject({
+      statusCode: 404,
+      code: "NOT_FOUND",
+    });
+  });
 });
