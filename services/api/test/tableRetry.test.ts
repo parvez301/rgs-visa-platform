@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DynamoTableClient, InMemoryTableClient, type TableClient, type TableItem } from "../src/lib/db";
 import {
   DEFAULT_WRITE_RETRY_OPTIONS,
@@ -274,6 +274,44 @@ describe("buildProductionContext", () => {
       process.env = savedEnvironment;
     }
   });
+
+  it("actually reads its retry cap from the environment, not just from a wrapper that could be configured", async () => {
+    // The gap one level deeper than the test above: that test proves the
+    // table is WRAPPED, but a wrapper built with `{}` instead of
+    // `writeRetryOptionsFromEnvironment(process.env)` is still "wrapped" --
+    // it would just always retry the default 5 times, silently ignoring
+    // RGS_WRITE_RETRY_MAX_ATTEMPTS. So this drives an actual retryable
+    // failure through the real seam and counts the underlying attempts,
+    // rather than only inspecting the object shape.
+    const savedEnvironment = { ...process.env };
+    process.env["TABLE_NAME"] = "rgs-table";
+    process.env["DOCUMENTS_BUCKET"] = "rgs-documents";
+    process.env["EMAIL_SENDER"] = "noreply@rgs.test";
+    process.env["ADMIN_NOTIFICATION_EMAIL"] = "info@rgs.test";
+    process.env[WRITE_RETRY_MAX_ATTEMPTS_VARIABLE] = "1";
+    // The underlying DynamoTableClient.put always fails with a retryable
+    // error, so the only thing standing between one attempt and the default
+    // five is whether the environment's cap of 1 actually reached the seam.
+    const underlyingPutSpy = vi
+      .spyOn(DynamoTableClient.prototype, "put")
+      .mockRejectedValue(buildThrottlingError());
+    try {
+      const { buildProductionContext } = await import("../src/http/handler");
+      const productionContext = buildProductionContext();
+
+      await expect(
+        productionContext.table.put({ PK: "TENANT#rgs#CASE#1", SK: "META" }),
+      ).rejects.toThrow(/Throughput exceeds/);
+
+      // Wired correctly, RGS_WRITE_RETRY_MAX_ATTEMPTS=1 means one attempt and
+      // no retry. Wired as `{}`, the default cap of 5 would retry four more
+      // times against the same always-failing mock.
+      expect(underlyingPutSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      underlyingPutSpy.mockRestore();
+      process.env = savedEnvironment;
+    }
+  }, 15_000);
 });
 
 describe("writeRetryOptionsFromEnvironment", () => {
