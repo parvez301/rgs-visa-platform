@@ -1,4 +1,5 @@
 import type { ActivityEvent, ActivityEventType, ActivityActorRole } from "@rgs/shared";
+import type { LlmProvider } from "../agent/providers/types";
 import type { TableClient } from "./db";
 import type { DocumentStore } from "./documentStore";
 import type { EmailSender } from "./email";
@@ -11,6 +12,12 @@ export interface AppContext {
   email: EmailSender;
   adminNotificationAddress: string;
   now: () => Date;
+  /**
+   * The agent's model seam. Optional because every route that predates the
+   * agent builds a context without one, and a required field here would mean
+   * touching every existing test.
+   */
+  llm?: LlmProvider;
 }
 
 export async function logActivity(
