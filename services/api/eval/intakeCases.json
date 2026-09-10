@@ -342,6 +342,23 @@
     }
   },
   {
+    "id": "clean-repeat-traveller-ritu-bansal",
+    "rawText": "Following up for Ritu Bansal, same passport T7654321 on file, this time to Kenya, 1 pax, no referrer.",
+    "seed": {
+      "traveller": {
+        "fullName": "Ritu Bansal",
+        "passportNumber": "T7654321"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Ritu Bansal",
+      "passportNumber": "T7654321",
+      "destinationCountry": "KE",
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
     "id": "clean-known-client-repeat-passport",
     "rawText": "Repeat client Arjun Verma travelling again, this time to Germany, same passport U8765432 on file, ref Ozzy Travels.",
     "seed": {

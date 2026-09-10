@@ -236,9 +236,15 @@ describe("extractIntake", () => {
 
     expect(draft.destinationCountry).toBe("LK");
     expect(draft.visaType).toBe("E_VISA");
+    // task-12-fix-2-brief.md A7/D3: CrmCaseSchema refuses a visaType with no
+    // caseType: "VISA" -- m3 and m4 used to be independently optional, which
+    // let a draft carry visaType alone. The map naming a specific product is
+    // as deterministic as the country resolution itself, so caseType is set
+    // alongside it, not guessed separately.
+    expect(draft.caseType).toBe("VISA");
   });
 
-  it("does not set a visa-type hint for a plain destination spelling that carries none", async () => {
+  it("does not set a visa-type hint (or a caseType) for a plain destination spelling that carries neither", async () => {
     const context = buildTestContextWithFakeLlm([
       scriptedExtraction({ destinationCountryRaw: "Thailand", applicantCount: 1 }),
     ]);
@@ -246,6 +252,27 @@ describe("extractIntake", () => {
     const draft = await extractIntake(context, TENANT_ID, "irrelevant", ACTOR);
 
     expect(draft.visaType).toBeUndefined();
+    expect(draft.caseType).toBeUndefined();
+  });
+
+  // task-12-fix-2-brief.md A7/D3: the invariant itself, independent of which
+  // specific values are involved -- a draft this function returns must never
+  // carry one of {caseType, visaType} without the other, in either
+  // direction, or CrmCaseSchema's "only a VISA case may carry a visaType"
+  // refinement would reject it downstream.
+  it.each([
+    { description: "a visaType-hinting spelling", destinationCountryRaw: "Sri Lanka ETA" },
+    { description: "a plain spelling with no hint", destinationCountryRaw: "Thailand" },
+    { description: "an unresolved destination", destinationCountryRaw: "PASSPORT NEW" },
+    { description: "no destination stated at all", destinationCountryRaw: "" },
+  ])("caseType and visaType are both present or both absent ($description)", async ({ destinationCountryRaw }) => {
+    const context = buildTestContextWithFakeLlm([
+      scriptedExtraction({ destinationCountryRaw, applicantCount: 1 }),
+    ]);
+
+    const draft = await extractIntake(context, TENANT_ID, "irrelevant", ACTOR);
+
+    expect("caseType" in draft).toBe("visaType" in draft);
   });
 
   it("carries missingDocuments straight through from the extraction", async () => {

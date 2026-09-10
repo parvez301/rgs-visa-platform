@@ -79,11 +79,20 @@ type RawIntakeExtraction = z.infer<typeof RawIntakeExtractionSchema>;
 export const INTAKE_EXTRACTION_RESPONSE_SCHEMA = zodObjectToJsonSchema(RawIntakeExtractionSchema);
 
 /**
- * A schema-valid `CreateCaseInput` in shape, plus the three fields the
- * pipeline can surface instead of a resolved value (task-12-brief.md
- * Interfaces). `applicants` never carries an entry this function invented --
- * it is populated only from a real `findTravellerByPassport` match, so an
- * empty array is the honest answer for a first-time traveller, not a bug.
+ * A draft carrying the subset of `CreateCaseInput`'s own field names and
+ * types it can actually populate, plus the extra fields the pipeline
+ * surfaces instead of a resolved value (task-12-brief.md Interfaces). It is
+ * NOT a schema-valid `CreateCaseInput` on its own -- fields `CrmCaseSchema`
+ * requires (`caseRef`, `partnerId` unconditionally, etc.) are routinely
+ * absent here, by design, since resolution and confirmation are a human's
+ * job downstream. What this function DOES guarantee (task-12-fix-2-brief.md
+ * A7/D3): `caseType` and `visaType` are only ever both present or both
+ * absent, matching `CrmCaseSchema`'s own refinement ("only a VISA case may
+ * carry a visaType") -- a draft this function returns can never violate that
+ * rule, even though nothing here asserts the full case schema. `applicants`
+ * never carries an entry this function invented -- it is populated only
+ * from a real `findTravellerByPassport` match, so an empty array is the
+ * honest answer for a first-time traveller, not a bug.
  *
  * `travellerFullName` / `passportNumber` are carried at the top level
  * (beyond `CreateCaseInput`'s own shape) as-extracted, regardless of whether
@@ -111,15 +120,21 @@ export interface IntakeDraft {
   /** Only travellers an existing passport actually matched. Never a minted record. */
   applicants: CreateCaseApplicantInput[];
   receivedDate: string;
-  /** Absent, not defaulted (task-12-review.md m3): nothing this function extracts states a
-   * case type, so guessing "VISA" would be the one field on this draft holding a value the
-   * text never supported -- every other unstated field on IntakeDraft is absent for the same
-   * reason. A human confirms case type when they act on the draft. */
+  /** Absent unless the country map itself asserts a specific product (task-12-review.md m3,
+   * task-12-fix-2-brief.md A7/D3/D4): nothing this function extracts states a case type on its
+   * own, so guessing "VISA" from the model's own text would be a value the text never
+   * supported. But `crm.normalizeCountry`'s `visaTypeHint` (e.g. "Sri Lanka ETA" -> E_VISA) is
+   * exactly as deterministic and authoritative as the country resolution it rides alongside --
+   * not a guess -- and `CrmCaseSchema` refuses a `visaType` without `caseType: "VISA"`, so the
+   * two are set together or not at all. A human still confirms case type for every other case. */
   caseType?: crm.CaseType;
   /** Present only when the destination resolved to a spelling the country map also flags as
    * naming a specific product (task-12-review.md m4), e.g. "Sri Lanka ETA" -> E_VISA. This is
-   * `crm.normalizeCountry`'s own `visaTypeHint`, carried through rather than discarded --
-   * still just a hint for a human, since caseType itself is never asserted here. */
+   * `crm.normalizeCountry`'s own `visaTypeHint`, carried through rather than discarded -- and,
+   * since this round, always paired with `caseType: "VISA"` on the same draft, never one
+   * without the other (task-12-fix-2-brief.md A7/D3: the two used to be independently
+   * optional, which let a draft carry a `visaType` with no `caseType` at all -- a combination
+   * `CrmCaseSchema` itself rejects). */
   visaType?: crm.VisaType;
   missingDocuments: string[];
 }
@@ -227,6 +242,7 @@ export async function extractIntake(
 
   let destinationCountry: string | undefined;
   let unresolvedCountry: string | undefined;
+  let caseType: crm.CaseType | undefined;
   let visaType: crm.VisaType | undefined;
   if (rawExtraction.destinationCountryRaw !== "") {
     // The same deterministic country map the migration importer uses
@@ -244,7 +260,13 @@ export async function extractIntake(
     if (normalized.countryCode !== null) {
       destinationCountry = normalized.countryCode;
       if (normalized.visaTypeHint !== null) {
+        // task-12-fix-2-brief.md A7/D3/D4: caseType and visaType are set
+        // together, never one without the other -- CrmCaseSchema refuses a
+        // visaType with no caseType: "VISA". The map naming a specific
+        // product here is deterministic, same authority as the country
+        // resolution it rides alongside, not the model guessing.
         visaType = normalized.visaTypeHint;
+        caseType = "VISA";
       }
     } else {
       unresolvedCountry = rawExtraction.destinationCountryRaw;
@@ -265,7 +287,8 @@ export async function extractIntake(
     // Filed as received today -- the desk is processing this paste now, and
     // nothing in a pasted enquiry states a different received date.
     receivedDate: context.now().toISOString().slice(0, 10),
-    // caseType is intentionally absent -- see IntakeDraft's own doc comment.
+    // caseType is set only alongside visaType -- see IntakeDraft's own doc comment.
+    ...(caseType !== undefined ? { caseType } : {}),
     ...(visaType !== undefined ? { visaType } : {}),
     missingDocuments: rawExtraction.missingDocuments,
   };

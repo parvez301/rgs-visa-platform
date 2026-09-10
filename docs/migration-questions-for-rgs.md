@@ -27,7 +27,7 @@ staff members rather than referrers?
 
 ---
 
-## 2. The Country column is doing two jobs — 245 rows, 65 different values
+## 2. The Country column is doing two jobs — 225 rows, 63 different values
 
 Some rows have a service in the Country column instead of a destination:
 
@@ -41,15 +41,23 @@ the CRM, rather than being filed as a destination country?
 
 Three other patterns in the same column, all needing a rule:
 
-- **Misspellings** — `Myannmar` 13, `Lexumbourg` 7, `COMBODIA` 4, `AFGANISTAN` 2,
-  `MAALI` 2, `KRGYZ` 2, `USA DROPOJ` 3. Say the word and we correct all of them.
+- **Misspellings** — as of this build, two of these already correct
+  automatically, because each has exactly one unambiguous real-country match:
+  `Myannmar` 13 rows → Myanmar, `Lexumbourg` 7 rows → Luxembourg. The rest stay
+  unresolved and go to review, by default, because we are not guessing without
+  you confirming: `COMBODIA` 4, `AFGANISTAN` 2, `MAALI` 2, `KRGYZ` 2,
+  `USA DROPOJ` 3 (13 rows). The rule: an unambiguous, single-candidate
+  misspelling resolves the way a desk agent reading it would; anything with
+  more than one plausible reading stays a question for you. Say the word if
+  you want any of the remaining five corrected too.
 - **Multi-country trips** — `TANZANIA/KENYA`, `Nigeria / GHANA`, `EGYPT & JORDAN`,
   `FRANCE/UK`, `KENYA/ZAMBIA`, `zambia mozambique malawi`, `OMAN/EGYPT`.
   Should one case carry several destinations?
 - **Not a country** — `JAIPUR` 2 (a city), `CANTON` 4, `QNLWE` 3, `3E` 1.
 
 **Default:** the row imports with no destination set and raises one review item
-per distinct value — so 65 decisions, not 245.
+per distinct value — so 63 decisions, not 225 (down from 245/65 now that
+Myannmar and Lexumbourg resolve on their own).
 
 ---
 
@@ -134,7 +142,8 @@ inventing a traveller who may not exist.
 Every one of the 7,156 rows imports. Nothing is dropped and nothing is silently
 changed — every uncertain value is preserved exactly as typed and raised in the
 review queue, which groups by distinct value, so 644 partner rows are 3 decisions
-and 245 country rows are 65.
+and 225 country rows are 63 (Myannmar and Lexumbourg, 20 rows across 2 values,
+already resolve on their own and are not in that count).
 
 The import is re-runnable against the live sheet: running it again adds only what
 is new.

@@ -12,6 +12,11 @@ import { InMemoryDocumentStore } from "../src/lib/documentStore";
 import { InMemoryEmailSender } from "../src/lib/email";
 import { createPartner, getPartnerOrThrow } from "../src/domain/crm/partners";
 import { upsertTraveller } from "../src/domain/crm/travellers";
+// task-12-fix-2-brief.md A5: used only to self-simulate a perfect model
+// OFFLINE (see derivePerfectModelCoverage below), never to reach a live
+// provider -- the same no-network guarantee this whole file's design gives
+// every test of it.
+import { FakeLlmProvider, type ScriptedTurn } from "../src/agent/providers/fake";
 
 /**
  * The eval that decides which LLM provider RGS can afford to run intake on
@@ -95,6 +100,15 @@ export const EvalCaseSchema = z
   })
   .refine((evalCase) => evalCase.trapClass === undefined || evalCase.trapField !== undefined, {
     message: "trapClass requires trapField to be set",
+  })
+  // task-12-fix-2-brief.md A4: omitting trapRawText used to survive parsing
+  // silently and disable the raw-value fidelity check for that case (it
+  // gated on `evalCase.trapRawText !== undefined`) -- a trap quietly stopped
+  // being scored as one. Every real trap case already carries trapRawText,
+  // so this is a parse-time refinement naming the offending case, not a
+  // behaviour change to any case actually on file.
+  .refine((evalCase) => evalCase.trapField === undefined || evalCase.trapRawText !== undefined, {
+    message: "trapField requires trapRawText, or the raw-value fidelity check silently stops scoring this case as a trap",
   });
 export type EvalCase = z.infer<typeof EvalCaseSchema>;
 
@@ -274,14 +288,31 @@ export function applyTrapFidelity(
     };
   }
 
-  // Class 2 ("unresolved"): staying unresolved is necessary but not
-  // sufficient. When the case states the exact substring a faithful copy
-  // must carry, the model's raw output must match it -- up to
-  // buildLookupKey normalization -- or this is a fabrication that merely
-  // also failed to resolve.
+  // Class 2 ("unresolved"): staying unresolved on the surface is necessary
+  // but not sufficient. When the case states the exact substring a faithful
+  // extraction must carry, the model's raw output must match it -- up to
+  // buildLookupKey normalization -- or this is a fabrication.
+  //
+  // task-12-fix-2-brief.md A2/D1: this used to also require
+  // `trapFieldScore.actual === null`, which made the check unsatisfiable by
+  // construction for passportNumber/travellerFullName -- those have no
+  // separate resolved/unresolved carrier (rawTrapValue reads the exact same
+  // field FieldScore.actual does), so `actual === null` and `rawValue !==
+  // undefined` could never both hold. The consequence: a model that copies
+  // "24-02-026" verbatim -- exactly what the system prompt demands -- scored
+  // identically to one that invents "Z9999999", because both take the early
+  // `actual !== null` exit with fabricatedRaw hard-coded false.
+  //
+  // Dropping that gate fixes both field shapes uniformly, because it was
+  // never actually load-bearing for the two-tier fields either:
+  // destinationCountry/partnerName's raw carrier (unresolvedCountry /
+  // unresolvedPartnerName) is undefined by construction whenever the field
+  // DID resolve (intake.ts never sets both), so `rawValue !== undefined`
+  // alone already excludes a resolved field from this check -- the same
+  // outcome the old `actual === null` conjunct existed to produce, for that
+  // field shape only.
   const rawValue = rawTrapValue(draft, evalCase.trapField);
   const fabricatedRaw =
-    trapFieldScore.actual === null &&
     evalCase.trapRawText !== undefined &&
     rawValue !== undefined &&
     crm.buildLookupKey(rawValue) !== crm.buildLookupKey(evalCase.trapRawText);
@@ -418,16 +449,135 @@ export function summarize(caseResults: CaseResult[]): ProviderScorecard {
   };
 }
 
+/**
+ * What a perfectly faithful, non-fabricating model's raw reply would be for
+ * a case: the true value for every ordinary field, and for a trap field, the
+ * exact raw text the case names as the correct extraction (or, for a
+ * passport-shaped non-passport, nothing at all -- there is no raw carrier to
+ * fall back to for that field). Shared between `deriveCoverageThreshold`
+ * (task-12-fix-2-brief.md A5) and this file's own test suite's Strategy A, so
+ * "what counts as a perfect model" can never silently drift apart between
+ * the number a test pins and the number a real run gates on.
+ */
+export interface RawExtraction {
+  travellerFullName: string;
+  passportNumber: string;
+  destinationCountryRaw: string;
+  partnerNameRaw: string;
+  applicantCount: number;
+  missingDocuments: string[];
+}
+
+export const COUNTRY_NAME_BY_CODE: Record<string, string> = {
+  JP: "Japan",
+  SG: "Singapore",
+  TH: "Thailand",
+  KE: "Kenya",
+  GB: "United Kingdom",
+  AE: "Dubai",
+  LK: "Sri Lanka",
+  FR: "France",
+  CA: "Canada",
+  DE: "Germany",
+  MM: "Myanmar",
+  LU: "Luxembourg",
+};
+
+export function deriveFaithfulExtraction(evalCase: EvalCase): RawExtraction {
+  const travellerFullName =
+    evalCase.trapField === "travellerFullName" ? "" : (evalCase.expected.travellerFullName ?? "");
+  const passportNumber = evalCase.trapField === "passportNumber" ? "" : (evalCase.expected.passportNumber ?? "");
+  const destinationCountryRaw =
+    evalCase.trapField === "destinationCountry"
+      ? (evalCase.trapRawText ?? "")
+      : (COUNTRY_NAME_BY_CODE[evalCase.expected.destinationCountry ?? ""] ?? "");
+  const partnerNameRaw =
+    evalCase.trapField === "partnerName" ? (evalCase.trapRawText ?? "") : (evalCase.expected.partnerName ?? "");
+  return {
+    travellerFullName,
+    passportNumber,
+    destinationCountryRaw,
+    partnerNameRaw,
+    applicantCount: evalCase.expected.applicantCount,
+    missingDocuments: [],
+  };
+}
+
+/**
+ * Runs a simulated perfect model through the REAL scoring pipeline --
+ * `scoreCase`/`summarize`, the same functions a live run uses -- entirely
+ * offline via `FakeLlmProvider`, and returns its coverage. This is what
+ * `deriveCoverageThreshold` derives the coverage floor from: coverage's own
+ * denominator counts every extractable string field on every case, including
+ * fields a correct model must leave blank (a case that genuinely states
+ * nothing for a field, or a passport-shaped non-passport trap with no raw
+ * carrier to fall back to), so 100% is not an achievable target even for a
+ * perfect extraction.
+ */
+export async function derivePerfectModelCoverage(cases: EvalCase[]): Promise<number> {
+  const scriptedTurns: ScriptedTurn[] = cases.map((evalCase) => ({
+    text: JSON.stringify(deriveFaithfulExtraction(evalCase)),
+    toolCalls: [],
+  }));
+  const context = buildEvalContext(new FakeLlmProvider(scriptedTurns));
+  await seedFixtures(context, cases);
+
+  const caseResults: CaseResult[] = [];
+  for (const evalCase of cases) {
+    caseResults.push(await scoreCase(context, evalCase));
+  }
+  return summarize(caseResults).coverage;
+}
+
+export interface CoverageThreshold {
+  coverageMin: number;
+  /** What a perfect model actually reaches on this case file -- printed
+   * beside coverageMin so the reader can interpret a scale that a fixed
+   * round number cannot otherwise explain (task-12-fix-2-brief.md A5). */
+  perfectModelCoverageCeiling: number;
+}
+
+/**
+ * task-12-fix-2-brief.md A5: `coverageMin` used to be a fixed 0.5, which is
+ * not a property of a provider at all -- it moves every time a case is
+ * added or removed, and it was never validated against what is actually
+ * achievable. Derived from the case file instead: a margin below the
+ * perfect-model ceiling, so the gate still catches a model that is
+ * unreasonably silent without demanding more coverage than the case file
+ * itself can produce. The 20% relative margin is provisional -- unvalidated
+ * against a live provider run -- and labelled as such wherever it is
+ * printed (task-12-fix-2-brief.md "How to finish": Step 5 stays open).
+ */
+export async function deriveCoverageThreshold(cases: EvalCase[]): Promise<CoverageThreshold> {
+  const perfectModelCoverageCeiling = await derivePerfectModelCoverage(cases);
+  const coverageMin = perfectModelCoverageCeiling * 0.8;
+  return { coverageMin, perfectModelCoverageCeiling };
+}
+
 /** task-12-review.md A7/m8: there used to be no pass/fail threshold anywhere,
  * and `main()` always exited 0 -- a total guesser printed 92.7% accuracy (8
  * trap fields averaged against 102 easy ones) and nothing said so. Gated on
  * the class-2 numbers specifically, not the blended accuracy, per A7 -- plus
  * a coverage floor, because A4/M3's all-blank model would otherwise still
  * pass a class-2-only gate (it never guesses, so it never fails a class-2
- * trap either; coverage is what actually exposes it). */
+ * trap either; coverage is what actually exposes it).
+ *
+ * task-12-fix-2-brief.md A5/A6, both rulings applied here:
+ * - class2TrapRecallMin raised 0.75 -> 1.0: at 0.75 a provider fabricating
+ *   on two of nine class-2 traps still passed. A false FAIL costs a free
+ *   re-run; a false PASS costs exactly the failure this task exists to
+ *   prevent.
+ * - class1TrapAccuracyMin added (the gate used to ignore class-1 accuracy
+ *   entirely, so a model that declined every unambiguous misspelling passed
+ *   identically to one that resolved them all): declining a misspelling
+ *   yields a case with no destination, a worse outcome than resolving it.
+ *
+ * coverageMin is NOT here -- it depends on the case file and is derived by
+ * `deriveCoverageThreshold`, passed into `evaluateThreshold` explicitly.
+ */
 export const EVAL_THRESHOLDS = {
-  class2TrapRecallMin: 0.75,
-  coverageMin: 0.5,
+  class2TrapRecallMin: 1.0,
+  class1TrapAccuracyMin: 1.0,
 } as const;
 
 export interface ThresholdResult {
@@ -435,18 +585,26 @@ export interface ThresholdResult {
   failedChecks: string[];
 }
 
-export function evaluateThreshold(scorecard: ProviderScorecard): ThresholdResult {
+export function evaluateThreshold(scorecard: ProviderScorecard, coverageThreshold: CoverageThreshold): ThresholdResult {
   const failedChecks: string[] = [];
   if (scorecard.class2TrapRecall < EVAL_THRESHOLDS.class2TrapRecallMin) {
     failedChecks.push(
       `class-2 trap recall ${formatPercent(scorecard.class2TrapRecall)} is below the minimum ` +
-        `${formatPercent(EVAL_THRESHOLDS.class2TrapRecallMin)}`,
+        `${formatPercent(EVAL_THRESHOLDS.class2TrapRecallMin)} -- a false PASS here costs exactly the failure this task exists to prevent`,
     );
   }
-  if (scorecard.coverage < EVAL_THRESHOLDS.coverageMin) {
+  if (scorecard.class1TrapAccuracy < EVAL_THRESHOLDS.class1TrapAccuracyMin) {
     failedChecks.push(
-      `coverage ${formatPercent(scorecard.coverage)} is below the minimum ${formatPercent(EVAL_THRESHOLDS.coverageMin)} ` +
-        "-- a provider this silent cannot be judged safe just because it never guessed",
+      `class-1 trap accuracy ${formatPercent(scorecard.class1TrapAccuracy)} is below the minimum ` +
+        `${formatPercent(EVAL_THRESHOLDS.class1TrapAccuracyMin)} -- declining an unambiguous misspelling yields a case with ` +
+        "no destination, a worse outcome than resolving it",
+    );
+  }
+  if (scorecard.coverage < coverageThreshold.coverageMin) {
+    failedChecks.push(
+      `coverage ${formatPercent(scorecard.coverage)} is below the minimum ${formatPercent(coverageThreshold.coverageMin)} ` +
+        `(perfect-model ceiling ${formatPercent(coverageThreshold.perfectModelCoverageCeiling)}) -- a provider this silent ` +
+        "cannot be judged safe just because it never guessed",
     );
   }
   return { passed: failedChecks.length === 0, failedChecks };
@@ -500,7 +658,12 @@ export function formatPercent(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;
 }
 
-export function printScorecard(providerName: string, model: string, scorecard: ProviderScorecard): void {
+export function printScorecard(
+  providerName: string,
+  model: string,
+  scorecard: ProviderScorecard,
+  coverageThreshold: CoverageThreshold,
+): void {
   console.log(`\nResults for ${providerName} (${model})`);
   console.table({
     "exact-field accuracy": {
@@ -513,7 +676,9 @@ export function printScorecard(providerName: string, model: string, scorecard: P
     },
     coverage: {
       value: formatPercent(scorecard.coverage),
-      detail: `${scorecard.fieldsFilled}/${scorecard.fieldsFillable} extractable string fields filled in at all`,
+      detail:
+        `${scorecard.fieldsFilled}/${scorecard.fieldsFillable} extractable string fields filled in at all ` +
+        `(perfect-model ceiling ${formatPercent(coverageThreshold.perfectModelCoverageCeiling)})`,
     },
     "class-2 trap recall": {
       value: formatPercent(scorecard.class2TrapRecall),
@@ -525,12 +690,59 @@ export function printScorecard(providerName: string, model: string, scorecard: P
     },
   });
 
-  const threshold = evaluateThreshold(scorecard);
+  const threshold = evaluateThreshold(scorecard, coverageThreshold);
+  // task-12-fix-2-brief.md A5: both flagged as unmeasured against a live
+  // provider -- they stay provisional until one runs, stated here rather
+  // than only in a code comment nobody running the script would ever read.
   console.log(
-    `\nThreshold: class-2 trap recall >= ${formatPercent(EVAL_THRESHOLDS.class2TrapRecallMin)}, ` +
-      `coverage >= ${formatPercent(EVAL_THRESHOLDS.coverageMin)}`,
+    "\nThreshold (PROVISIONAL -- unvalidated against a live provider run):\n" +
+      `  class-2 trap recall >= ${formatPercent(EVAL_THRESHOLDS.class2TrapRecallMin)}\n` +
+      `  class-1 trap accuracy >= ${formatPercent(EVAL_THRESHOLDS.class1TrapAccuracyMin)}\n` +
+      `  coverage >= ${formatPercent(coverageThreshold.coverageMin)} (perfect-model ceiling ` +
+      `${formatPercent(coverageThreshold.perfectModelCoverageCeiling)})`,
   );
   console.log(threshold.passed ? "PASS" : `FAIL -- ${threshold.failedChecks.join("; ")}`);
+}
+
+/** task-12-fix-2-brief.md A3: the CLI's second confirmation gate against
+ * spending against the wrong vendor's key by mistake, extracted out of
+ * unexported `main()` -- before this round no test could reach it, and it
+ * survived every mutation at 607/607. */
+export function assertProviderMatches(requestedProvider: string, configuredProviderName: string): void {
+  if (configuredProviderName !== requestedProvider) {
+    throw new Error(
+      `--provider ${requestedProvider} does not match LLM_PROVIDER=${configuredProviderName} in the ` +
+        "environment -- refusing to run against a provider you did not ask for",
+    );
+  }
+}
+
+/** task-12-fix-2-brief.md A3: the exact lines the pre-spend banner prints,
+ * separated from the countdown itself so a test can assert its content
+ * without needing a real (or even fake) timer. */
+export function formatPreSpendBanner(providerName: string, model: string, caseCount: number): string[] {
+  return [
+    `intake eval: provider=${providerName} model=${model} cases=${caseCount}`,
+    "This calls a live provider and will incur cost. Starting in 3 seconds (Ctrl+C to abort)...",
+  ];
+}
+
+/** task-12-fix-2-brief.md A3: the pre-spend banner exists so nobody spends
+ * money without seeing what they are about to spend it on -- extracted out
+ * of unexported `main()`, where before this round no test could reach either
+ * the banner text or the countdown that follows it. `delayMs` defaults to
+ * the real 3-second pause `main()` needs, and is overridable so a test can
+ * drive it with fake timers instead of a real multi-second wait. */
+export async function printPreSpendBanner(
+  providerName: string,
+  model: string,
+  caseCount: number,
+  delayMs = 3000,
+): Promise<void> {
+  for (const line of formatPreSpendBanner(providerName, model, caseCount)) {
+    console.log(line);
+  }
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 async function main(): Promise<void> {
@@ -547,22 +759,19 @@ async function main(): Promise<void> {
   // be billed, not an alternative source for it -- a mismatch is refused
   // rather than silently trusting whichever one the caller meant.
   const providerConfig = llmProviderConfigFromEnvironment(process.env);
-  if (providerConfig.providerName !== requestedProvider) {
-    throw new Error(
-      `--provider ${requestedProvider} does not match LLM_PROVIDER=${providerConfig.providerName} in the ` +
-        "environment -- refusing to run against a provider you did not ask for",
-    );
-  }
+  assertProviderMatches(requestedProvider, providerConfig.providerName);
 
   const casesFileUrl = new URL("./intakeCases.json", import.meta.url);
   const rawCasesJson = JSON.parse(await readFile(casesFileUrl, "utf8"));
   const cases = z.array(EvalCaseSchema).parse(rawCasesJson);
+  // Offline, no network call: simulates a perfect model against this exact
+  // case file to derive what "silent" actually means before spending a cent
+  // on the real one (task-12-fix-2-brief.md A5).
+  const coverageThreshold = await deriveCoverageThreshold(cases);
 
   // notes §4: print the provider, the model and the case count BEFORE
   // starting, since every case from here on is a real, billed request.
-  console.log(`intake eval: provider=${providerConfig.providerName} model=${providerConfig.model} cases=${cases.length}`);
-  console.log("This calls a live provider and will incur cost. Starting in 3 seconds (Ctrl+C to abort)...");
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  await printPreSpendBanner(providerConfig.providerName, providerConfig.model, cases.length);
 
   const llmProvider = createLlmProvider(providerConfig);
   const context = buildEvalContext(llmProvider);
@@ -576,8 +785,8 @@ async function main(): Promise<void> {
   }
 
   const scorecard = summarize(caseResults);
-  printScorecard(providerConfig.providerName, providerConfig.model, scorecard);
-  const threshold = evaluateThreshold(scorecard);
+  printScorecard(providerConfig.providerName, providerConfig.model, scorecard, coverageThreshold);
+  const threshold = evaluateThreshold(scorecard, coverageThreshold);
   if (!threshold.passed) {
     // A7: this runner informs a purchasing decision -- a provider that
     // misses the bar must not report success just because nothing threw.
@@ -616,6 +825,7 @@ async function main(): Promise<void> {
         generatedAt: new Date().toISOString(),
         caseCount: cases.length,
         scorecard,
+        coverageThreshold,
         threshold,
         cases: caseResults,
       },
