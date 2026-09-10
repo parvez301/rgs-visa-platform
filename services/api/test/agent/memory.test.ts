@@ -7,7 +7,7 @@ import {
   stageProposal,
   type ProposedChange,
 } from "../../src/agent/approval";
-import { recallTool } from "../../src/agent/tools/memoryTools";
+import { recallTool, rememberTool } from "../../src/agent/tools/memoryTools";
 import { READ_TOOLS } from "../../src/agent/tools/readTools";
 import { ToolRegistry } from "../../src/agent/tools/registry";
 import { WRITE_TOOLS } from "../../src/agent/tools/writeTools";
@@ -359,6 +359,7 @@ describe("the remember tool", () => {
     )) as ProposedChange;
     expect(firstProposal.summary).toEqual([
       { field: "ORG/morning-slots", from: "(new memory)", to: "prefers morning slots" },
+      { field: "sourceCaseId", from: "(none)", to: seededCase.caseId },
     ]);
 
     // execute never writes -- apply is the only path to the table.
@@ -382,6 +383,7 @@ describe("the remember tool", () => {
     )) as ProposedChange;
     expect(secondProposal.summary).toEqual([
       { field: "ORG/morning-slots", from: "prefers morning slots", to: "prefers morning slots, before 10am" },
+      { field: "sourceCaseId", from: seededCase.caseId, to: seededCase.caseId },
     ]);
   });
 
@@ -693,6 +695,95 @@ describe("rememberMemory records a case-timeline event (fix round 1, Minor 5)", 
     const events = await listCaseEvents(context, TENANT_ID, seededCase.caseId);
     // Only the one event remember itself recorded -- forget added none.
     expect(events.filter((event) => event.eventType === "MEMORY_REMEMBERED")).toHaveLength(1);
+  });
+});
+
+// fix round 2: task-9-fix-1-review.md's own m5 fix introduced this gap --
+// rememberMemory started writing an EVENT# row against `sourceCaseId`
+// without ever checking the case exists. Mandatory mutation (a): remove the
+// readCaseOrThrow call below and confirm the first test here goes red.
+describe("rememberMemory validates sourceCaseId against a real case (fix round 2, item 1)", () => {
+  it("rejects a sourceCaseId naming no real case, and writes neither the memory row nor an orphan event", async () => {
+    const context = buildTestContext();
+    const scope = memoryScope("ORG");
+    const phantomCaseId = "case_does_not_exist";
+
+    await expect(
+      rememberMemory(
+        context,
+        TENANT_ID,
+        { scope, memoryKey: "orphan", text: "a fact citing nothing real", sourceCaseId: phantomCaseId },
+        ALICE,
+      ),
+    ).rejects.toMatchObject({ statusCode: 404 });
+
+    // Nothing written at all -- not the memory row (the ordering choice:
+    // the case is validated BEFORE writeMemory runs, not after), and not an
+    // orphan EVENT# row in the phantom case's own, otherwise-empty partition.
+    const { memories } = await recallMemories(context, TENANT_ID, [scope]);
+    expect(memories).toEqual([]);
+    expect(await listCaseEvents(context, TENANT_ID, phantomCaseId)).toEqual([]);
+  });
+
+  it("still succeeds, and still records its event, when sourceCaseId names a real case", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, ALICE);
+    const scope = memoryScope("ORG");
+
+    const remembered = await rememberMemory(
+      context,
+      TENANT_ID,
+      { scope, memoryKey: "real-case", text: "a fact citing something real", sourceCaseId: seededCase.caseId },
+      ALICE,
+    );
+    expect(remembered.sourceCaseId).toBe(seededCase.caseId);
+
+    const events = await listCaseEvents(context, TENANT_ID, seededCase.caseId);
+    expect(events.filter((event) => event.eventType === "MEMORY_REMEMBERED")).toHaveLength(1);
+  });
+});
+
+// fix round 2, item 2: the other half of Major 3. Mandatory mutation (b):
+// drop the sourceCaseId entry from rememberTool's summary and confirm the
+// first test here goes red.
+describe("the approval card names the source case (fix round 2, item 2)", () => {
+  it("shows sourceCaseId on the remember card, not only scope and memoryKey", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, ALICE);
+
+    const proposal = (await rememberTool.execute(
+      context,
+      TENANT_ID,
+      { scope: "ORG", memoryKey: "slots", text: "prefers morning slots", sourceCaseId: seededCase.caseId },
+      ALICE,
+    )) as ProposedChange;
+
+    const sourceCaseIdEntry = proposal.summary.find((entry) => entry.field === "sourceCaseId");
+    expect(sourceCaseIdEntry?.to).toBe(seededCase.caseId);
+  });
+
+  it("says plainly, not blankly, when no sourceCaseId was given at all", async () => {
+    const context = buildTestContext();
+
+    const proposal = (await rememberTool.execute(
+      context,
+      TENANT_ID,
+      { scope: "ORG", memoryKey: "no-source", text: "an unearned fact" },
+      ALICE,
+    )) as ProposedChange;
+
+    const sourceCaseIdEntry = proposal.summary.find((entry) => entry.field === "sourceCaseId");
+    expect(sourceCaseIdEntry?.to).toBe("(none -- will be rejected on apply)");
+  });
+
+  it("rejects an empty-string sourceCaseId at the schema level, before it ever reaches rememberMemory", () => {
+    const parseResult = rememberTool.inputSchema.safeParse({
+      scope: "ORG",
+      memoryKey: "k",
+      text: "t",
+      sourceCaseId: "",
+    });
+    expect(parseResult.success).toBe(false);
   });
 });
 

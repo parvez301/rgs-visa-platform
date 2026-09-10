@@ -29,6 +29,20 @@ const FORGOTTEN_MEMORY_TO = "(forgotten)";
  * approval card for a call that in fact changes nothing.
  */
 const NOTHING_TO_FORGET_FROM = "(nothing remembered)";
+/**
+ * `sourceCaseId`'s own "from"/"to" sentinels on the approval card (fix round
+ * 2, item 2) -- distinct from NO_PRIOR_MEMORY_FROM (which describes the TEXT
+ * field having no prior value) even though the wording is similar, because a
+ * re-remember can carry a prior memory (a real "from" text) while still
+ * having no prior sourceCaseId to show, or vice versa; the two fields are
+ * independent and must not share a sentinel that would make one look like
+ * the other's echo.
+ */
+const NO_PRIOR_SOURCE_CASE_ID = "(none)";
+/** What a proposal with no sourceCaseId shows for "to" -- rememberMemory
+ * rejects this at apply time (an agent-created memory must cite a case), but
+ * the card must say so plainly rather than leaving the field blank. */
+const MISSING_SOURCE_CASE_ID_TO = "(none -- will be rejected on apply)";
 
 /**
  * Mints the two generated fields every proposal needs and assembles the
@@ -150,7 +164,12 @@ export const rememberTool: AgentTool<RememberToolInput> = {
     partnerId: z.string().min(1).optional(),
     memoryKey: z.string().min(1),
     text: z.string().trim().min(1).max(2000),
-    sourceCaseId: z.string().optional(),
+    // .min(1), not a bare .optional() (fix round 2, item 1): an empty string
+    // is not a case id, and letting one past the schema only to have
+    // rememberMemory's readCaseOrThrow refuse it later would trade a clear
+    // 400 at the boundary for a less legible 404 from a domain lookup that
+    // was never going to find anything.
+    sourceCaseId: z.string().min(1).optional(),
   }),
   execute: async (context, tenantId, input, actorEmail) => {
     // A read, to build a diff the approver can actually judge -- never a write.
@@ -160,18 +179,29 @@ export const rememberTool: AgentTool<RememberToolInput> = {
       context,
       "remember",
       input,
-      // The scope KIND, not the composite: house style puts the target in
-      // the field name (set_custody's `applicants.${ref}.custody`,
-      // writeTools.ts), and an ORG-scope and a USER-scope remember of the
-      // same text must not render as the same card. The composite is
-      // approver-derived (resolveMemoryScope's doc comment above) and
-      // genuinely unknowable at propose time in a split flow, so the kind
-      // -- always known here -- is what the field name can honestly show.
       [
+        // The scope KIND, not the composite: house style puts the target in
+        // the field name (set_custody's `applicants.${ref}.custody`,
+        // writeTools.ts), and an ORG-scope and a USER-scope remember of the
+        // same text must not render as the same card. The composite is
+        // approver-derived (resolveMemoryScope's doc comment above) and
+        // genuinely unknowable at propose time in a split flow, so the kind
+        // -- always known here -- is what the field name can honestly show.
         {
           field: `${input.scope}/${input.memoryKey}`,
           from: existingMemory?.text ?? NO_PRIOR_MEMORY_FROM,
           to: input.text,
+        },
+        // The other half of M3 (fix round 2, item 2): an approver confirming
+        // a remember could not previously see which case's timeline they
+        // were about to stamp. rememberMemory now REFUSES a sourceCaseId
+        // naming no real case (fix round 2, item 1), but it cannot catch one
+        // naming a real, unrelated case -- only a human who recognizes the
+        // case can, and only if the card shows it.
+        {
+          field: "sourceCaseId",
+          from: existingMemory?.sourceCaseId ?? NO_PRIOR_SOURCE_CASE_ID,
+          to: input.sourceCaseId ?? MISSING_SOURCE_CASE_ID_TO,
         },
       ],
       actorEmail,

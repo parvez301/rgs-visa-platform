@@ -10,6 +10,7 @@ import {
   storedRecordId,
   stripStorageKeys,
 } from "../../lib/storedRecords";
+import { readCaseOrThrow } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
 import {
   MEMORY_ORG_SCOPE,
@@ -130,6 +131,26 @@ export async function rememberMemory(
     // exactly as createCase/createPartner do (cases.ts:85).
     ...(actorEmail !== "" ? { createdByEmail: actorEmail } : {}),
   });
+  // Validated before ANY write -- including the memory row itself, not only
+  // the event -- and validated first, ahead of `writeMemory` below (fix
+  // round 2). `sourceCaseId` is model-controlled input, exactly like
+  // `addLineItem`'s `caseId`, and until this check existed nothing here
+  // matched it against a real case: a `remember` citing an id that names no
+  // case wrote a real, recallable memory anyway, and the event recorded
+  // against it (fix round 1, Minor 5) landed as an orphan event row in a
+  // partition no case ever occupied. `readCaseOrThrow` is the same
+  // existence check `addLineItem` makes before it ever touches a case, and
+  // ordering it before `writeMemory` means a `sourceCaseId` naming no case
+  // leaves nothing behind at all -- not a memory with a provenance claim
+  // that already doesn't hold, and not a table item of any kind. This does
+  // NOT catch a `sourceCaseId` naming a real but unrelated case -- there is
+  // no independent signal here for "the case this memory was actually
+  // learned from" to check it against -- that half is a human problem, not
+  // a validation one: the approval card below now shows `sourceCaseId` so
+  // an approver who actually worked the cited case can catch a wrong one.
+  if (memory.sourceCaseId !== undefined) {
+    await readCaseOrThrow(context, tenantId, memory.sourceCaseId);
+  }
   await writeMemory(context, tenantId, memory);
   // The case that taught the agent something should show a trace of it on
   // its own timeline, the same way addLineItem/the case mutators record
