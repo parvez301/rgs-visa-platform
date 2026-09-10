@@ -70,6 +70,10 @@ export type CrmTraveller = z.infer<typeof CrmTravellerSchema>;
 export const LineItemSchema = z.object({
   code: z.string().min(1),
   label: z.string().min(1),
+  // The UNIT price, not a line total -- CrmCase.totalInr is the sum, across
+  // every line item, of amountInr × quantity. A stored per-line total sitting
+  // next to a quantity is redundant and the two can disagree; a unit price
+  // cannot disagree with itself.
   amountInr: z.number().int().nonnegative(),
   quantity: z.number().int().positive().default(1),
   kind: z.enum(LINE_ITEM_KINDS),
