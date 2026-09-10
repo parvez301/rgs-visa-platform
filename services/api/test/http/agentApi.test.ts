@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { buildTestContext, type TestContext } from "../helpers";
 import { Router } from "../../src/http/router";
-import { registerAgentRoutes } from "../../src/http/agentApi";
+import { AGENT_ROUTES, registerAgentRoutes } from "../../src/http/agentApi";
+import { buildAdminRouter } from "../../src/http/adminApi";
 import { FakeLlmProvider } from "../../src/agent/providers/fake";
 import { getProposal, listPendingProposals, stageProposal, type ProposedChange } from "../../src/agent/approval";
 import { ToolRegistry } from "../../src/agent/tools/registry";
 import { WRITE_TOOLS } from "../../src/agent/tools/writeTools";
 import { createCase, getCase } from "../../src/domain/crm/cases";
+import { memoryPartitionKey } from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { getMemoryOrUndefined, memoryScope, rememberMemory } from "../../src/domain/crm/memory";
@@ -80,6 +82,44 @@ async function callUnauthenticated(
   return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
 }
 
+// A token with `sub` but no `email` claim -- router.ts defaults the missing
+// claim to "", exactly as production API Gateway would for a Cognito token
+// minted without one. B1/M3 (task-11-fix-1-review.md): the three routes that
+// record an actor (turn, approve, discard) must refuse this rather than
+// record decidedBy/proposedBy as "".
+function buildEventNoEmailClaim(method: string, path: string, body?: unknown): APIGatewayProxyEventV2 {
+  return {
+    rawPath: path,
+    requestContext: {
+      http: { method },
+      authorizer: { jwt: { claims: { sub: "admin_no_email" } } },
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  } as unknown as APIGatewayProxyEventV2;
+}
+
+async function callNoEmailClaim(
+  router: Router,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ statusCode: number; payload: any }> {
+  const response = (await router.dispatch(buildEventNoEmailClaim(method, path, body))) as {
+    statusCode: number;
+    body: string;
+  };
+  return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
+}
+
+// {method}/{path} segments filled with an arbitrary non-empty value -- for
+// dispatching AGENT_ROUTES generically through the real router without a
+// route-by-route switch. What value fills a placeholder never matters to
+// these tests: they assert only that the route is reachable/gated, not what
+// a specific id resolves to.
+function fillPathParams(pathTemplate: string): string {
+  return pathTemplate.replace(/\{[^}]+\}/g, "x");
+}
+
 // caseRef doubles as the partner's name suffix -- mirrors loop.test.ts's and
 // approval.test.ts's own seedOneCase, so two calls in one test do not trip
 // createPartner's one-canonical-name-per-partner rule.
@@ -110,6 +150,45 @@ async function seedOneCase(context: TestContext, caseRef = "80001") {
 function contextWithFakeLlm(context: TestContext, provider: FakeLlmProvider): TestContext & { llm: FakeLlmProvider } {
   return Object.assign(context, { llm: provider });
 }
+
+// task-11-fix-1-review.md C1/M4: before this, every describe block below
+// dispatched through `buildRouter` -- a bare `registerAgentRoutes(new
+// Router(), context)` -- never the real `buildAdminRouter` these routes are
+// actually mounted on in production. The entire route table could be
+// (and, when probed, was) dropped from `buildAdminRouter` with this whole
+// suite staying green. `AGENT_ROUTES` is exported from agentApi.ts itself,
+// derived from the same array that builds the router, so a route missing
+// from `buildAdminRouter` has no way to also stay off this list.
+describe("the agent route table, dispatched through the real buildAdminRouter", () => {
+  it.each(AGENT_ROUTES)(
+    "$method $path is actually mounted, not just registered on a bare router",
+    async ({ method, path }) => {
+      const context = buildTestContext();
+      const router = buildAdminRouter(context);
+
+      const response = await call(router, method, fillPathParams(path), {});
+
+      // Not a specific status: an empty/placeholder-filled request legitimately
+      // 400s on some routes and 404s on others (an unknown proposalId) and
+      // 200s on others still. What every one of them must NOT be is the
+      // router's OWN "nothing matched" answer -- that is the one signal that
+      // would mean this route never actually reached buildAdminRouter.
+      expect(response.payload.code).not.toBe("ROUTE_NOT_FOUND");
+    },
+  );
+
+  it.each(AGENT_ROUTES)(
+    "$method $path requires admin authentication on the real admin router",
+    async ({ method, path }) => {
+      const context = buildTestContext();
+      const router = buildAdminRouter(context);
+
+      const rejected = await callUnauthenticated(router, method, fillPathParams(path), {});
+
+      expect(rejected.statusCode).toBe(403);
+    },
+  );
+});
 
 describe("POST /api/v1/admin/crm/agent/turn", () => {
   it("runs a full turn: reads a case, stages a write proposal, and returns every field of the result", async () => {
@@ -220,6 +299,81 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
 
     const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", { userMessage: "hi" });
     expect(response.statusCode).toBe(400);
+  });
+
+  // task-11-fix-1-review.md B1/M3: an admin token with `sub` but no `email`
+  // claim used to reach runAgentTurn, which staged proposals under
+  // `proposedBy: ""` only by accident (buildSystemPrompt's memoryScope("USER",
+  // "") happened to throw). requireAdminEmail now refuses this deliberately,
+  // before the model is ever called.
+  it("refuses an admin token with no email claim, rather than staging a proposal under an empty actor", async () => {
+    const context = buildTestContext();
+    const provider = new FakeLlmProvider([]);
+    const router = buildRouter(contextWithFakeLlm(context, provider));
+
+    const response = await callNoEmailClaim(router, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "hi",
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(provider.receivedRequests).toHaveLength(0);
+  });
+
+  // Minor 3 (task-11-fix-1-review.md m3): model input billed by the token,
+  // with nothing else in the stack capping message length or replayed
+  // history -- MAX_TOOL_ITERATIONS (loop.ts) caps how many times one turn
+  // calls the model, not how much is sent on any one call.
+  it("400s a userMessage over the length cap, rather than paying to send it to the model", async () => {
+    const context = buildTestContext();
+    const provider = new FakeLlmProvider([]);
+    const router = buildRouter(contextWithFakeLlm(context, provider));
+
+    const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", {
+      // One over MAX_TURN_MESSAGE_LENGTH (agentApi.ts).
+      userMessage: "x".repeat(8_001),
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(provider.receivedRequests).toHaveLength(0);
+  });
+
+  it("400s a conversation longer than the message cap, rather than replaying it all into the model", async () => {
+    const context = buildTestContext();
+    const provider = new FakeLlmProvider([]);
+    const router = buildRouter(contextWithFakeLlm(context, provider));
+
+    const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "hi",
+      // One over MAX_TURN_CONVERSATION_MESSAGES (agentApi.ts).
+      conversation: Array.from({ length: 201 }, (_, index) => ({ role: "user", content: `msg ${index}` })),
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(provider.receivedRequests).toHaveLength(0);
+  });
+
+  // Minor 4 (task-11-fix-1-review.md m4): router.ts's own JSON.parse failure
+  // path (a malformed body, not merely a schema-violating one) had no test
+  // anywhere in this file. `call`'s helper always JSON.stringifies its body
+  // argument, so this constructs the event by hand to send a body that isn't
+  // valid JSON at all.
+  it("400s a malformed JSON body, rather than 500ing", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const event = {
+      rawPath: "/api/v1/admin/crm/agent/turn",
+      requestContext: {
+        http: { method: "POST" },
+        authorizer: { jwt: { claims: { sub: "admin_1", email: ADMIN_EMAIL } } },
+      },
+      body: "{not valid json",
+    } as unknown as APIGatewayProxyEventV2;
+
+    const response = (await router.dispatch(event)) as { statusCode: number; body: string };
+    const payload = JSON.parse(response.body);
+
+    expect(response.statusCode).toBe(400);
+    expect(payload.message).toBe("Request body must be valid JSON");
   });
 
   it("rejects an unauthenticated caller", async () => {
@@ -373,6 +527,66 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
     const stillPending = await getProposal(context, TENANT_ID, staged.proposalId);
     expect(stillPending?.status).toBe("PENDING");
   });
+
+  // task-11-fix-1-review.md B1/M3: the real security defect -- an admin
+  // token with `sub` but no `email` claim used to approve with
+  // `decidedBy: ""`, and the schema let that round-trip as a valid decision.
+  it("refuses an admin token with no email claim, rather than approving with decidedBy \"\"", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "AGT-APPR-04");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, billingStatus: "BILL_SENT" },
+      ADMIN_EMAIL,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    const router = buildRouter(context);
+    const response = await callNoEmailClaim(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/agent/proposals/${staged.proposalId}/approve`,
+      {},
+    );
+
+    expect(response.statusCode).toBe(403);
+
+    // The second half: refused AND nothing moved.
+    const stillPending = await getProposal(context, TENANT_ID, staged.proposalId);
+    expect(stillPending?.status).toBe("PENDING");
+  });
+
+  // task-11-fix-1-review.md B3/M2: applyApprovedChange validates
+  // editedInput/proposal.input unconditionally and answers badRequest on a
+  // schema-violating shape -- but nothing at the HTTP layer had ever sent one
+  // to prove the route actually surfaces that as a 400, not a 500.
+  it("400s a non-object editedInput, rather than 500ing", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "AGT-APPR-05");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, billingStatus: "BILL_SENT" },
+      ADMIN_EMAIL,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    const router = buildRouter(context);
+    const response = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/agent/proposals/${staged.proposalId}/approve`,
+      { editedInput: "oops" },
+    );
+
+    expect(response.statusCode).toBe(400);
+
+    const stillPending = await getProposal(context, TENANT_ID, staged.proposalId);
+    expect(stillPending?.status).toBe("PENDING");
+  });
 });
 
 describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/discard", () => {
@@ -428,6 +642,62 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/discard", () => {
     expect(discarded?.decidedBy).toBe(ADMIN_EMAIL);
   });
 
+  // task-11-fix-1-review.md B2/M1: the approve route already pinned this
+  // (the "never records the actor from the request body" test above);
+  // discard had the identical hazard and no equivalent test.
+  it("never records the actor from the request body, only the verified admin caller", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "AGT-DISC-04");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, billingStatus: "BILL_SENT" },
+      ADMIN_EMAIL,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    const router = buildRouter(context);
+    const response = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/agent/proposals/${staged.proposalId}/discard`,
+      { reason: "Billing already sent manually via email", actorEmail: "attacker@rgs.local" },
+    );
+    expect(response.statusCode).toBe(200);
+
+    const discarded = await getProposal(context, TENANT_ID, staged.proposalId);
+    expect(discarded?.decidedBy).toBe(ADMIN_EMAIL);
+    expect(discarded?.decidedBy).not.toBe("attacker@rgs.local");
+  });
+
+  // task-11-fix-1-review.md B1/M3.
+  it("refuses an admin token with no email claim, rather than discarding with decidedBy \"\"", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "AGT-DISC-05");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, billingStatus: "BILL_SENT" },
+      ADMIN_EMAIL,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    const router = buildRouter(context);
+    const response = await callNoEmailClaim(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/agent/proposals/${staged.proposalId}/discard`,
+      { reason: "trying to sneak this through" },
+    );
+
+    expect(response.statusCode).toBe(403);
+
+    const stillPending = await getProposal(context, TENANT_ID, staged.proposalId);
+    expect(stillPending?.status).toBe("PENDING");
+  });
+
   it("rejects an unauthenticated caller", async () => {
     const context = buildTestContext();
     const router = buildRouter(context);
@@ -449,12 +719,14 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
       context,
       TENANT_ID,
       { scope: memoryScope("ORG"), memoryKey: "office-hours", text: "Desk is open 9-6 IST", sourceCaseId: seededCase.caseId },
+      "agent",
       ADMIN_EMAIL,
     );
     await rememberMemory(
       context,
       TENANT_ID,
       { scope: memoryScope("USER", ADMIN_EMAIL), memoryKey: "my-note", text: "Prefers email over calls", sourceCaseId: seededCase.caseId },
+      "agent",
       ADMIN_EMAIL,
     );
 
@@ -478,18 +750,59 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
       context,
       TENANT_ID,
       { scope: memoryScope("USER", otherUserEmail), memoryKey: "their-note", text: "Only theirs", sourceCaseId: seededCase.caseId },
+      "agent",
       otherUserEmail,
     );
     await rememberMemory(
       context,
       TENANT_ID,
       { scope: memoryScope("USER", ADMIN_EMAIL), memoryKey: "my-note", text: "Only mine", sourceCaseId: seededCase.caseId },
+      "agent",
       ADMIN_EMAIL,
     );
 
     const router = buildRouter(context);
     const response = await call(router, "GET", "/api/v1/admin/crm/agent/memories", undefined, {
       scope: "USER",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.memories.map((m: { memoryKey: string }) => m.memoryKey)).toEqual(["my-note"]);
+  });
+
+  // task-11-fix-1-review.md C2/A2: the test above ("isolating it from another
+  // user's") never sent a competing identity at all -- it proves the
+  // partitioning works, not that identity can't be spoofed. recallMemories
+  // deliberately trusts whatever scope it's handed (memory.ts's own comment),
+  // so resolveAdminMemoryScope is the ENTIRE security boundary on this path.
+  // Every plausible alias for "which user" is planted in the query string,
+  // all pointed at the attacker's own scope.
+  it("ignores a competing identity in the query string, and resolves USER scope to the verified caller regardless", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "AGT-MEM-07");
+    const attackerEmail = "attacker@rgs.local";
+    await rememberMemory(
+      context,
+      TENANT_ID,
+      { scope: memoryScope("USER", attackerEmail), memoryKey: "their-note", text: "Not yours", sourceCaseId: seededCase.caseId },
+      "agent",
+      attackerEmail,
+    );
+    await rememberMemory(
+      context,
+      TENANT_ID,
+      { scope: memoryScope("USER", ADMIN_EMAIL), memoryKey: "my-note", text: "Really mine", sourceCaseId: seededCase.caseId },
+      "agent",
+      ADMIN_EMAIL,
+    );
+
+    const router = buildRouter(context);
+    const response = await call(router, "GET", "/api/v1/admin/crm/agent/memories", undefined, {
+      scope: "USER",
+      userEmail: attackerEmail,
+      scopeKey: attackerEmail,
+      actorEmail: attackerEmail,
+      email: attackerEmail,
     });
 
     expect(response.statusCode).toBe(200);
@@ -512,6 +825,32 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
       scope: "PARTNER",
     });
     expect(response.statusCode).toBe(400);
+  });
+
+  // Minor 1 (task-11-fix-1-review.md m1): the only unreadableMemoryKeys
+  // assertion in this file checked an empty default -- never a row that
+  // actually names something. Mirrors memory.test.ts's own domain-level
+  // "names a corrupt memory row" fixture, at the HTTP layer.
+  it("names a corrupt memory row in unreadableMemoryKeys instead of 500ing the response", async () => {
+    const context = buildTestContext();
+    const scope = memoryScope("ORG");
+    // A row DynamoDB could hold but CrmMemorySchema refuses -- no `text`, no
+    // `createdAt`.
+    await context.table.put({
+      PK: memoryPartitionKey(TENANT_ID, scope),
+      SK: "half-written",
+      tenantId: TENANT_ID,
+      scope,
+      memoryKey: "half-written",
+      createdBy: "agent",
+    });
+
+    const router = buildRouter(context);
+    const response = await call(router, "GET", "/api/v1/admin/crm/agent/memories", undefined, { scope: "ORG" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.memories).toEqual([]);
+    expect(response.payload.unreadableMemoryKeys).toEqual(["half-written"]);
   });
 
   it("rejects an unauthenticated caller", async () => {
@@ -573,6 +912,77 @@ describe("POST /api/v1/admin/crm/agent/memories", () => {
     expect(storedUnderSomeoneElse).toBeUndefined();
   });
 
+  // task-11-fix-1-review.md C2/A2: the test above never sent a competing
+  // identity, so it never actually attempted the spoof. This one plants an
+  // attacker identity under every plausible alias, in BOTH the body and the
+  // query string, and proves both halves: the write lands under the verified
+  // caller, and NOTHING is written under the spoofed identity's scope at all.
+  it("ignores a competing identity in the body and query string, and files the memory under the verified caller only", async () => {
+    const context = buildTestContext();
+    const attackerEmail = "attacker@rgs.local";
+    const router = buildRouter(context);
+
+    const response = await call(
+      router,
+      "POST",
+      "/api/v1/admin/crm/agent/memories",
+      {
+        scope: "USER",
+        memoryKey: "my-note",
+        text: "Prefers email over calls",
+        userEmail: attackerEmail,
+        scopeKey: attackerEmail,
+        actorEmail: attackerEmail,
+        email: attackerEmail,
+      },
+      { userEmail: attackerEmail, scopeKey: attackerEmail, actorEmail: attackerEmail, email: attackerEmail },
+    );
+
+    expect(response.statusCode).toBe(200);
+
+    const storedUnderCaller = await getMemoryOrUndefined(
+      context,
+      TENANT_ID,
+      memoryScope("USER", ADMIN_EMAIL),
+      "my-note",
+    );
+    expect(storedUnderCaller?.text).toBe("Prefers email over calls");
+
+    // The other half of the claim: nothing at all landed under the spoofed
+    // identity's own scope.
+    const storedUnderAttacker = await getMemoryOrUndefined(
+      context,
+      TENANT_ID,
+      memoryScope("USER", attackerEmail),
+      "my-note",
+    );
+    expect(storedUnderAttacker).toBeUndefined();
+  });
+
+  // Group D / P62 (task-11-fix-1-review.md): rememberMemory now takes the
+  // author kind as a required positional argument, and this route passes
+  // "human" -- so an admin can file an org-wide policy note with no case to
+  // cite it against. memory.test.ts already proves this at the domain layer;
+  // this is the HTTP-level regression proving the fix actually reaches the
+  // route.
+  it("remembers an ORG-scope memory with no sourceCaseId, now that a human author does not need one", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+
+    const response = await call(router, "POST", "/api/v1/admin/crm/agent/memories", {
+      scope: "ORG",
+      memoryKey: "no-case-policy",
+      text: "Refunds always route through finance@rgs.test",
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const stored = await getMemoryOrUndefined(context, TENANT_ID, memoryScope("ORG"), "no-case-policy");
+    expect(stored?.text).toBe("Refunds always route through finance@rgs.test");
+    expect(stored?.createdBy).toBe("human");
+    expect(stored?.sourceCaseId).toBeUndefined();
+  });
+
   it("400s a body missing required fields, rather than 500ing", async () => {
     const context = buildTestContext();
     const router = buildRouter(context);
@@ -592,14 +1002,17 @@ describe("POST /api/v1/admin/crm/agent/memories", () => {
   });
 });
 
-describe("DELETE /api/v1/admin/crm/agent/memories/{memoryId}", () => {
-  it("forgets a memory that exists", async () => {
+// Renamed from {memoryId} (task-11-fix-1-review.md rename): the path
+// param's own name now matches what it actually carries.
+describe("DELETE /api/v1/admin/crm/agent/memories/{memoryKey}", () => {
+  it("forgets a memory that exists, and honestly reports { forgotten: true }", async () => {
     const context = buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-MEM-05");
     await rememberMemory(
       context,
       TENANT_ID,
       { scope: memoryScope("ORG"), memoryKey: "office-hours", text: "Desk is open 9-6 IST", sourceCaseId: seededCase.caseId },
+      "agent",
       ADMIN_EMAIL,
     );
     // Prove it exists before deleting -- otherwise "gone afterwards" proves
@@ -616,9 +1029,90 @@ describe("DELETE /api/v1/admin/crm/agent/memories/{memoryId}", () => {
       { scope: "ORG" },
     );
     expect(response.statusCode).toBe(200);
+    // Minor 2 (task-11-fix-1-review.md m2): this used to only check
+    // statusCode, never the payload's own `.forgotten` value.
+    expect(response.payload).toEqual({ forgotten: true });
 
     const afterDelete = await getMemoryOrUndefined(context, TENANT_ID, memoryScope("ORG"), "office-hours");
     expect(afterDelete).toBeUndefined();
+  });
+
+  // Minor 2's other half: forgetMemory is deliberately idempotent, but the
+  // response must say honestly that nothing changed rather than claim a
+  // deletion that never happened.
+  it("returns { forgotten: false } for a memory key nothing was ever remembered under", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+
+    const response = await call(
+      router,
+      "DELETE",
+      "/api/v1/admin/crm/agent/memories/never-remembered",
+      undefined,
+      { scope: "ORG" },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toEqual({ forgotten: false });
+  });
+
+  // task-11-fix-1-review.md C2/A2: same spoofing threat as GET/POST, on the
+  // delete path. Proves both halves -- the caller's own copy is gone, and
+  // the attacker's own copy (same memoryKey, different USER scope) survives
+  // completely untouched.
+  it("ignores a competing identity in the query string, and forgets only from the verified caller's own scope", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "AGT-MEM-08");
+    const attackerEmail = "attacker@rgs.local";
+    await rememberMemory(
+      context,
+      TENANT_ID,
+      { scope: memoryScope("USER", attackerEmail), memoryKey: "shared-key", text: "Attacker's own note", sourceCaseId: seededCase.caseId },
+      "agent",
+      attackerEmail,
+    );
+    await rememberMemory(
+      context,
+      TENANT_ID,
+      { scope: memoryScope("USER", ADMIN_EMAIL), memoryKey: "shared-key", text: "Caller's own note", sourceCaseId: seededCase.caseId },
+      "agent",
+      ADMIN_EMAIL,
+    );
+
+    const router = buildRouter(context);
+    const response = await call(
+      router,
+      "DELETE",
+      "/api/v1/admin/crm/agent/memories/shared-key",
+      undefined,
+      { scope: "USER", userEmail: attackerEmail, scopeKey: attackerEmail, actorEmail: attackerEmail, email: attackerEmail },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toEqual({ forgotten: true });
+
+    const callerCopy = await getMemoryOrUndefined(context, TENANT_ID, memoryScope("USER", ADMIN_EMAIL), "shared-key");
+    expect(callerCopy).toBeUndefined();
+
+    const attackerCopy = await getMemoryOrUndefined(context, TENANT_ID, memoryScope("USER", attackerEmail), "shared-key");
+    expect(attackerCopy?.text).toBe("Attacker's own note");
+  });
+
+  // task-11-fix-1-review.md B3/M2.
+  it("400s a missing scope query param, rather than 500ing", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const response = await call(router, "DELETE", "/api/v1/admin/crm/agent/memories/office-hours");
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("400s an invalid scope query param, rather than 500ing", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const response = await call(router, "DELETE", "/api/v1/admin/crm/agent/memories/office-hours", undefined, {
+      scope: "TENANT",
+    });
+    expect(response.statusCode).toBe(400);
   });
 
   it("rejects an unauthenticated caller and forgets nothing", async () => {
@@ -628,6 +1122,7 @@ describe("DELETE /api/v1/admin/crm/agent/memories/{memoryId}", () => {
       context,
       TENANT_ID,
       { scope: memoryScope("ORG"), memoryKey: "office-hours", text: "Desk is open 9-6 IST", sourceCaseId: seededCase.caseId },
+      "agent",
       ADMIN_EMAIL,
     );
 

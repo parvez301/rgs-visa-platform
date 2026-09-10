@@ -291,6 +291,7 @@ describe("an approved change is the only thing that writes", () => {
             text: "prefers morning appointment slots",
             sourceCaseId: seededCase.caseId,
           },
+          "agent",
           ACTOR,
         );
       }
@@ -919,6 +920,42 @@ describe("getProposal", () => {
   it("returns undefined for a proposal id nothing was ever staged under, rather than throwing", async () => {
     const context = buildTestContext();
     await expect(getProposal(context, TENANT_ID, "prop_never_existed")).resolves.toBeUndefined();
+  });
+
+  // fix-round-1 M3's schema-level backstop: ProposedChangeSchema's
+  // `decidedBy` now carries `.min(1)`, so a stored row that names nobody as
+  // the decider fails to parse rather than round-tripping as a legitimate
+  // approval. The route layer (agentApi.ts's requireAdminEmail) is what
+  // actually prevents this row from ever being written; this is what catches
+  // it a second time, on read, if some future call site forgets.
+  it("throws for a stored row whose decidedBy is an empty string, instead of reading back a proposal 'decided' by nobody", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seeded.caseId, billingStatus: "BILL_SENT" },
+      ACTOR,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    // A row only an admin token with no email claim could have produced, had
+    // agentApi.ts's requireAdminEmail not refused it first -- written
+    // directly, because applyApprovedChange/discardProposal can no longer
+    // produce a decidedBy this empty.
+    await context.table.put({
+      PK: proposalPartitionKey(TENANT_ID, staged.proposalId),
+      SK: PROPOSAL_SORT_KEY,
+      GSI1PK: proposalStatusGsi1Pk(TENANT_ID, "APPROVED"),
+      GSI1SK: staged.proposedAt,
+      ...staged,
+      status: "APPROVED",
+      decidedBy: "",
+      decidedAt: context.now().toISOString(),
+    });
+
+    await expect(getProposal(context, TENANT_ID, staged.proposalId)).rejects.toMatchObject({ statusCode: 409 });
   });
 });
 

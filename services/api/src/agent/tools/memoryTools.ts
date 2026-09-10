@@ -39,9 +39,15 @@ const NOTHING_TO_FORGET_FROM = "(nothing remembered)";
  * the other's echo.
  */
 const NO_PRIOR_SOURCE_CASE_ID = "(none)";
-/** What a proposal with no sourceCaseId shows for "to" -- rememberMemory
+/**
+ * What a proposal with no sourceCaseId shows for "to" -- rememberMemory
  * rejects this at apply time (an agent-created memory must cite a case), but
- * the card must say so plainly rather than leaving the field blank. */
+ * the card must say so plainly rather than leaving the field blank. True
+ * only because `rememberTool.apply` below always passes `"agent"` as the
+ * author kind -- `rememberMemory` itself tolerates a missing sourceCaseId
+ * for a `"human"` author (the admin memories HTTP route). If this tool ever
+ * routes a human-authored call through it, this sentinel stops being true.
+ */
 const MISSING_SOURCE_CASE_ID_TO = "(none -- will be rejected on apply)";
 
 /**
@@ -218,6 +224,10 @@ export const rememberTool: AgentTool<RememberToolInput> = {
         text: input.text,
         ...(input.sourceCaseId !== undefined ? { sourceCaseId: input.sourceCaseId } : {}),
       },
+      // Always the agent, never the human who typed the model's prompt --
+      // MISSING_SOURCE_CASE_ID_TO above is true only as long as this stays
+      // "agent".
+      "agent",
       actorEmail,
     );
   },

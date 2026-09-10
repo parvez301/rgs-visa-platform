@@ -103,15 +103,34 @@ export interface RememberMemoryInput {
 }
 
 /**
+ * Who is telling rememberMemory this fact: the agent's own `remember` write
+ * tool, or a human typing it in directly (the admin memories HTTP route).
+ * `CrmMemorySchema`'s refinement requires `sourceCaseId` only for `"agent"`
+ * -- a human can file an org-wide policy note with no case to blame it on.
+ */
+export type MemoryAuthorKind = crm.CrmMemory["createdBy"];
+
+/**
  * Idempotent by (scope, memoryKey): re-remembering the same key overwrites
  * the row in place rather than stacking a near-duplicate beside it --
  * memoryKey is caller-supplied and meaningful for exactly this reason
  * (task-9-controller-notes.md §4.1).
+ *
+ * `authorKind` is a required positional parameter, deliberately not a field
+ * on `RememberMemoryInput` (task-11-fix-1-review.md, Group D): `input` is
+ * spread straight from an HTTP body at the admin memories route, and a
+ * `createdBy`-shaped field living in that object would be one careless
+ * spread away from being caller-supplied -- which would let a request mark
+ * its own memory human-authored and walk straight around the provenance
+ * refinement below. Required, not defaulted to `"agent"`, so a new caller of
+ * this function has to make the choice rather than silently inheriting the
+ * old (and, for a human caller, wrong) default.
  */
 export async function rememberMemory(
   context: AppContext,
   tenantId: string,
   input: RememberMemoryInput,
+  authorKind: MemoryAuthorKind,
   actorEmail: string,
 ): Promise<crm.CrmMemory> {
   assertActorOwnsUserScope(input.scope, actorEmail);
@@ -121,10 +140,7 @@ export async function rememberMemory(
     memoryKey: input.memoryKey,
     text: input.text,
     ...(input.sourceCaseId !== undefined ? { sourceCaseId: input.sourceCaseId } : {}),
-    // Only the agent write tool calls this today -- a human-authored memory
-    // (the spec's editable Memory screen) is a future reader/writer of this
-    // same schema, not this function.
-    createdBy: "agent",
+    createdBy: authorKind,
     createdAt: context.now().toISOString(),
     // router.ts defaults a missing `email` claim to "", and an empty string
     // is not an author -- omit the field rather than record a blank one,
@@ -160,6 +176,10 @@ export async function rememberMemory(
     await recordCrmEvent(context, tenantId, memory.sourceCaseId, "MEMORY_REMEMBERED", actorEmail, {
       scope: memory.scope,
       memoryKey: memory.memoryKey,
+      // Ruling P25's own precedent (`autoApplied` on PROPOSAL_APPROVED): a
+      // timeline entry that cannot distinguish a human act from an agent act
+      // is not an audit trail.
+      createdBy: memory.createdBy,
     });
   }
   return memory;

@@ -95,6 +95,7 @@ describe("rememberMemory / recallMemories round trip", () => {
         text: "prefers morning appointment slots",
         sourceCaseId: seededCase.caseId,
       },
+      "agent",
       ALICE,
     );
 
@@ -120,6 +121,7 @@ describe("rememberMemory / recallMemories round trip", () => {
       context,
       TENANT_ID,
       { scope, memoryKey: "morning-slots", text: "prefers morning slots", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
     await rememberMemory(
@@ -131,6 +133,7 @@ describe("rememberMemory / recallMemories round trip", () => {
         text: "prefers morning slots, before 10am specifically",
         sourceCaseId: seededCase.caseId,
       },
+      "agent",
       ALICE,
     );
 
@@ -147,6 +150,7 @@ describe("rememberMemory / recallMemories round trip", () => {
       context,
       TENANT_ID,
       { scope: memoryScope("ORG"), memoryKey: "k1", text: "org fact", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
     await rememberMemory(
@@ -158,6 +162,7 @@ describe("rememberMemory / recallMemories round trip", () => {
         text: "partner fact",
         sourceCaseId: seededCase.caseId,
       },
+      "agent",
       ALICE,
     );
 
@@ -199,17 +204,56 @@ describe("rememberMemory / recallMemories round trip", () => {
     const context = buildTestContext();
     const scope = memoryScope("ORG");
 
-    // The refinement schemas.ts:153-170 exists for: createdBy is always
-    // "agent" here (rememberMemory's own doing, not caller-supplied), so a
-    // call with no sourceCaseId must be refused through badRequest, not a
-    // bare ZodError (router.ts maps only ApiError subclasses).
+    // The refinement schemas.ts:153-170 exists for: this call passes
+    // authorKind "agent", and the schema requires sourceCaseId for exactly
+    // that author kind, so a call with no sourceCaseId must be refused
+    // through badRequest, not a bare ZodError (router.ts maps only ApiError
+    // subclasses). A "human" author has no such requirement -- see "a
+    // human-authored memory with no source case" below.
     await expect(
-      rememberMemory(context, TENANT_ID, { scope, memoryKey: "no-source", text: "an unearned fact" }, ALICE),
+      rememberMemory(context, TENANT_ID, { scope, memoryKey: "no-source", text: "an unearned fact" }, "agent", ALICE),
     ).rejects.toMatchObject({ statusCode: 400 });
 
     // The other half of "refused": nothing was written, not merely that it threw.
     const { memories } = await recallMemories(context, TENANT_ID, [scope]);
     expect(memories).toEqual([]);
+  });
+
+  // task-11-fix-1-review.md, Group D item 4: before authorKind existed,
+  // `createdBy` was always "agent", and the schema's refinement guaranteed
+  // `memory.sourceCaseId !== undefined` by the time control reached the
+  // `readCaseOrThrow` / `recordCrmEvent` guards in rememberMemory -- the
+  // ELSE branch of both guards was unreachable. A "human" author is the
+  // first caller ever to reach those guards with sourceCaseId genuinely
+  // undefined. Proved here as two separate halves, not one: the memory is
+  // written (an admin can file an org-wide policy note with no case to
+  // blame it on), and no event lands on any case (there is no case to put
+  // one on).
+  it("writes a human-authored memory with no source case, and records no event anywhere", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, ALICE);
+    const scope = memoryScope("ORG");
+
+    const remembered = await rememberMemory(
+      context,
+      TENANT_ID,
+      { scope, memoryKey: "no-refunds", text: "No refunds after submission" },
+      "human",
+      ALICE,
+    );
+    expect(remembered.createdBy).toBe("human");
+    expect(remembered.sourceCaseId).toBeUndefined();
+
+    // First half: the memory really was written and is recallable.
+    const { memories } = await recallMemories(context, TENANT_ID, [scope]);
+    expect(memories).toEqual([remembered]);
+
+    // Second half, asserted independently: no MEMORY_REMEMBERED event
+    // landed on the one case that exists in this test -- there is nothing
+    // else to have wrongly recorded it against, and asserting only the
+    // first half would leave a stray event unnoticed.
+    const events = await listCaseEvents(context, TENANT_ID, seededCase.caseId);
+    expect(events.filter((event) => event.eventType === "MEMORY_REMEMBERED")).toEqual([]);
   });
 });
 
@@ -222,6 +266,7 @@ describe("forgetMemory", () => {
       context,
       TENANT_ID,
       { scope, memoryKey: "morning-slots", text: "prefers morning slots", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
     expect((await recallMemories(context, TENANT_ID, [scope])).memories).toHaveLength(1);
@@ -251,6 +296,7 @@ describe("forgetMemory", () => {
       context,
       TENANT_ID,
       { scope: aliceScope, memoryKey: "private-note", text: "alice's own note", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
 
@@ -274,6 +320,7 @@ describe("forgetMemory", () => {
         context,
         TENANT_ID,
         { scope: memoryScope("USER", ALICE), memoryKey: "planted", text: "not alice's own words", sourceCaseId: seededCase.caseId },
+        "agent",
         BOB,
       ),
     ).rejects.toMatchObject({ statusCode: 403 });
@@ -296,6 +343,7 @@ describe("the recall tool", () => {
         text: "alice's private note",
         sourceCaseId: seededCase.caseId,
       },
+      "agent",
       ALICE,
     );
 
@@ -318,6 +366,7 @@ describe("the recall tool", () => {
       context,
       TENANT_ID,
       { scope: memoryScope("USER", ALICE), memoryKey: "k", text: "alice's fact", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
 
@@ -499,6 +548,7 @@ describe("the acting identity, through the real approval gate (fix round 1, Majo
         text: "alice's own note",
         sourceCaseId: seededCase.caseId,
       },
+      "agent",
       ALICE,
     );
 
@@ -558,6 +608,7 @@ describe("recallMemories dedupes and caps (fix round 1, Minor 1 & 2)", () => {
       context,
       TENANT_ID,
       { scope, memoryKey: "morning-slots", text: "prefers morning slots", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
 
@@ -574,6 +625,7 @@ describe("recallMemories dedupes and caps (fix round 1, Minor 1 & 2)", () => {
         context,
         TENANT_ID,
         { scope, memoryKey: `k${memoryIndex}`, text: `fact ${memoryIndex}`, sourceCaseId: seededCase.caseId },
+        "agent",
         ALICE,
       );
     }
@@ -593,12 +645,14 @@ describe("recallMemories dedupes and caps (fix round 1, Minor 1 & 2)", () => {
       context,
       TENANT_ID,
       { scope, memoryKey: "k1", text: "fact one", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
     await rememberMemory(
       context,
       TENANT_ID,
       { scope, memoryKey: "k2", text: "fact two", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
 
@@ -649,6 +703,7 @@ describe("rememberMemory records a case-timeline event (fix round 1, Minor 5)", 
       context,
       TENANT_ID,
       { scope: memoryScope("ORG"), memoryKey: "morning-slots", text: "prefers morning slots", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
 
@@ -656,23 +711,34 @@ describe("rememberMemory records a case-timeline event (fix round 1, Minor 5)", 
     const memoryEvents = events.filter((event) => event.eventType === "MEMORY_REMEMBERED");
     expect(memoryEvents).toHaveLength(1);
     expect(memoryEvents[0]?.actorEmail).toBe(ALICE);
-    expect(memoryEvents[0]?.meta).toMatchObject({ scope: memoryScope("ORG"), memoryKey: "morning-slots" });
+    // createdBy on the event meta, not only on the memory row itself: ruling
+    // P25's own precedent (autoApplied on PROPOSAL_APPROVED) -- a timeline
+    // entry that cannot distinguish a human act from an agent act is not an
+    // audit trail.
+    expect(memoryEvents[0]?.meta).toMatchObject({
+      scope: memoryScope("ORG"),
+      memoryKey: "morning-slots",
+      createdBy: "agent",
+    });
   });
 
   it("records nothing when rememberMemory rejects a sourceCaseId-less proposal before ever reaching the write", async () => {
     const context = buildTestContext();
     const seededCase = await seedOneCase(context, ALICE);
 
-    // rememberMemory always sets createdBy: "agent", and the schema refuses
-    // "agent" with no sourceCaseId (tested above, "refuses an agent-authored
+    // This call passes authorKind "agent", and the schema refuses "agent"
+    // with no sourceCaseId (tested above, "refuses an agent-authored
     // memory..."), so the `memory.sourceCaseId !== undefined` guard in
-    // rememberMemory can only ever see a defined sourceCaseId in practice --
-    // this pins the ordering that makes that true: the schema throws before
-    // recordCrmEvent is ever called, so a rejected remember leaves the
-    // seeded case's timeline untouched, not merely "no event about this
-    // specific memory".
+    // rememberMemory can only ever see a defined sourceCaseId for THIS call
+    // -- this pins the ordering that makes that true: the schema throws
+    // before recordCrmEvent is ever called, so a rejected remember leaves
+    // the seeded case's timeline untouched, not merely "no event about this
+    // specific memory". A "human" author reaches this same guard with
+    // sourceCaseId genuinely undefined and is not rejected -- see "a
+    // human-authored memory with no source case" below, which proves the
+    // guard skips recordCrmEvent rather than throwing.
     await expect(
-      rememberMemory(context, TENANT_ID, { scope: memoryScope("ORG"), memoryKey: "no-source", text: "an unearned fact" }, ALICE),
+      rememberMemory(context, TENANT_ID, { scope: memoryScope("ORG"), memoryKey: "no-source", text: "an unearned fact" }, "agent", ALICE),
     ).rejects.toMatchObject({ statusCode: 400 });
 
     const events = await listCaseEvents(context, TENANT_ID, seededCase.caseId);
@@ -687,6 +753,7 @@ describe("rememberMemory records a case-timeline event (fix round 1, Minor 5)", 
       context,
       TENANT_ID,
       { scope, memoryKey: "morning-slots", text: "prefers morning slots", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
 
@@ -713,6 +780,7 @@ describe("rememberMemory validates sourceCaseId against a real case (fix round 2
         context,
         TENANT_ID,
         { scope, memoryKey: "orphan", text: "a fact citing nothing real", sourceCaseId: phantomCaseId },
+        "agent",
         ALICE,
       ),
     ).rejects.toMatchObject({ statusCode: 404 });
@@ -734,6 +802,7 @@ describe("rememberMemory validates sourceCaseId against a real case (fix round 2
       context,
       TENANT_ID,
       { scope, memoryKey: "real-case", text: "a fact citing something real", sourceCaseId: seededCase.caseId },
+      "agent",
       ALICE,
     );
     expect(remembered.sourceCaseId).toBe(seededCase.caseId);

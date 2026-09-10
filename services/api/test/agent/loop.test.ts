@@ -497,6 +497,7 @@ describe("runAgentTurn", () => {
         text: "Bill agencies weekly, every Friday.",
         sourceCaseId: seededCase.caseId,
       },
+      "agent",
       ACTOR,
     );
     const contextWithLlm = Object.assign(context, { llm: new FakeLlmProvider([{ text: "sure", toolCalls: [] }]) });
@@ -522,6 +523,7 @@ describe("runAgentTurn", () => {
         text: "Prefers EXPRESS for VIP partners.",
         sourceCaseId: seededCase.caseId,
       },
+      "agent",
       ACTOR,
     );
     await rememberMemory(
@@ -533,6 +535,7 @@ describe("runAgentTurn", () => {
         text: "This is the other user's private note.",
         sourceCaseId: seededCase.caseId,
       },
+      "agent",
       OTHER_USER,
     );
     const contextWithLlm = Object.assign(context, { llm: new FakeLlmProvider([{ text: "sure", toolCalls: [] }]) });
@@ -623,6 +626,7 @@ describe("runAgentTurn", () => {
         text: "ACTOR's own private note -- REAL_CALLER must never see this.",
         sourceCaseId: seededCase.caseId,
       },
+      "agent",
       ACTOR,
     );
     const contextWithLlm = Object.assign(baseContext, {
