@@ -5,6 +5,7 @@ import { Router } from "../../src/http/router";
 import { AGENT_ROUTES, registerAgentRoutes } from "../../src/http/agentApi";
 import { buildAdminRouter } from "../../src/http/adminApi";
 import { FakeLlmProvider } from "../../src/agent/providers/fake";
+import { mapMessagesToAnthropic } from "../../src/agent/providers/anthropic";
 import { getProposal, listPendingProposals, stageProposal, type ProposedChange } from "../../src/agent/approval";
 import { ToolRegistry } from "../../src/agent/tools/registry";
 import { WRITE_TOOLS } from "../../src/agent/tools/writeTools";
@@ -304,6 +305,71 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
     const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", {
       userMessage: "hi",
       conversation: [{ role: "tool_result", content: "some result", toolCallId: "c1" }],
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(provider.receivedRequests).toHaveLength(0);
+  });
+
+  // Branch review C1, the route half. The loop now transmits the assistant
+  // turn that MADE the tool calls, but a client replays history through this
+  // route, and Zod's default "strip" mode silently drops any field the schema
+  // does not declare -- so a schema with no `toolCalls` would quietly discard
+  // the assistant turn's calls and hand the provider exactly the orphaned
+  // tool_result the loop was fixed for. Asserted by the CONSEQUENCE (the
+  // real Anthropic mapper produces a paired request), not merely by the
+  // field surviving.
+  it("carries a replayed assistant turn's toolCalls through to the model, so replayed results still pair", async () => {
+    const context = buildTestContext();
+    const provider = new FakeLlmProvider([{ text: "continuing", toolCalls: [] }]);
+    const router = buildRouter(contextWithFakeLlm(context, provider));
+
+    const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "and now?",
+      conversation: [
+        { role: "user", content: "how many cases are open?" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ toolCallId: "toolu_replayed", toolName: "aggregate", input: { groupBy: "caseStatus" } }],
+        },
+        { role: "tool_result", content: '{"total":3}', toolCallId: "toolu_replayed", toolName: "aggregate" },
+      ],
+    });
+
+    expect(response.statusCode).toBe(200);
+    const sentMessages = provider.receivedRequests[0]!.messages;
+    expect(sentMessages[1]).toMatchObject({
+      role: "assistant",
+      toolCalls: [{ toolCallId: "toolu_replayed", toolName: "aggregate", input: { groupBy: "caseStatus" } }],
+    });
+
+    const anthropicMessages = mapMessagesToAnthropic(sentMessages) as { role?: string; content?: unknown }[];
+    const assistantBlocks = anthropicMessages
+      .filter((message) => message.role === "assistant" && Array.isArray(message.content))
+      .flatMap((message) => message.content as { type?: string; id?: string }[]);
+    expect(assistantBlocks).toContainEqual({
+      type: "tool_use",
+      id: "toolu_replayed",
+      name: "aggregate",
+      input: { groupBy: "caseStatus" },
+    });
+  });
+
+  it("400s toolCalls attached to a user message, which neither adapter would map", async () => {
+    const context = buildTestContext();
+    const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
+    const router = buildRouter(contextWithFakeLlm(context, provider));
+
+    const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "hi",
+      conversation: [
+        {
+          role: "user",
+          content: "earlier",
+          toolCalls: [{ toolCallId: "c1", toolName: "aggregate", input: {} }],
+        },
+      ],
     });
 
     expect(response.statusCode).toBe(400);
