@@ -63,6 +63,17 @@ const MAX_TURN_CONVERSATION_TOTAL_LENGTH = 100_000;
 const MAX_TOOL_CALLS_PER_MESSAGE = 32;
 
 /**
+ * A vendor tool-call id is a short opaque token ("toolu_01ABC...", or a name-
+ * and-position string this codebase synthesises for Gemini). This cap exists
+ * because the id is replayed verbatim as a `tool_use` block's `id` and billed
+ * by the token exactly like the fields around it, and it was the one such
+ * field neither capped nor counted (branch-fix re-review N1): a 500,000-char
+ * id was accepted at 200 and produced a 500,115-byte request against a
+ * declared bound of 100,000.
+ */
+const MAX_TOOL_CALL_ID_LENGTH = 256;
+
+/**
  * Mirrors AgentMessage (agent/providers/types.ts) exactly. A route accepting
  * prior conversation from the client is accepting untrusted input like any
  * other body field (task-11-controller-notes.md "two things carried
@@ -84,7 +95,7 @@ const MAX_TOOL_CALLS_PER_MESSAGE = 32;
  * to a user turn where neither adapter would map them.
  */
 const AgentToolCallBody = z.object({
-  toolCallId: z.string().min(1),
+  toolCallId: z.string().min(1).max(MAX_TOOL_CALL_ID_LENGTH),
   toolName: z.string().min(1),
   input: z.record(z.unknown()),
 });
@@ -94,7 +105,7 @@ const AgentMessageBody = z
     role: z.enum(["user", "assistant", "tool_result"]),
     content: z.string().max(MAX_CONVERSATION_MESSAGE_LENGTH),
     toolCalls: z.array(AgentToolCallBody).max(MAX_TOOL_CALLS_PER_MESSAGE).optional(),
-    toolCallId: z.string().optional(),
+    toolCallId: z.string().max(MAX_TOOL_CALL_ID_LENGTH).optional(),
     toolName: z.string().optional(),
   })
   .refine((message) => message.role !== "tool_result" || message.toolName !== undefined, {
@@ -112,10 +123,15 @@ const AgentMessageBody = z
 function replayedMessageLength(message: z.infer<typeof AgentMessageBody>): number {
   const toolCallsLength = (message.toolCalls ?? []).reduce(
     (runningTotal, toolCall) =>
-      runningTotal + toolCall.toolName.length + JSON.stringify(toolCall.input).length,
+      runningTotal +
+      toolCall.toolCallId.length +
+      toolCall.toolName.length +
+      JSON.stringify(toolCall.input).length,
     0,
   );
-  return message.content.length + toolCallsLength;
+  // A tool_result's own toolCallId is replayed as the `tool_use_id` of the
+  // block it becomes, so it is billed for the same reason the call side is.
+  return message.content.length + toolCallsLength + (message.toolCallId?.length ?? 0);
 }
 
 const RunTurnBody = z
@@ -124,6 +140,52 @@ const RunTurnBody = z
     conversation: z.array(AgentMessageBody).max(MAX_TURN_CONVERSATION_MESSAGES).optional(),
   })
   .superRefine((body, context) => {
+    // branch-fix re-review N2: the round that let a client supply the
+    // assistant turn did not check that it did. A replayed transcript whose
+    // tool_result names no transmitted call is byte for byte the malformation
+    // C1 exists to prevent, arriving from the client instead of from the loop
+    // -- so it is refused here as an ordinary 400, for exactly the reason the
+    // toolName refinement above gives: better than an opaque provider error
+    // mid-turn. This is the rule test/pairingWalkers.ts encodes, applied to
+    // the transcript before it can reach a mapper.
+    //
+    // A RUN of tool_result messages all answer the same assistant turn, so the
+    // set is carried across them and reset by any other message.
+    let callIdsFromPrecedingAssistantTurn: Set<string> | undefined;
+    (body.conversation ?? []).forEach((message, messageIndex) => {
+      if (message.role !== "tool_result") {
+        callIdsFromPrecedingAssistantTurn =
+          message.role === "assistant"
+            ? new Set((message.toolCalls ?? []).map((toolCall) => toolCall.toolCallId))
+            : undefined;
+        return;
+      }
+      if (message.toolCallId === undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["conversation", messageIndex, "toolCallId"],
+          message: "a tool_result message must carry toolCallId, naming the call it answers",
+        });
+        return;
+      }
+      if (callIdsFromPrecedingAssistantTurn === undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["conversation", messageIndex],
+          message:
+            "a tool_result must immediately follow the assistant message that made the call it answers",
+        });
+        return;
+      }
+      if (!callIdsFromPrecedingAssistantTurn.has(message.toolCallId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["conversation", messageIndex, "toolCallId"],
+          message: `tool_result names toolCallId "${message.toolCallId}", which the preceding assistant message does not carry`,
+        });
+      }
+    });
+
     const totalConversationLength = (body.conversation ?? []).reduce(
       (runningTotal, message) => runningTotal + replayedMessageLength(message),
       0,
