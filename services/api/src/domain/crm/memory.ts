@@ -117,14 +117,17 @@ export type MemoryAuthorKind = crm.CrmMemory["createdBy"];
  * (task-9-controller-notes.md §4.1).
  *
  * `authorKind` is a required positional parameter, deliberately not a field
- * on `RememberMemoryInput` (task-11-fix-1-review.md, Group D): `input` is
- * spread straight from an HTTP body at the admin memories route, and a
- * `createdBy`-shaped field living in that object would be one careless
- * spread away from being caller-supplied -- which would let a request mark
- * its own memory human-authored and walk straight around the provenance
- * refinement below. Required, not defaulted to `"agent"`, so a new caller of
- * this function has to make the choice rather than silently inheriting the
- * old (and, for a human caller, wrong) default.
+ * on `RememberMemoryInput` (task-11-fix-1-review.md, Group D): the admin
+ * memories HTTP route builds `input` field by field today, not by spreading
+ * a body onto it, but a `createdBy`-shaped field living on this object would
+ * be one careless refactor -- a future route that DOES spread a body, or
+ * this one changed to -- away from being caller-supplied, which would let a
+ * request mark its own memory human-authored and walk straight around the
+ * provenance refinement below (task-11-fix-2-brief.md NEW-5: the hazard is
+ * real; it was mis-stated as something already present). Required, not
+ * defaulted to `"agent"`, so a new caller of this function has to make the
+ * choice rather than silently inheriting the old (and, for a human caller,
+ * wrong) default.
  */
 export async function rememberMemory(
   context: AppContext,
@@ -265,6 +268,32 @@ export async function getMemoryOrUndefined(
 ): Promise<crm.CrmMemory | undefined> {
   const storedItem = await context.table.get(memoryPartitionKey(tenantId, scope), memoryKey);
   return storedItem === undefined ? undefined : parseStoredMemory(storedItem);
+}
+
+/**
+ * Whether a row exists at (scope, memoryKey), regardless of whether it can
+ * be parsed back into a `CrmMemory`. `getMemoryOrUndefined` above throws
+ * `CorruptRecordError` on a row that will not parse -- correct for a caller
+ * that needs the row's CONTENT, wrong for one that only needs to know
+ * whether there is anything there to delete.
+ *
+ * Exists because the admin memories DELETE route (task-11-fix-2-brief.md
+ * NEW-1) used to call `getMemoryOrUndefined` for its "did this actually
+ * delete something" report, which meant a corrupt row could be NAMED by
+ * `GET` (`recallMemories`'s `unreadableMemoryKeys`) but not REMOVED by
+ * `DELETE` -- the read threw before `forgetMemory`'s own raw
+ * `table.delete` (which never parses, and always succeeds) ever ran.
+ * Deleting is the remedy for a corrupt row; it must not require the row to
+ * already be readable.
+ */
+export async function memoryRowExists(
+  context: AppContext,
+  tenantId: string,
+  scope: string,
+  memoryKey: string,
+): Promise<boolean> {
+  const storedItem = await context.table.get(memoryPartitionKey(tenantId, scope), memoryKey);
+  return storedItem !== undefined;
 }
 
 async function writeMemory(context: AppContext, tenantId: string, memory: crm.CrmMemory): Promise<void> {

@@ -177,7 +177,33 @@ describe("the agent route table, dispatched through the real buildAdminRouter", 
     },
   );
 
-  it.each(AGENT_ROUTES)(
+  // task-11-fix-2-brief.md A1/M4: AGENT_ROUTES is a DECLARATION of what this
+  // task's table intends to expose -- fine for the dispatch test above,
+  // which is exactly about that intent. It is the wrong thing to drive an
+  // "every registered route requires admin" test from: a route registered
+  // directly on the router, bypassing AGENT_ROUTE_DEFINITIONS entirely
+  // (which is exactly what the re-review's probe did, and which left
+  // 547/547 green), would never appear in AGENT_ROUTES and so would never
+  // be walked here. Router.registeredRoutes reports what `add` was
+  // ACTUALLY called with on a real `buildAdminRouter` -- built fresh here,
+  // once, before either table-driven test below runs -- so this walks the
+  // real thing, not a stand-in for it.
+  const registeredAgentRoutes = buildAdminRouter(buildTestContext())
+    .registeredRoutes.filter((route) => route.path.includes("/agent/"));
+
+  it("registered at least the routes this task's own table declares (no silent drift in either direction)", () => {
+    // The other half of "no silent drift": AGENT_ROUTES must not omit a
+    // route the router actually has, and registeredAgentRoutes must not
+    // gain one AGENT_ROUTES never named -- an eighth route added directly
+    // via router.add, bypassing AGENT_ROUTE_DEFINITIONS, shows up here as
+    // an extra entry.
+    const sortKey = (route: { method: string; path: string }) => `${route.method} ${route.path}`;
+    expect([...registeredAgentRoutes].sort((a, b) => sortKey(a).localeCompare(sortKey(b)))).toEqual(
+      [...AGENT_ROUTES].sort((a, b) => sortKey(a).localeCompare(sortKey(b))),
+    );
+  });
+
+  it.each(registeredAgentRoutes)(
     "$method $path requires admin authentication on the real admin router",
     async ({ method, path }) => {
       const context = buildTestContext();
@@ -329,7 +355,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
     const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", {
-      // One over MAX_TURN_MESSAGE_LENGTH (agentApi.ts).
+      // One over MAX_USER_MESSAGE_LENGTH (agentApi.ts).
       userMessage: "x".repeat(8_001),
     });
 
@@ -346,6 +372,90 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
       userMessage: "hi",
       // One over MAX_TURN_CONVERSATION_MESSAGES (agentApi.ts).
       conversation: Array.from({ length: 201 }, (_, index) => ({ role: "user", content: `msg ${index}` })),
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(provider.receivedRequests).toHaveLength(0);
+  });
+
+  // NEW-2 (task-11-fix-2-brief.md B2): before this, `content` shared its cap
+  // with `userMessage` (both MAX_TURN_MESSAGE_LENGTH = 8,000). loop.ts hands
+  // `completion.text` straight back as `reply` with no cap of its own, and
+  // the Anthropic adapter's own completion budget (DEFAULT_MAX_OUTPUT_TOKENS
+  // = 4096 tokens, providers/anthropic.ts) can produce a reply well past
+  // 8,000 characters. So the server could 200 with a `reply` that the very
+  // same route would then 400 on if the caller sent it back as prior
+  // conversation -- an un-continuable conversation, with the 400 naming
+  // `conversation`, a field the user never typed into. This asserts the
+  // invariant directly: generate the longest reply a real max-output
+  // completion could plausibly produce, get it back from a live turn, then
+  // replay it as conversation history on the next turn and confirm the
+  // server accepts its own output.
+  it("never emits a reply it will then refuse to accept back as conversation history", async () => {
+    const context = buildTestContext();
+    // 4096 tokens at roughly 4 characters/token (the brief's own estimate)
+    // is ~16,000 characters -- a stand-in for the longest reply the
+    // configured provider's completion budget could actually produce.
+    const maximalReply = "r".repeat(16_000);
+    const firstTurnProvider = new FakeLlmProvider([{ text: maximalReply, toolCalls: [] }]);
+    const firstRouter = buildRouter(contextWithFakeLlm(context, firstTurnProvider));
+
+    const firstResponse = await call(firstRouter, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "give me the longest answer you can",
+    });
+
+    expect(firstResponse.statusCode).toBe(200);
+    expect(firstResponse.payload.reply).toBe(maximalReply);
+
+    const secondTurnProvider = new FakeLlmProvider([{ text: "continuing", toolCalls: [] }]);
+    const secondRouter = buildRouter(contextWithFakeLlm(context, secondTurnProvider));
+
+    const secondResponse = await call(secondRouter, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "go on",
+      conversation: [{ role: "assistant", content: firstResponse.payload.reply }],
+    });
+
+    expect(secondResponse.statusCode).toBe(200);
+    expect(secondTurnProvider.receivedRequests).toHaveLength(1);
+  });
+
+  it("accepts a single conversation message's content well past the old shared cap, and still 400s one character over its own cap", async () => {
+    const context = buildTestContext();
+
+    // At MAX_CONVERSATION_MESSAGE_LENGTH (agentApi.ts) -- past the old
+    // shared 8,000-char cap, proving `content` now has its own, larger
+    // limit rather than reusing MAX_USER_MESSAGE_LENGTH.
+    const acceptedProvider = new FakeLlmProvider([{ text: "ok", toolCalls: [] }]);
+    const acceptedRouter = buildRouter(contextWithFakeLlm(context, acceptedProvider));
+    const acceptedResponse = await call(acceptedRouter, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "hi",
+      conversation: [{ role: "user", content: "x".repeat(20_000) }],
+    });
+    expect(acceptedResponse.statusCode).toBe(200);
+    expect(acceptedProvider.receivedRequests).toHaveLength(1);
+
+    // One over that same cap.
+    const rejectedProvider = new FakeLlmProvider([]);
+    const rejectedRouter = buildRouter(contextWithFakeLlm(context, rejectedProvider));
+    const rejectedResponse = await call(rejectedRouter, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "hi",
+      conversation: [{ role: "user", content: "x".repeat(20_001) }],
+    });
+    expect(rejectedResponse.statusCode).toBe(400);
+    expect(rejectedProvider.receivedRequests).toHaveLength(0);
+  });
+
+  it("400s a conversation whose total content length exceeds the transcript-wide cap, even with every message under its own per-message cap", async () => {
+    const context = buildTestContext();
+    const provider = new FakeLlmProvider([]);
+    const router = buildRouter(contextWithFakeLlm(context, provider));
+
+    // 6 messages x 20,000 chars = 120,000, over MAX_TURN_CONVERSATION_TOTAL_LENGTH
+    // (100,000) -- each individual message is at exactly the per-message cap,
+    // so only a total-size check catches this.
+    const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", {
+      userMessage: "hi",
+      conversation: Array.from({ length: 6 }, () => ({ role: "user" as const, content: "x".repeat(20_000) })),
     });
 
     expect(response.statusCode).toBe(400);
@@ -586,6 +696,48 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
 
     const stillPending = await getProposal(context, TENANT_ID, staged.proposalId);
     expect(stillPending?.status).toBe("PENDING");
+  });
+
+  // task-11-fix-2-brief.md: the two-layer defense-in-depth question. Layer B
+  // (approval.ts's applyApprovedChange, which builds `effectiveInput` as
+  // `editedInput ?? proposal.input`) is already independently pinned -- `??`
+  // treats `null` as nullish, so a Layer-B-only defect silently discards a
+  // `null` edit and falls back to the model's original proposal.input rather
+  // than refusing the request. This test pins Layer A instead: the HTTP body
+  // schema itself (ApproveProposalBody's `editedInput`) must refuse `null`
+  // as a 400, before applyApprovedChange is ever reached, so Layer A owns
+  // its own pin rather than riding on Layer B's.
+  it("400s an editedInput of null, rather than silently discarding the edit and applying the model's original proposal", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "AGT-APPR-06");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, visaType: "TOURIST" },
+      ADMIN_EMAIL,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    const router = buildRouter(context);
+    const response = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/agent/proposals/${staged.proposalId}/approve`,
+      { editedInput: null },
+    );
+
+    expect(response.statusCode).toBe(400);
+
+    const stillPending = await getProposal(context, TENANT_ID, staged.proposalId);
+    expect(stillPending?.status).toBe("PENDING");
+
+    // Nothing applied under the original proposal.input either -- a
+    // Layer-A-only defect would still 400 (Layer B backstops it), but the
+    // discriminating half of THIS test is the 400 itself: it must come from
+    // parsing the body, not from applyApprovedChange ever running.
+    const caseAfter = await getCase(context, TENANT_ID, seededCase.caseId);
+    expect(caseAfter.visaType).toBe("EVISA_TOURIST");
   });
 });
 
@@ -1054,6 +1206,44 @@ describe("DELETE /api/v1/admin/crm/agent/memories/{memoryKey}", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.payload).toEqual({ forgotten: false });
+  });
+
+  // task-11-fix-2-brief.md B1/NEW-1: m2's read-before-delete used to call
+  // getMemoryOrUndefined, which THROWS on a row that will not parse -- so
+  // GET named a corrupt row in unreadableMemoryKeys, and DELETE 409'd on
+  // that exact same row, leaving it standing. Deleting is the remedy for a
+  // corrupt row; it must not require the row to be readable first.
+  it("deletes a corrupt memory row instead of 409ing on it, and the row is really gone afterward", async () => {
+    const context = buildTestContext();
+    const scope = memoryScope("ORG");
+    // Same "half-written" fixture the m1 test uses -- no `text`, no
+    // `createdAt`, so CrmMemorySchema refuses it.
+    await context.table.put({
+      PK: memoryPartitionKey(TENANT_ID, scope),
+      SK: "half-written",
+      tenantId: TENANT_ID,
+      scope,
+      memoryKey: "half-written",
+      createdBy: "agent",
+    });
+
+    const router = buildRouter(context);
+    const response = await call(
+      router,
+      "DELETE",
+      "/api/v1/admin/crm/agent/memories/half-written",
+      undefined,
+      { scope: "ORG" },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toEqual({ forgotten: true });
+
+    // Gone for good, not merely un-thrown-on: a direct raw read (never
+    // parses, so it cannot itself throw on what should now be nothing)
+    // confirms the row is actually removed.
+    const rawRowAfterDelete = await context.table.get(memoryPartitionKey(TENANT_ID, scope), "half-written");
+    expect(rawRowAfterDelete).toBeUndefined();
   });
 
   // task-11-fix-1-review.md C2/A2: same spoofing threat as GET/POST, on the

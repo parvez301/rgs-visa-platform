@@ -409,6 +409,46 @@ describe("applyApprovedChange", () => {
     expect(approvalEvent?.meta.edited).toBe(false);
   });
 
+  // task-11-fix-2-brief.md A2 / M3 backstop: this is the defense that has to
+  // hold even if some future call site forgets the route-level guard
+  // (agentApi.ts's requireAdminEmail) entirely -- called directly here,
+  // bypassing the HTTP layer altogether, with the empty actorEmail a
+  // no-email-claim admin token would produce. Before `putProposal` parsed
+  // before writing, this sequence 200'd, applied the billing change, wrote
+  // decidedBy: "", and only failed on a LATER read -- an irreversible
+  // domain mutation behind a permanently unreadable audit row. All three
+  // parts of "the write must fail" have to be proved separately: the call
+  // itself throws, the domain change never happened, and no row -- not even
+  // a corrupted one -- was written.
+  it("refuses to approve with a blank actor, before the domain mutation ever runs, and writes nothing", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    expect(seeded.billingStatus).toBe("UNBILLED");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seeded.caseId, billingStatus: "BILL_SENT" },
+      ACTOR,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    await expect(applyApprovedChange(context, TENANT_ID, staged.proposalId, "")).rejects.toMatchObject({
+      statusCode: 400,
+    });
+
+    // Part 2: the domain change must not have applied.
+    const caseAfter = await getCase(context, TENANT_ID, seeded.caseId);
+    expect(caseAfter.billingStatus).toBe("UNBILLED");
+
+    // Part 3: no row was written at all -- the proposal reads back exactly
+    // as `stageProposal` left it, not as an APPROVED row with a blank
+    // decidedBy (which would throw CorruptRecordError here instead of
+    // resolving) and not as anything else either.
+    const stillPending = await getProposal(context, TENANT_ID, staged.proposalId);
+    expect(stillPending).toEqual(staged);
+  });
+
   it("refuses an unknown proposal id", async () => {
     const context = buildTestContext();
     await expect(applyApprovedChange(context, TENANT_ID, "prop_does_not_exist", ACTOR)).rejects.toMatchObject({
@@ -806,6 +846,34 @@ describe("discardProposal", () => {
     await expect(
       discardProposal(context, TENANT_ID, staged.proposalId, ACTOR, "   "),
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  // task-11-fix-2-brief.md A2 / M3 backstop, discard's half: no domain
+  // mutation to guard here (discard never calls `apply`), but `putProposal`
+  // runs before `recordCrmEvent` -- so a blank actor refused at the write
+  // must ALSO mean no PROPOSAL_DISCARDED event was ever recorded, not only
+  // that the row stayed PENDING.
+  it("refuses to discard with a blank actor, and leaves the proposal PENDING with no event recorded", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seeded.caseId, billingStatus: "BILL_SENT" },
+      ACTOR,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    await expect(
+      discardProposal(context, TENANT_ID, staged.proposalId, "", "trying to sneak this through"),
+    ).rejects.toMatchObject({ statusCode: 400 });
+
+    const stillPending = await getProposal(context, TENANT_ID, staged.proposalId);
+    expect(stillPending).toEqual(staged);
+
+    const events = await listCaseEvents(context, TENANT_ID, seeded.caseId);
+    expect(events.map((event) => event.eventType)).not.toContain("PROPOSAL_DISCARDED");
   });
 
   it("refuses to discard a proposal that was already approved", async () => {

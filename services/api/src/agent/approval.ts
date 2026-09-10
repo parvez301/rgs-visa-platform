@@ -1,5 +1,5 @@
 import { crm } from "@rgs/shared";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import type { AppContext } from "../lib/context";
 import type { TableItem } from "../lib/db";
 import { badRequest, conflict, notFound } from "../lib/errors";
@@ -145,24 +145,63 @@ function requireWriteTool(toolName: string): AgentTool {
 }
 
 /**
+ * The first schema complaint on a proposal about to be written, mirroring
+ * `describeFirstZodIssue`-based write-path parsers elsewhere (`memory.ts`'s
+ * `parseNewMemory`, `cases.ts`'s inline parses): a bare `ZodError` is not an
+ * `ApiError`, and `router.ts` maps only `ApiError` subclasses, so a schema
+ * failure that reached storage unparsed would 500 rather than 400.
+ *
+ * Exported to `applyApprovedChange` below as well as used by `putProposal`,
+ * because approve's domain mutation (`writeTool.apply`) happens BEFORE that
+ * function's own call to `putProposal` -- validating only there would refuse
+ * the write but leave an already-applied domain change standing (see the
+ * comment on `putProposal`, and task-11-fix-2-brief.md A2 / M3 backstop).
+ */
+function parseProposedChangeForWrite(candidate: ProposedChange): ProposedChange {
+  try {
+    return ProposedChangeSchema.parse(candidate);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw badRequest(`Agent proposal ${describeFirstZodIssue(error)}`);
+    }
+    throw error;
+  }
+}
+
+/**
  * The single place a proposal reaches storage, at any status.
  *
  * GSI1PK is re-derived from the proposal's own `status` on every write, the
  * same rule `reviewQueue.ts` uses (its comment at :201-210) so an approved or
  * discarded proposal leaves the PENDING partition automatically instead of
  * lingering there forever because nobody re-wrote it.
+ *
+ * Parses through `ProposedChangeSchema` before writing, not only on read
+ * (task-11-fix-2-brief.md A2 / M3 backstop): parse-then-write is the house
+ * pattern everywhere else that has a schema at all -- `parseNewMemory`
+ * before `writeMemory`, `createCase` and `updateCaseDetails` likewise --
+ * and writing `...proposal` straight to the table with no schema pass was
+ * this function's own anomaly. This is what makes `.min(1)` on `decidedBy`
+ * (below, on the schema) mean what it was ruled to mean for discard and for
+ * `stageProposal`: the write itself fails, and nothing is stored. Approve is
+ * the one call site where this alone is not enough -- see
+ * `parseProposedChangeForWrite`'s own comment and `applyApprovedChange`
+ * below, which validates the SAME way before ever calling `writeTool.apply`,
+ * so the domain mutation is refused right alongside the write, not only
+ * after it.
  */
 async function putProposal(
   context: AppContext,
   tenantId: string,
   proposal: ProposedChange,
 ): Promise<void> {
+  const validatedProposal = parseProposedChangeForWrite(proposal);
   await context.table.put({
-    PK: proposalPartitionKey(tenantId, proposal.proposalId),
+    PK: proposalPartitionKey(tenantId, validatedProposal.proposalId),
     SK: PROPOSAL_SORT_KEY,
-    GSI1PK: proposalStatusGsi1Pk(tenantId, proposal.status),
-    GSI1SK: proposal.proposedAt,
-    ...proposal,
+    GSI1PK: proposalStatusGsi1Pk(tenantId, validatedProposal.status),
+    GSI1SK: validatedProposal.proposedAt,
+    ...validatedProposal,
   });
 }
 
@@ -358,8 +397,6 @@ export async function applyApprovedChange(
   const caseBeforeApply =
     proposal.caseId !== undefined ? await getCase(context, tenantId, proposal.caseId) : undefined;
 
-  const domainResult = await writeTool.apply!(context, tenantId, effectiveInput, actorEmail);
-
   const decidedAt = context.now().toISOString();
   const approvedProposal: ProposedChange = {
     ...proposal,
@@ -376,7 +413,19 @@ export async function applyApprovedChange(
     decidedBy: actorEmail,
     decidedAt,
   };
-  await putProposal(context, tenantId, approvedProposal);
+  // Validated BEFORE `writeTool.apply` runs, not only when `putProposal`
+  // writes the row afterward (task-11-fix-2-brief.md A2 / M3 backstop): a
+  // blank `decidedBy` -- or any other schema violation -- is refused here,
+  // before the domain mutation ever touches anything. Validating only at
+  // the write below would refuse the ROW but leave an already-applied,
+  // irreversible domain change standing, which is strictly worse than the
+  // blank-attribution row it replaced (see `parseProposedChangeForWrite`'s
+  // own comment).
+  const validatedApprovedProposal = parseProposedChangeForWrite(approvedProposal);
+
+  const domainResult = await writeTool.apply!(context, tenantId, effectiveInput, actorEmail);
+
+  await putProposal(context, tenantId, validatedApprovedProposal);
 
   const changed = domainCallChanged(caseBeforeApply, domainResult);
   // create_case has no caseId at stage time -- the case does not exist until

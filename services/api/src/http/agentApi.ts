@@ -6,7 +6,7 @@ import { runAgentTurn } from "../agent/loop";
 import {
   MEMORY_SCOPE_KINDS,
   forgetMemory,
-  getMemoryOrUndefined,
+  memoryRowExists,
   memoryScope,
   recallMemories,
   rememberMemory,
@@ -23,9 +23,32 @@ import { requireAdmin } from "./adminApi";
  * each call or how long any one message is. The same "unattended cost this
  * desk should never pay silently" reasoning that motivated that cap applies
  * here (task-11-fix-1-review.md m3).
+ *
+ * This used to be one constant (MAX_TURN_MESSAGE_LENGTH) applied to both
+ * `userMessage` and every `conversation` message's `content`. That was
+ * wrong for `content`: `content` is not only what a caller typed, it is
+ * also what THIS SERVER emitted as `reply` on a previous turn (loop.ts's
+ * `replyText = completion.text`, forwarded verbatim, no cap of its own) and
+ * that the client is expected to send back as history on the next call. The
+ * Anthropic adapter's own completion budget (DEFAULT_MAX_OUTPUT_TOKENS,
+ * providers/anthropic.ts) is 4096 tokens -- comfortably north of 8,000
+ * characters -- so a maximal reply could not be replayed: the server would
+ * emit it at 200, then refuse that same text back at 400 on the very next
+ * turn, with the error naming `conversation`, a field the user never typed
+ * into (task-11-fix-2-brief.md B2 / NEW-2). The invariant this file must
+ * hold is: the server must never emit a reply it will refuse to accept
+ * back. So the two limits are separate: `userMessage` keeps the tight
+ * inbound cap (it is only ever caller-typed), and `content` gets a limit
+ * sized to what the provider can actually produce, with a generous margin
+ * against tokenizers whose average is worse than 4 chars/token. Total
+ * replay cost is bounded separately, by MAX_TURN_CONVERSATION_TOTAL_LENGTH
+ * below, rather than by (message cap × message count) -- which is now far
+ * too loose a product to serve as a cost bound on its own.
  */
-const MAX_TURN_MESSAGE_LENGTH = 8_000;
+const MAX_USER_MESSAGE_LENGTH = 8_000;
+const MAX_CONVERSATION_MESSAGE_LENGTH = 20_000;
 const MAX_TURN_CONVERSATION_MESSAGES = 200;
+const MAX_TURN_CONVERSATION_TOTAL_LENGTH = 100_000;
 
 /**
  * Mirrors AgentMessage (agent/providers/types.ts) exactly. A route accepting
@@ -42,7 +65,7 @@ const MAX_TURN_CONVERSATION_MESSAGES = 200;
 const AgentMessageBody = z
   .object({
     role: z.enum(["user", "assistant", "tool_result"]),
-    content: z.string().max(MAX_TURN_MESSAGE_LENGTH),
+    content: z.string().max(MAX_CONVERSATION_MESSAGE_LENGTH),
     toolCallId: z.string().optional(),
     toolName: z.string().optional(),
   })
@@ -50,10 +73,24 @@ const AgentMessageBody = z
     message: "a tool_result message must carry toolName",
   });
 
-const RunTurnBody = z.object({
-  userMessage: z.string().trim().min(1).max(MAX_TURN_MESSAGE_LENGTH),
-  conversation: z.array(AgentMessageBody).max(MAX_TURN_CONVERSATION_MESSAGES).optional(),
-});
+const RunTurnBody = z
+  .object({
+    userMessage: z.string().trim().min(1).max(MAX_USER_MESSAGE_LENGTH),
+    conversation: z.array(AgentMessageBody).max(MAX_TURN_CONVERSATION_MESSAGES).optional(),
+  })
+  .superRefine((body, context) => {
+    const totalConversationLength = (body.conversation ?? []).reduce(
+      (runningTotal, message) => runningTotal + message.content.length,
+      0,
+    );
+    if (totalConversationLength > MAX_TURN_CONVERSATION_TOTAL_LENGTH) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["conversation"],
+        message: `total conversation content length ${totalConversationLength} exceeds ${MAX_TURN_CONVERSATION_TOTAL_LENGTH}`,
+      });
+    }
+  });
 
 const ApproveProposalBody = z.object({
   // Deliberately no actorEmail/approvedBy field: the actor is always the
@@ -141,15 +178,25 @@ interface AgentRouteDefinition {
 }
 
 /**
- * The seven routes, and nothing else registers them: `registerAgentRoutes`
- * below builds the router FROM this array, so a route cannot exist without
- * appearing in it, and `AGENT_ROUTES` (derived, exported below) cannot omit
- * one either. This is the fix for task-11-fix-1-review.md C1/M4 -- before
- * this, every test built its own bare `new Router()`, so the whole table
- * could be dropped from `buildAdminRouter` (adminApi.ts) with the suite
- * fully green. A test that walks `AGENT_ROUTES` through the real
- * `buildAdminRouter` now has no way to miss a route that exists, and no way
- * to silently lose one that is removed from here.
+ * The seven routes `registerAgentRoutes` builds the router from, and the
+ * source `AGENT_ROUTES` (derived, exported below) is generated from. This is
+ * the fix for task-11-fix-1-review.md C1 -- before this, every test built its
+ * own bare `new Router()`, so the whole table could be dropped from
+ * `buildAdminRouter` (adminApi.ts) with the suite fully green. A test that
+ * walks `AGENT_ROUTES` through the real `buildAdminRouter` now has no way to
+ * miss a route that this task's table intends to expose, and no way to
+ * silently lose one that is removed from here.
+ *
+ * What this array does NOT guarantee (task-11-fix-2-brief.md A1/M4, after
+ * this overstatement was caught reddening 0 tests): nothing stops a *ninth*
+ * route from being registered directly on the `Router` passed into
+ * `registerAgentRoutes` below -- `router.add` stays public, and this array
+ * only constrains routes that choose to be listed in it. `AGENT_ROUTES` is
+ * the right thing to dispatch tests through (it names what THIS task's
+ * table intends to expose); it is the wrong thing to drive an "is every
+ * registered route authenticated" test from -- that test has to walk
+ * `Router.registeredRoutes`, the router's own account of what `add` was
+ * actually called with, not a declaration of it.
  */
 const AGENT_ROUTE_DEFINITIONS: AgentRouteDefinition[] = [
   {
@@ -273,21 +320,30 @@ const AGENT_ROUTE_DEFINITIONS: AgentRouteDefinition[] = [
       // honesty memoryTools.ts's NOTHING_TO_FORGET_FROM sentinel exists for
       // on the approval card). Read before delete, not after: forgetMemory
       // would report "gone" either way once it has run.
-      const existingMemory = await getMemoryOrUndefined(context, DEFAULT_TENANT_ID, scope, memoryKey);
+      //
+      // `memoryRowExists`, not `getMemoryOrUndefined` (task-11-fix-2-brief.md
+      // NEW-1): the latter throws CorruptRecordError on a row that will not
+      // parse, which made a corrupt row 409 here with the row left standing
+      // -- undeletable through this API, the one thing an operator most
+      // needs to do with it. A raw existence check never throws, and
+      // `forgetMemory`'s own `table.delete` never parses either, so a
+      // corrupt row deletes exactly as cleanly as a healthy one.
+      const existingMemory = await memoryRowExists(context, DEFAULT_TENANT_ID, scope, memoryKey);
       await forgetMemory(context, DEFAULT_TENANT_ID, scope, memoryKey, adminEmail);
-      return { forgotten: existingMemory !== undefined };
+      return { forgotten: existingMemory };
     },
   },
 ];
 
 /**
- * The (method, path) pairs actually registered, derived from
- * `AGENT_ROUTE_DEFINITIONS` rather than maintained separately -- an eighth
- * route has to join that array to exist at all, and joining it means
- * joining this list too. Exported so a test can dispatch every one of them
- * through the real `buildAdminRouter(context)` (closing
- * task-11-fix-1-review.md C1) and confirm every one of them requires admin
- * (closing M4), with no hand-maintained enumeration to fall out of sync.
+ * The (method, path) pairs this task's route table intends to expose,
+ * derived from `AGENT_ROUTE_DEFINITIONS` rather than maintained separately.
+ * Exported so a test can dispatch every one of them through the real
+ * `buildAdminRouter(context)` (closing task-11-fix-1-review.md C1). Do NOT
+ * use this to enumerate "every route that requires admin" -- see the
+ * comment on `AGENT_ROUTE_DEFINITIONS` above and `Router.registeredRoutes`
+ * (router.ts) for why that property needs the router's own registry, not
+ * this array.
  */
 export const AGENT_ROUTES: { method: string; path: string }[] = AGENT_ROUTE_DEFINITIONS.map(
   ({ method, path }) => ({ method, path }),

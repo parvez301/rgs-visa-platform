@@ -254,6 +254,19 @@ describe("rememberMemory / recallMemories round trip", () => {
     // first half would leave a stray event unnoticed.
     const events = await listCaseEvents(context, TENANT_ID, seededCase.caseId);
     expect(events.filter((event) => event.eventType === "MEMORY_REMEMBERED")).toEqual([]);
+
+    // task-11-fix-1-review.md's re-review (P62 second half, VACUOUS): the
+    // assertion above only proves nothing landed on the ONE case this test
+    // happens to seed -- "no event anywhere" was actually "no event on the
+    // case I looked at". If `recordCrmEvent`'s guard around `sourceCaseId`
+    // is ever removed, `memory.sourceCaseId!` is `undefined`, and
+    // `casePartitionKey` coerces that to the literal string "undefined" --
+    // a real, distinct partition no seeded case ever occupies. That is
+    // exactly where a bug like this hides an orphan row, so this checks
+    // that partition directly, by the same key the bug would actually
+    // write to.
+    const eventsUnderNoCase = await listCaseEvents(context, TENANT_ID, undefined as unknown as string);
+    expect(eventsUnderNoCase.filter((event) => event.eventType === "MEMORY_REMEMBERED")).toEqual([]);
   });
 });
 
