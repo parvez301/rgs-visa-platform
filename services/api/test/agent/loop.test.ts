@@ -14,7 +14,7 @@ import {
 } from "../../src/agent/approval";
 import { FakeLlmProvider, type ScriptedTurn } from "../../src/agent/providers/fake";
 import type { AgentMessage } from "../../src/agent/providers/types";
-import { getCase, createCase } from "../../src/domain/crm/cases";
+import { getCase, createCase, listCasesByStatus } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import { memoryScope, rememberMemory } from "../../src/domain/crm/memory";
 import { createPartner } from "../../src/domain/crm/partners";
@@ -421,9 +421,103 @@ describe("runAgentTurn", () => {
       });
       expect(result.proposals).toHaveLength(1);
       expect(result.appliedChanges).toHaveLength(0);
+
+      // Branch review C2. The two counts above CANNOT tell the ladder's
+      // refusal apart from the ladder auto-applying and the gate rejecting
+      // the tool afterwards: `approval.ts` snapshots `writeToolRegistry` at
+      // module load, so this throwaway tool is invisible inside the gate --
+      // under a fail-open ladder `requireWriteTool` 409s, the loop's catch
+      // reads the row back as PENDING and pushes it into `proposals`,
+      // reproducing `proposals: 1 / appliedChanges: 0` byte for byte. That
+      // is Task 10's own observe-don't-infer fix working against the test.
+      //
+      // So assert the MECHANISM: the exact staged text, which only the
+      // ladder's else-branch emits. The catch's message is a different
+      // string -- and deliberately checked for by exact equality rather than
+      // `toContain`, because the catch's text ends "... Staged for human
+      // approval instead (proposalId: ...)" and would satisfy a substring
+      // match.
+      const stagedToolResults = (context.llm.receivedRequests[1]?.messages ?? []).filter(
+        (message) => message.role === "tool_result",
+      );
+      expect(stagedToolResults).toHaveLength(1);
+      expect(stagedToolResults[0]?.content).toBe(
+        `Staged for human approval (proposalId: ${result.proposals[0]!.proposalId}). Not applied yet.`,
+      );
     } finally {
       WRITE_TOOLS.splice(WRITE_TOOLS.indexOf(throwawayWriteTool), 1);
     }
+  });
+
+  // Branch review C2, the half the throwaway tool above structurally cannot
+  // cover: a tool the GATE accepts. `create_case` is registered in
+  // WRITE_TOOLS and absent from AUTO_APPLIABLE_TOOLS on purpose (ruling
+  // P54) -- so if the allow-list conjunct at loop.ts's trust ladder is
+  // removed, auto-apply degrades to "anything not in HIGH_STAKES_TOOLS",
+  // create_case sails through the gate, and a real case row is written with
+  // no human having seen it.
+  //
+  // Asserted against the STORE, not against the turn result's in-memory
+  // arrays: that is the P64 lesson (enumerate the real thing) applied to the
+  // ladder, and the only assertion here that a fail-open ladder cannot
+  // satisfy by some other route.
+  it("does not auto-apply create_case at trust level 2 with opt-in, and writes no case row", async () => {
+    const baseContext = buildTestContext();
+    const partner = await createPartner(
+      baseContext,
+      TENANT_ID,
+      { canonicalName: "Ozzy Travels DEFAULT-DENY", partnerType: "AGENCY" },
+      ACTOR,
+    );
+    const traveller = await upsertTraveller(baseContext, TENANT_ID, { fullName: "ASHA RAO" });
+
+    const context = await contextAtTrustLevel(
+      2,
+      [
+        {
+          text: "",
+          toolCalls: [
+            {
+              toolCallId: "c1",
+              toolName: "create_case",
+              input: {
+                caseRef: "DENY-01",
+                caseType: "VISA",
+                visaType: "EVISA_TOURIST",
+                partnerId: partner.partnerId,
+                destinationCountry: "JP",
+                receivedDate: "2026-09-01",
+                applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
+              },
+            },
+          ],
+        },
+        { text: "I've drafted that case for you to approve.", toolCalls: [] },
+      ],
+      { context: baseContext, autoApplyOptIn: true },
+    );
+
+    const result = await runAgentTurn(context, TENANT_ID, {
+      userMessage: "open a case for this traveller",
+      conversation: [],
+      actorEmail: ACTOR,
+    });
+
+    // No case exists. Nothing was seeded here precisely so this is a genuine
+    // zero rather than "the count did not go up".
+    const { cases } = await listCasesByStatus(context, TENANT_ID, "NEW");
+    expect(cases).toHaveLength(0);
+
+    expect(result.appliedChanges).toHaveLength(0);
+    expect(result.proposals).toHaveLength(1);
+    expect(result.proposals[0]!.toolName).toBe("create_case");
+    // Same mechanism assertion as above: the staged text, not the catch's.
+    const stagedToolResults = (context.llm.receivedRequests[1]?.messages ?? []).filter(
+      (message) => message.role === "tool_result",
+    );
+    expect(stagedToolResults[0]?.content).toBe(
+      `Staged for human approval (proposalId: ${result.proposals[0]!.proposalId}). Not applied yet.`,
+    );
   });
 
   // task-10-controller-notes.md §3: an auto-applied change must not read, in
