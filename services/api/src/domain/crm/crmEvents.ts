@@ -9,7 +9,12 @@ export type CrmEventType =
   | "BILLING_CHANGED"
   | "CASE_UPDATED"
   | "APPLICANT_OUTCOME_CHANGED"
-  | "LINE_ITEM_ADDED";
+  | "LINE_ITEM_ADDED"
+  // Widening this union is safe here: the admin activity feed switches on
+  // ActivityEventType (packages/shared/src/statuses.ts), a different union,
+  // and a CrmEvent never reaches it (task-8-controller-notes.md P36).
+  | "PROPOSAL_APPROVED"
+  | "PROPOSAL_DISCARDED";
 
 export interface CrmEvent {
   eventId: string;

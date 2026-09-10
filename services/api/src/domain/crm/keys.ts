@@ -111,3 +111,19 @@ export function reviewQueueGsi1Pk(tenantId: string, reviewStatus: string): strin
 export function countryChecklistPartitionKey(tenantId: string, countryCode: string): string {
   return `TENANT#${tenantId}#COUNTRY#${countryCode}`;
 }
+
+/**
+ * The sort key for a proposed change's own "the record itself" item. Reuses
+ * META_SORT_KEY rather than a second "META" literal, for the same reason
+ * REVIEW_ITEM_SORT_KEY does: proposals share the same storage decision as
+ * cases, partners, travellers and review items.
+ */
+export const PROPOSAL_SORT_KEY = META_SORT_KEY;
+
+export function proposalPartitionKey(tenantId: string, proposalId: string): string {
+  return `TENANT#${tenantId}#PROPOSAL#${proposalId}`;
+}
+
+export function proposalStatusGsi1Pk(tenantId: string, proposalStatus: string): string {
+  return `TENANT#${tenantId}#PROPOSAL_STATUS#${proposalStatus}`;
+}
