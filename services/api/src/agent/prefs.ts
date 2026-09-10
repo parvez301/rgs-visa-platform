@@ -1,0 +1,125 @@
+import { crm } from "@rgs/shared";
+import type { AppContext } from "../lib/context";
+import {
+  parseStoredRecord,
+  storedRecordId,
+  stripStorageKeys,
+} from "../lib/storedRecords";
+import { CRM_USER_PREFS_SORT_KEY, crmUserPrefsPartitionKey } from "../domain/crm/keys";
+
+/**
+ * One CRM user's trust-ladder preferences (task-10 brief, spec §7). Persists
+ * `crm.CrmUserPrefsSchema` -- carried in packages/shared since Plan 1 with no
+ * reader or writer until now (task-10-controller-notes.md §9) -- rather than
+ * a parallel shape invented for this task alone.
+ */
+
+function defaultUserPrefs(tenantId: string, email: string): crm.CrmUserPrefs {
+  // Every field spelled out, not `CrmUserPrefsSchema.parse({tenantId, email})`
+  // relying on its `.default(...)`s: a user with no stored row is a new user
+  // and this is the one place that decides what "new user" means, so it
+  // should be legible without cross-referencing the schema.
+  return {
+    tenantId,
+    email,
+    trustLevel: 0,
+    autoApplyOptIn: false,
+    defaultFilters: {},
+    confirmedWithoutEditCount: 0,
+  };
+}
+
+async function readStoredUserPrefs(
+  context: AppContext,
+  tenantId: string,
+  email: string,
+): Promise<crm.CrmUserPrefs | undefined> {
+  const storedItem = await context.table.get(crmUserPrefsPartitionKey(tenantId, email), CRM_USER_PREFS_SORT_KEY);
+  if (storedItem === undefined) return undefined;
+  return parseStoredRecord(
+    crm.CrmUserPrefsSchema,
+    "CRM user prefs",
+    storedRecordId(storedItem, "email"),
+    stripStorageKeys(storedItem),
+  );
+}
+
+async function writeUserPrefs(
+  context: AppContext,
+  tenantId: string,
+  userPrefs: crm.CrmUserPrefs,
+): Promise<crm.CrmUserPrefs> {
+  const validatedUserPrefs = crm.CrmUserPrefsSchema.parse(userPrefs);
+  await context.table.put({
+    PK: crmUserPrefsPartitionKey(tenantId, validatedUserPrefs.email),
+    SK: CRM_USER_PREFS_SORT_KEY,
+    ...validatedUserPrefs,
+  });
+  return validatedUserPrefs;
+}
+
+/**
+ * A user with no stored row yet, read back as the safest possible user
+ * (task-10-controller-notes.md §6): level 0, opted out of auto-apply, no
+ * confirmed-without-edit history.
+ */
+export async function readUserPrefs(
+  context: AppContext,
+  tenantId: string,
+  email: string,
+): Promise<crm.CrmUserPrefs> {
+  const storedUserPrefs = await readStoredUserPrefs(context, tenantId, email);
+  return storedUserPrefs ?? defaultUserPrefs(tenantId, email);
+}
+
+/**
+ * Merges the given fields onto the user's current prefs (or the safe
+ * defaults, for a first-time user) and persists the result. The one write
+ * path every caller of this module goes through -- a future opt-in endpoint
+ * (Task 11+) seeding `{ trustLevel: 2, autoApplyOptIn: true }` after a human
+ * explicitly agrees, and this task's own tests seeding a trust level to
+ * exercise the ladder, rather than either one writing a raw table row.
+ */
+export async function setUserPrefs(
+  context: AppContext,
+  tenantId: string,
+  email: string,
+  updates: Partial<Omit<crm.CrmUserPrefs, "tenantId" | "email">>,
+): Promise<crm.CrmUserPrefs> {
+  const currentUserPrefs = await readUserPrefs(context, tenantId, email);
+  return writeUserPrefs(context, tenantId, { ...currentUserPrefs, ...updates });
+}
+
+/**
+ * `0` for a user with no stored row: a user nobody has ever set a trust
+ * level for is a new user, and a new user gets the safest behaviour --
+ * every write staged, none auto-applied (task-10-controller-notes.md §6).
+ */
+export async function readTrustLevel(
+  context: AppContext,
+  tenantId: string,
+  userEmail: string,
+): Promise<0 | 1 | 2> {
+  const userPrefs = await readUserPrefs(context, tenantId, userEmail);
+  return userPrefs.trustLevel;
+}
+
+/**
+ * Records that a human approved a staged proposal without changing a single
+ * field of it -- one signal a future screen can use to PROPOSE moving this
+ * user up the trust ladder. Never itself touches `trustLevel` or
+ * `autoApplyOptIn`: advancement is opt-in and never silent
+ * (task-10-controller-notes.md §6) -- counting confirmations is not the same
+ * act as raising trust, and this function only ever does the former.
+ */
+export async function recordConfirmedWithoutEdit(
+  context: AppContext,
+  tenantId: string,
+  userEmail: string,
+): Promise<void> {
+  const currentUserPrefs = await readUserPrefs(context, tenantId, userEmail);
+  await writeUserPrefs(context, tenantId, {
+    ...currentUserPrefs,
+    confirmedWithoutEditCount: currentUserPrefs.confirmedWithoutEditCount + 1,
+  });
+}

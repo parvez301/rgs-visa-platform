@@ -274,6 +274,16 @@ export async function applyApprovedChange(
   proposalId: string,
   actorEmail: string,
   editedInput?: Record<string, unknown>,
+  // Set only by the trust ladder (Task 10) when it stages a change and
+  // applies it in the same breath, with no human ever having seen it.
+  // `decidedBy` stays `actorEmail` either way -- that is genuinely who the
+  // turn was running for -- but `decidedBy` alone would make this call
+  // indistinguishable from a human clicking Approve on the same proposal
+  // (task-10-controller-notes.md §3). Threaded through to the recorded
+  // event below rather than left implicit, because this repo has already
+  // shipped one message that lied about what happened (the importer's abort
+  // text, finding NEW-4) and paid for it in review.
+  autoApplied = false,
 ): Promise<unknown> {
   const proposal = await readProposalOrThrow(context, tenantId, proposalId);
   if (proposal.status !== "PENDING") {
@@ -348,6 +358,11 @@ export async function applyApprovedChange(
       toolName: proposal.toolName,
       edited: editedInput !== undefined,
       changed,
+      // `false` on every pre-Task-10 call site and on every human approval:
+      // the flag this function's callers -- Task 11's approve endpoint among
+      // them -- would have to go out of their way to set `true`, so the safe
+      // reading ("a human approved this") is the one that survives silently.
+      autoApplied,
     });
   }
 

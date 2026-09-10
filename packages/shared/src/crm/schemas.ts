@@ -182,5 +182,11 @@ export const CrmUserPrefsSchema = z.object({
   trustLevel: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(0),
   autoApplyOptIn: z.boolean().default(false),
   defaultFilters: z.record(z.string(), z.string()).default({}),
+  // Added for the agent trust ladder (task-10-controller-notes.md §9): how
+  // many staged proposals this user has approved with no edit, one signal a
+  // future screen can use to PROPOSE advancing trustLevel. Counting alone
+  // never moves trustLevel or autoApplyOptIn -- advancement is opt-in, never
+  // silent (task-10-controller-notes.md §6).
+  confirmedWithoutEditCount: z.number().int().nonnegative().default(0),
 });
 export type CrmUserPrefs = z.infer<typeof CrmUserPrefsSchema>;

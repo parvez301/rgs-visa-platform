@@ -154,3 +154,24 @@ export function memoryPartitionKey(tenantId: string, scope: string): string {
 export const MEMORY_ORG_SCOPE = "ORG";
 export const MEMORY_PARTNER_SCOPE_PREFIX = "PARTNER#";
 export const MEMORY_USER_SCOPE_PREFIX = "USER#";
+
+/**
+ * The sort key for a CRM user's own trust-ladder preferences row (task-10
+ * brief: `TENANT#<t>#CRM_USER#<email>` / `PREFS`). A dedicated literal, not a
+ * reuse of META_SORT_KEY: unlike a case, partner or traveller, a prefs row is
+ * not "the record itself" for some other entity -- it is its own thing, one
+ * per (tenant, user), and giving it a distinct sort key keeps that legible
+ * rather than borrowing a name that means something else everywhere else it
+ * appears.
+ */
+export const CRM_USER_PREFS_SORT_KEY = "PREFS";
+
+/**
+ * The partition one CRM user's trust-ladder preferences row lives in
+ * (spec §7 / task-10-controller-notes.md §9). Keyed on email, not a minted
+ * id: a user's prefs row is looked up by who they are, never listed, so
+ * there is nothing for a generated id to do here.
+ */
+export function crmUserPrefsPartitionKey(tenantId: string, email: string): string {
+  return `TENANT#${tenantId}#CRM_USER#${email}`;
+}
