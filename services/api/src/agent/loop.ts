@@ -229,20 +229,45 @@ export async function runAgentTurn(
           // it (task-10-controller-notes.md §3) -- `actorEmail` is still who
           // the turn is running for, but nobody actually saw this diff.
           await stageProposal(context, tenantId, proposedChange);
-          await applyApprovedChange(context, tenantId, proposedChange.proposalId, input.actorEmail, undefined, true);
-          appliedChanges.push({
-            ...proposedChange,
-            status: "APPROVED",
-            decidedBy: input.actorEmail,
-            decidedAt: context.now().toISOString(),
-          });
-          messages.push(
-            toolResultMessage(
-              toolCall.toolCallId,
-              matchedTool.name,
-              `Applied on your behalf (proposalId: ${proposedChange.proposalId}). You can still undo this.`,
-            ),
-          );
+          // A SEPARATE try around only the apply half (fix-round-1 A1 /
+          // MAJ-6): `applyApprovedChange` can still throw after staging
+          // succeeded -- any domain-level refusal inside `apply` does this,
+          // e.g. `set_custody` proposing a custody transition its own
+          // `execute` never validates. The row it wrote is real and PENDING,
+          // not gone, so the outer catch's generic "something failed"
+          // message would misdescribe what happened and the proposal would
+          // be named in neither `proposals` nor `appliedChanges` while a
+          // real row sat in the queue -- an orphan the caller cannot see or
+          // approve. Recording it here keeps the turn's result honest: the
+          // write is staged, waiting on a human, exactly like any other
+          // proposal that never attempted auto-apply.
+          try {
+            await applyApprovedChange(context, tenantId, proposedChange.proposalId, input.actorEmail, undefined, true);
+            appliedChanges.push({
+              ...proposedChange,
+              status: "APPROVED",
+              decidedBy: input.actorEmail,
+              decidedAt: context.now().toISOString(),
+            });
+            messages.push(
+              toolResultMessage(
+                toolCall.toolCallId,
+                matchedTool.name,
+                `Applied on your behalf (proposalId: ${proposedChange.proposalId}). You can still undo this.`,
+              ),
+            );
+          } catch (applyError) {
+            const applyErrorMessage = applyError instanceof Error ? applyError.message : String(applyError);
+            proposals.push(proposedChange);
+            messages.push(
+              toolResultMessage(
+                toolCall.toolCallId,
+                matchedTool.name,
+                `Could not apply this automatically (${applyErrorMessage}). Staged for human approval instead ` +
+                  `(proposalId: ${proposedChange.proposalId}).`,
+              ),
+            );
+          }
         } else {
           await stageProposal(context, tenantId, proposedChange);
           proposals.push(proposedChange);

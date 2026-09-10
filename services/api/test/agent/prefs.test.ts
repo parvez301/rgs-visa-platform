@@ -63,6 +63,25 @@ describe("setUserPrefs", () => {
     expect(userPrefs.trustLevel).toBe(1);
     expect(userPrefs.autoApplyOptIn).toBe(true);
   });
+
+  // MIN-5 (fix round 1): prefs.ts exists specifically to persist
+  // CrmUserPrefsSchema rather than a parallel, unvalidated shape
+  // (controller-notes §9) -- an out-of-range trustLevel must never reach
+  // the table silently. `as never` forces a value the type system would
+  // otherwise refuse at the call site, the same way a malformed request
+  // body would arrive at runtime.
+  it("rejects an out-of-range trustLevel rather than storing it silently", async () => {
+    const context = buildTestContext();
+    await expect(setUserPrefs(context, TENANT_ID, ACTOR, { trustLevel: 5 as never })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+
+    // The second half, proved separately: nothing was written -- a user
+    // with no valid row still reads back as the safe default, not a
+    // half-written 5.
+    const userPrefsAfterRejection = await readUserPrefs(context, TENANT_ID, ACTOR);
+    expect(userPrefsAfterRejection.trustLevel).toBe(0);
+  });
 });
 
 describe("recordConfirmedWithoutEdit", () => {

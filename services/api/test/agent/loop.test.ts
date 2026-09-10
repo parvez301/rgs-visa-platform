@@ -4,10 +4,19 @@ import { MAX_TOOL_ITERATIONS, runAgentTurn } from "../../src/agent/loop";
 import { setUserPrefs } from "../../src/agent/prefs";
 import type { AgentTool } from "../../src/agent/tools/registry";
 import { WRITE_TOOLS } from "../../src/agent/tools/writeTools";
-import { applyApprovedChange, stageProposal, type ProposedChange } from "../../src/agent/approval";
+import {
+  AUTO_APPLIABLE_TOOLS,
+  HIGH_STAKES_TOOLS,
+  applyApprovedChange,
+  listPendingProposals,
+  stageProposal,
+  type ProposedChange,
+} from "../../src/agent/approval";
 import { FakeLlmProvider, type ScriptedTurn } from "../../src/agent/providers/fake";
+import type { AgentMessage } from "../../src/agent/providers/types";
 import { getCase, createCase } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
+import { memoryScope, rememberMemory } from "../../src/domain/crm/memory";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { newId } from "../../src/lib/ids";
@@ -112,11 +121,24 @@ describe("runAgentTurn", () => {
       actorEmail: ACTOR,
     });
 
-    expect(result.toolCallsMade.map((call) => call.toolName)).toEqual(["get_case", "set_billing"]);
+    // MIN-2: the full object, not just toolName -- a hardcoded `kind: "read"`
+    // on every entry would satisfy a toolName-only comparison here.
+    expect(result.toolCallsMade).toEqual([
+      { toolName: "get_case", kind: "read" },
+      { toolName: "set_billing", kind: "write" },
+    ]);
     expect(result.proposals).toHaveLength(1);
     expect(result.proposals[0]?.status).toBe("PENDING");
     expect(result.appliedChanges).toHaveLength(0);
     expect(result.reply).toBe("I've drafted the billing change for you to approve.");
+
+    // MAJ-1 / B1: the staged half of the trust ladder must actually reach
+    // storage, not merely appear in the in-memory result -- every user is on
+    // this path by default, and a proposal that exists only in
+    // `result.proposals` is a card in production whose Approve button 404s.
+    // `listPendingProposals` is the same read the approval queue itself uses.
+    const { proposals: pendingProposals } = await listPendingProposals(contextWithLlm, TENANT_ID);
+    expect(pendingProposals.map((proposal) => proposal.proposalId)).toEqual([result.proposals[0]?.proposalId]);
 
     // The second half of "stages, does not apply": the case itself must
     // still show the pre-proposal billing status -- UNBILLED, never
@@ -184,6 +206,9 @@ describe("runAgentTurn", () => {
     // and status must read as an approval, not a leftover PENDING.
     expect(resultAtTwo.appliedChanges[0]?.status).toBe("APPROVED");
     expect(resultAtTwo.appliedChanges[0]?.proposalId).toMatch(/^prop_/);
+    // MIN-3: decidedBy is who actually approved this -- unpinned before,
+    // a constant would have satisfied the assertions above unnoticed.
+    expect(resultAtTwo.appliedChanges[0]?.decidedBy).toBe(ACTOR);
     // The write actually happened -- the case itself moved, not merely the
     // turn's own bookkeeping (top-level instructions: prove this separately).
     const caseAtTwoAfterTurn = await getCase(contextAtTwo, TENANT_ID, caseAtTwo.caseId);
@@ -202,6 +227,43 @@ describe("runAgentTurn", () => {
     // And the second half at level 1: nothing actually moved.
     const caseAtOneAfterTurn = await getCase(contextAtOne, TENANT_ID, caseAtOne.caseId);
     expect(caseAtOneAfterTurn.processing).toBeUndefined();
+  });
+
+  // MAJ-2 / B2: the trustLevel === 2 conjunct was itself unpinned --
+  // contextAtTrustLevel defaults autoApplyOptIn to `level === 2`, so the
+  // level-1 leg of the test above stages because autoApplyOptIn happens to
+  // be false there, not because trustLevel isn't 2. This test forces
+  // autoApplyOptIn true at level 1, a state production can genuinely reach:
+  // setUserPrefs merges (prefs.test.ts's own "merges onto the existing row"
+  // test proves it), so a demotion from {trustLevel: 2, autoApplyOptIn:
+  // true} to {trustLevel: 1} leaves the flag on.
+  it("stages at trust level 1 even when the user HAS opted in to auto-apply", async () => {
+    const baseContext = buildTestContext();
+    const seededCase = await seedOneCase(baseContext, "LVL1-01");
+    const context = await contextAtTrustLevel(
+      1,
+      [
+        {
+          text: "",
+          toolCalls: [
+            { toolCallId: "c1", toolName: "update_case", input: { caseId: seededCase.caseId, processing: "EXPRESS" } },
+          ],
+        },
+        { text: "Done.", toolCalls: [] },
+      ],
+      { context: baseContext, autoApplyOptIn: true },
+    );
+
+    const result = await runAgentTurn(context, TENANT_ID, {
+      userMessage: "switch this to express",
+      conversation: [],
+      actorEmail: ACTOR,
+    });
+
+    expect(result.appliedChanges).toHaveLength(0);
+    expect(result.proposals).toHaveLength(1);
+    const caseAfterTurn = await getCase(context, TENANT_ID, seededCase.caseId);
+    expect(caseAfterTurn.processing).toBeUndefined();
   });
 
   // task-10-controller-notes.md §9: autoApplyOptIn defaults to false on the
@@ -417,5 +479,300 @@ describe("runAgentTurn", () => {
     const humanEvent = approvalEvents.find((event) => event.meta.proposalId === humanProposal.proposalId);
     expect(autoEvent?.meta.autoApplied).toBe(true);
     expect(humanEvent?.meta.autoApplied).toBe(false);
+  });
+
+  // MAJ-3 / B3: nothing asserted on `receivedRequests[n].system` at all --
+  // the whole of buildSystemPrompt, including the recallMemories call
+  // inside it, could be replaced with a string constant and every other
+  // test in this file would stay green.
+  it("puts the tenant's ORG-scope memories into the system prompt", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "MEM-ORG-01");
+    await rememberMemory(
+      context,
+      TENANT_ID,
+      {
+        scope: memoryScope("ORG"),
+        memoryKey: "billing_cadence",
+        text: "Bill agencies weekly, every Friday.",
+        sourceCaseId: seededCase.caseId,
+      },
+      ACTOR,
+    );
+    const contextWithLlm = Object.assign(context, { llm: new FakeLlmProvider([{ text: "sure", toolCalls: [] }]) });
+
+    await runAgentTurn(contextWithLlm, TENANT_ID, { userMessage: "hi", conversation: [], actorEmail: ACTOR });
+
+    expect(contextWithLlm.llm.receivedRequests[0]?.system).toContain("Bill agencies weekly, every Friday.");
+  });
+
+  // The half of B3 that matters most: a scoping bug in buildSystemPrompt
+  // would leak one desk user's private memories into another user's prompt,
+  // and without this, nothing would go red.
+  it("puts the caller's own USER-scope memories into the prompt, and never another user's", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "MEM-USER-01");
+    const OTHER_USER = "other-agent@rgs.local";
+    await rememberMemory(
+      context,
+      TENANT_ID,
+      {
+        scope: memoryScope("USER", ACTOR),
+        memoryKey: "note_to_self",
+        text: "Prefers EXPRESS for VIP partners.",
+        sourceCaseId: seededCase.caseId,
+      },
+      ACTOR,
+    );
+    await rememberMemory(
+      context,
+      TENANT_ID,
+      {
+        scope: memoryScope("USER", OTHER_USER),
+        memoryKey: "note_to_self",
+        text: "This is the other user's private note.",
+        sourceCaseId: seededCase.caseId,
+      },
+      OTHER_USER,
+    );
+    const contextWithLlm = Object.assign(context, { llm: new FakeLlmProvider([{ text: "sure", toolCalls: [] }]) });
+
+    await runAgentTurn(contextWithLlm, TENANT_ID, { userMessage: "hi", conversation: [], actorEmail: ACTOR });
+
+    const systemPrompt = contextWithLlm.llm.receivedRequests[0]?.system ?? "";
+    expect(systemPrompt).toContain("Prefers EXPRESS for VIP partners.");
+    expect(systemPrompt).not.toContain("This is the other user's private note.");
+  });
+
+  // MAJ-4 / B4: every scripted turn elsewhere in this file omits `usage`,
+  // so FakeLlmProvider defaults it to all zeroes -- asserting
+  // `result.usage` equals zeroes would be vacuous by construction (the
+  // standing rule: move the stored/scripted value off its default before
+  // asserting against it). Two turns, non-zero and DIFFERENT from each
+  // other, so only a real sum produces the expected total.
+  it("sums usage across every model call in the turn", async () => {
+    const context = buildTestContextWithFakeLlm([
+      {
+        text: "",
+        toolCalls: [{ toolCallId: "c1", toolName: "list_partners", input: {} }],
+        usage: { inputTokens: 10, outputTokens: 2, cachedTokens: 1 },
+      },
+      { text: "done", toolCalls: [], usage: { inputTokens: 30, outputTokens: 5, cachedTokens: 4 } },
+    ]);
+
+    const result = await runAgentTurn(context, TENANT_ID, {
+      userMessage: "list partners",
+      conversation: [],
+      actorEmail: ACTOR,
+    });
+
+    expect(result.usage).toEqual({ inputTokens: 40, outputTokens: 7, cachedTokens: 5 });
+  });
+
+  // MAJ-5 / B5: the brief names this branch explicitly ("if unknown, feed
+  // back an error message as a tool_result rather than throwing") and
+  // controller-notes §5 restates it, but no test called an unknown tool
+  // name until now -- a `throw` in its place reddened nothing.
+  it("feeds back an unknown tool name as an ordinary tool_result instead of throwing", async () => {
+    const context = buildTestContextWithFakeLlm([
+      { text: "", toolCalls: [{ toolCallId: "c1", toolName: "no_such_tool", input: {} }] },
+      { text: "I don't have that tool.", toolCalls: [] },
+    ]);
+
+    const result = await runAgentTurn(context, TENANT_ID, {
+      userMessage: "do the thing",
+      conversation: [],
+      actorEmail: ACTOR,
+    });
+
+    expect(result.reply).toBe("I don't have that tool.");
+    // Never reached the registry as a real dispatch.
+    expect(result.toolCallsMade).toEqual([]);
+
+    const secondRequestMessages = context.llm.receivedRequests[1]?.messages ?? [];
+    const toolResult = secondRequestMessages.find((message) => message.role === "tool_result");
+    expect(toolResult?.content).toContain("no_such_tool");
+  });
+
+  // MAJ-7 / B6: a hardcoded stand-in identity threaded into `execute`
+  // instead of `input.actorEmail` reddened nothing, because every test's
+  // caller and every test's seeded prefs happened to share ACTOR's own
+  // literal. The real caller here (REAL_CALLER) is deliberately a THIRD
+  // identity, distinct from both ACTOR (who is opted in to auto-apply) and
+  // any constant the loop might hardcode -- so the write must stay staged
+  // (proving prefs were read for the real caller, not for ACTOR) and the
+  // proposal must name REAL_CALLER as its proposer (proving the identity
+  // threaded into execute() is the real one, not a stand-in).
+  it("reads trust-level prefs and records proposals under the actual caller's identity, not a hardcoded stand-in", async () => {
+    const baseContext = buildTestContext();
+    const seededCase = await seedOneCase(baseContext, "ID-01");
+    const REAL_CALLER = "manager@rgs.local";
+    await setUserPrefs(baseContext, TENANT_ID, ACTOR, { trustLevel: 2, autoApplyOptIn: true });
+    const contextWithLlm = Object.assign(baseContext, {
+      llm: new FakeLlmProvider([
+        {
+          text: "",
+          toolCalls: [
+            { toolCallId: "c1", toolName: "update_case", input: { caseId: seededCase.caseId, processing: "EXPRESS" } },
+          ],
+        },
+        { text: "done", toolCalls: [] },
+      ]),
+    });
+
+    const result = await runAgentTurn(contextWithLlm, TENANT_ID, {
+      userMessage: "switch to express",
+      conversation: [],
+      actorEmail: REAL_CALLER,
+    });
+
+    // REAL_CALLER has no PREFS row of its own -- trust level 0 -- so this
+    // must stay staged even though ACTOR (a different user) is opted in at
+    // level 2. Auto-applying here would mean prefs were read under the
+    // wrong identity.
+    expect(result.appliedChanges).toHaveLength(0);
+    expect(result.proposals).toHaveLength(1);
+    expect(result.proposals[0]?.proposedBy).toBe(REAL_CALLER);
+  });
+
+  // B8 / review Probe 1: the redundant !HIGH_STAKES_TOOLS.has(...) conjunct
+  // reads as defense-in-depth in loop.ts's own comment, but nothing forced
+  // that claim to be checkable. AUTO_APPLIABLE_TOOLS is a real Set at
+  // runtime despite its ReadonlySet type, so a cast constructs the exact
+  // violation the conjunct exists for -- a tool on BOTH lists -- and proves
+  // the write still stages.
+  it("stages a high-stakes tool even when it has been added to AUTO_APPLIABLE_TOOLS", async () => {
+    const baseContext = buildTestContext();
+    const seededCase = await seedOneCase(baseContext, "GUARD-01");
+    const context = await contextAtTrustLevel(
+      2,
+      [
+        {
+          text: "",
+          toolCalls: [
+            {
+              toolCallId: "c1",
+              toolName: "set_billing",
+              input: { caseId: seededCase.caseId, billingStatus: "BILL_SENT" },
+            },
+          ],
+        },
+        { text: "done", toolCalls: [] },
+      ],
+      { context: baseContext },
+    );
+
+    (AUTO_APPLIABLE_TOOLS as Set<string>).add("set_billing");
+    try {
+      expect(AUTO_APPLIABLE_TOOLS.has("set_billing")).toBe(true);
+      expect(HIGH_STAKES_TOOLS.has("set_billing")).toBe(true);
+
+      const result = await runAgentTurn(context, TENANT_ID, {
+        userMessage: "bill this case",
+        conversation: [],
+        actorEmail: ACTOR,
+      });
+
+      expect(result.proposals).toHaveLength(1);
+      expect(result.appliedChanges).toHaveLength(0);
+      expect((await getCase(context, TENANT_ID, seededCase.caseId)).billingStatus).toBe("UNBILLED");
+    } finally {
+      (AUTO_APPLIABLE_TOOLS as Set<string>).delete("set_billing");
+    }
+  });
+
+  // MIN-1: `conversation` is part of the brief's own declared input and no
+  // other test in this file ever passes a non-empty one, so dropping it
+  // reddened nothing.
+  it("carries prior conversation into the first request's messages", async () => {
+    const context = buildTestContextWithFakeLlm([{ text: "sure thing", toolCalls: [] }]);
+    const priorConversation: AgentMessage[] = [
+      { role: "user", content: "earlier question" },
+      { role: "assistant", content: "earlier answer" },
+    ];
+
+    await runAgentTurn(context, TENANT_ID, {
+      userMessage: "follow up",
+      conversation: priorConversation,
+      actorEmail: ACTOR,
+    });
+
+    expect(context.llm.receivedRequests[0]?.messages).toEqual([
+      ...priorConversation,
+      { role: "user", content: "follow up" },
+    ]);
+  });
+
+  // MIN-4: a model that narrates before calling a tool loses that
+  // narration from its own next-iteration context if the loop drops it,
+  // and nothing would notice.
+  it("keeps the assistant's own narration in the transcript across iterations", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "NARR-01");
+    const contextWithLlm = Object.assign(context, {
+      llm: new FakeLlmProvider([
+        {
+          text: "Let me check that case for you.",
+          toolCalls: [{ toolCallId: "c1", toolName: "get_case", input: { caseId: seededCase.caseId } }],
+        },
+        { text: "done", toolCalls: [] },
+      ]),
+    });
+
+    await runAgentTurn(contextWithLlm, TENANT_ID, { userMessage: "look it up", conversation: [], actorEmail: ACTOR });
+
+    const secondRequestMessages = contextWithLlm.llm.receivedRequests[1]?.messages ?? [];
+    expect(secondRequestMessages).toContainEqual({ role: "assistant", content: "Let me check that case for you." });
+  });
+
+  // A1 / MAJ-6: applyApprovedChange can throw AFTER stageProposal already
+  // wrote a PENDING row -- set_custody's own `execute` builds its diff
+  // without checking the transition is legal (it only checks the applicant
+  // exists), but `changeApplicantCustody`, the real domain call `apply`
+  // makes, refuses NOT_HELD -> AT_EMBASSY via the real custody state
+  // machine. Reproduced with the real tool and the real state machine, no
+  // mocking. Both halves of the claim ("named in proposals" and "really
+  // staged in storage") are proved separately, and a third: the model is
+  // told what actually happened.
+  it("names a staged proposal in `proposals` when its auto-apply throws after staging, rather than orphaning it", async () => {
+    const baseContext = buildTestContext();
+    const seededCase = await seedOneCase(baseContext, "ORPHAN-01");
+    const context = await contextAtTrustLevel(
+      2,
+      [
+        {
+          text: "",
+          toolCalls: [
+            {
+              toolCallId: "c1",
+              toolName: "set_custody",
+              input: { caseId: seededCase.caseId, applicantRef: "A1", custody: "AT_EMBASSY" },
+            },
+          ],
+        },
+        { text: "done", toolCalls: [] },
+      ],
+      { context: baseContext },
+    );
+
+    const result = await runAgentTurn(context, TENANT_ID, {
+      userMessage: "move custody to the embassy",
+      conversation: [],
+      actorEmail: ACTOR,
+    });
+
+    const { proposals: pendingProposals } = await listPendingProposals(context, TENANT_ID);
+    expect({
+      returnedProposals: result.proposals.length,
+      returnedApplied: result.appliedChanges.length,
+      pendingRowsInStore: pendingProposals.length,
+    }).toEqual({ returnedProposals: 1, returnedApplied: 0, pendingRowsInStore: 1 });
+    expect(result.proposals[0]?.proposalId).toBe(pendingProposals[0]?.proposalId);
+
+    // The model is told it was staged for a human, not merely that
+    // something failed.
+    const secondRequestMessages = context.llm.receivedRequests[1]?.messages ?? [];
+    const toolResult = secondRequestMessages.find((message) => message.role === "tool_result");
+    expect(toolResult?.content).toContain("Staged for human approval");
   });
 });

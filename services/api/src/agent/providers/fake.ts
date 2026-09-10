@@ -22,7 +22,17 @@ export class FakeLlmProvider implements LlmProvider {
   constructor(private readonly scriptedTurns: ScriptedTurn[]) {}
 
   async complete(request: LlmCompletionRequest): Promise<LlmCompletionResponse> {
-    this.receivedRequests.push(request);
+    // Snapshot, not a reference to the caller's own array (task-10-fix-1
+    // A2 / review Probe 3): a caller that reuses one `messages` array
+    // across iterations -- exactly what runAgentTurn does -- would
+    // otherwise leave every entry in `receivedRequests` pointing at the
+    // SAME array, so `receivedRequests[0].messages` and
+    // `receivedRequests[1].messages` both show the final state regardless
+    // of what was actually sent on each call. A test reading
+    // `receivedRequests[n].messages` is meant to prove what the model saw
+    // ON THAT CALL; without this copy it can only prove what the array
+    // looked like by the time the whole turn finished.
+    this.receivedRequests.push({ ...request, messages: [...request.messages] });
     const scriptedTurn = this.scriptedTurns[this.nextTurnIndex];
     if (scriptedTurn === undefined) {
       throw new Error(

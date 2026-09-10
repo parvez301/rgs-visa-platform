@@ -117,7 +117,13 @@ describe("crm keys", () => {
   // CRM_MEMORY# (fix round 1, Minor 4): the memory keyspace's own infix,
   // added alongside the others rather than left to rely solely on the
   // TENANT# alternative catching a full literal built elsewhere.
-  const KEY_LITERAL_PATTERN = /["'`](META|APPLICANT#|NOTE#|EVENT#|TENANT#|CRM_MEMORY#)/g;
+  //
+  // PREFS / CRM_USER# (task-10 fix round 1, MAJ-8): Task 10's own keyspace
+  // (CRM_USER_PREFS_SORT_KEY / crmUserPrefsPartitionKey, keys.ts). Added the
+  // same way CRM_MEMORY# was -- the moment this branch's convention says a
+  // new keyspace gets its own alternation entry, not reliance on TENANT#
+  // alone to catch a full literal built elsewhere.
+  const KEY_LITERAL_PATTERN = /["'`](META|APPLICANT#|NOTE#|EVENT#|TENANT#|CRM_MEMORY#|PREFS|CRM_USER#)/g;
 
   function keyLiteralsIn(source: string): string[] {
     return source.match(KEY_LITERAL_PATTERN) ?? [];
@@ -134,6 +140,9 @@ describe("crm keys", () => {
     expect(keyLiteralsIn("const applicantKey = `APPLICANT#${index}`;")).toHaveLength(1);
     // The memory keyspace's own infix -- would have slipped past before Minor 4's fix.
     expect(keyLiteralsIn("const memoryInfix = `CRM_MEMORY#${scope}`;")).toHaveLength(1);
+    // Task 10's own keyspace -- would have slipped past before MAJ-8's fix.
+    expect(keyLiteralsIn('const sortKey = "PREFS";')).toHaveLength(1);
+    expect(keyLiteralsIn("const userInfix = `CRM_USER#${email}`;")).toHaveLength(1);
   });
 
   it("does not fire on prose that merely names a key", () => {
@@ -141,15 +150,44 @@ describe("crm keys", () => {
     expect(keyLiteralsIn("import { META_SORT_KEY } from './keys';")).toEqual([]);
   });
 
+  // Recursive, not a flat `readdir`: both directories this scan covers have
+  // subdirectories (domain/crm has none today, but src/agent/ has
+  // providers/ and tools/) and a scan that only sees the top level would
+  // pass a key literal planted one directory deeper without complaint.
+  async function collectTsFilesRecursively(directoryUrl: URL): Promise<string[]> {
+    const entries = await readdir(directoryUrl, { recursive: true });
+    return entries.filter((entryName) => entryName.endsWith(".ts"));
+  }
+
   it("is the only CRM domain file that writes a key literal", async () => {
     const domainDirectory = new URL("../../src/domain/crm/", import.meta.url);
-    const domainFileNames = (await readdir(domainDirectory)).filter(
-      (fileName) => fileName.endsWith(".ts") && fileName !== "keys.ts",
+    const domainFileNames = (await collectTsFilesRecursively(domainDirectory)).filter(
+      (fileName) => fileName !== "keys.ts",
     );
     expect(domainFileNames.length).toBeGreaterThan(0);
 
     for (const fileName of domainFileNames) {
       const source = await readFile(new URL(fileName, domainDirectory), "utf8");
+      const keyLiterals = keyLiteralsIn(source);
+      expect({ fileName, keyLiterals }).toEqual({ fileName, keyLiterals: [] });
+    }
+  });
+
+  // task-10-fix-1-brief.md B7 / review MAJ-8, overruling the review's own
+  // "pre-existing, out of scope" verdict: Task 10 is what put a key-owning
+  // module (prefs.ts -- CRM_USER_PREFS_SORT_KEY, crmUserPrefsPartitionKey)
+  // under src/agent/, a tree this scan never covered before. Every file
+  // under it is scanned, with no keys.ts-style exclusion, because nothing
+  // under src/agent/ owns a key literal of its own -- prefs.ts imports the
+  // builders domain/crm/keys.ts exports rather than defining any itself, and
+  // that is exactly what this test exists to keep true.
+  it("is also true of every file under src/agent/, which Task 10 made a key-owning tree", async () => {
+    const agentDirectory = new URL("../../src/agent/", import.meta.url);
+    const agentFileNames = await collectTsFilesRecursively(agentDirectory);
+    expect(agentFileNames.length).toBeGreaterThan(0);
+
+    for (const fileName of agentFileNames) {
+      const source = await readFile(new URL(fileName, agentDirectory), "utf8");
       const keyLiterals = keyLiteralsIn(source);
       expect({ fileName, keyLiterals }).toEqual({ fileName, keyLiterals: [] });
     }

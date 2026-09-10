@@ -1,6 +1,9 @@
+import { ZodError } from "zod";
 import { crm } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
+import { badRequest } from "../lib/errors";
 import {
+  describeFirstZodIssue,
   parseStoredRecord,
   storedRecordId,
   stripStorageKeys,
@@ -49,7 +52,24 @@ async function writeUserPrefs(
   tenantId: string,
   userPrefs: crm.CrmUserPrefs,
 ): Promise<crm.CrmUserPrefs> {
-  const validatedUserPrefs = crm.CrmUserPrefsSchema.parse(userPrefs);
+  // A caller-supplied `trustLevel` outside {0,1,2}, or any other schema
+  // violation, must never reach the table (fix-round-1 MIN-5 /
+  // controller-notes §9): `prefs.ts` exists specifically to persist
+  // `CrmUserPrefsSchema` rather than a parallel, unenforced shape. Caught
+  // and rethrown as `badRequest`, not left as a raw `ZodError` -- router.ts
+  // maps only `ApiError` subclasses, so an uncaught `ZodError` here would
+  // answer 500 for what is, from a caller's point of view, an ordinary bad
+  // request (the same reasoning `createCase`/`rememberMemory` already apply
+  // to their own schema parses).
+  let validatedUserPrefs: crm.CrmUserPrefs;
+  try {
+    validatedUserPrefs = crm.CrmUserPrefsSchema.parse(userPrefs);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw badRequest(`CRM user prefs ${describeFirstZodIssue(error)}`);
+    }
+    throw error;
+  }
   await context.table.put({
     PK: crmUserPrefsPartitionKey(tenantId, validatedUserPrefs.email),
     SK: CRM_USER_PREFS_SORT_KEY,
