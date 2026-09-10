@@ -34,7 +34,7 @@ describe("llmProviderConfigFromEnvironment", () => {
     ).toThrow(/LLM_MODEL/);
   });
 
-  it("never puts the api key in the thrown message", () => {
+  it("refuses an empty LLM_PROVIDER before it reads anything else", () => {
     let thrownMessage = "";
     try {
       llmProviderConfigFromEnvironment({ LLM_PROVIDER: "", LLM_API_KEY: "super-secret" });
@@ -42,6 +42,22 @@ describe("llmProviderConfigFromEnvironment", () => {
       thrownMessage = (error as Error).message;
     }
     expect(thrownMessage).not.toContain("super-secret");
+  });
+
+  it("does not leak a present api key when a later guard throws", () => {
+    let thrownMessage = "";
+    try {
+      llmProviderConfigFromEnvironment({
+        LLM_PROVIDER: "anthropic",
+        LLM_MODEL: "claude-opus-5",
+        LLM_API_KEY: "super-secret-key-value",
+        LLM_FALLBACK_PROVIDER: "oracle",
+      });
+    } catch (error) {
+      thrownMessage = (error as Error).message;
+    }
+    expect(thrownMessage).not.toBe("");
+    expect(thrownMessage).not.toContain("super-secret-key-value");
   });
 });
 
