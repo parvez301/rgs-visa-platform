@@ -68,13 +68,15 @@ async function seedOneCase(context: TestContext, caseRef: string) {
  * rejecting.
  */
 async function messagesSentOnRequest(
-  scriptedTurns: ScriptedTurn[],
+  buildScriptedTurns: (seededCase: { caseId: string }) => ScriptedTurn[],
   requestIndex: number,
   seedCaseRef: string,
-): Promise<{ messages: AgentMessage[]; caseId: string }> {
+): Promise<AgentMessage[]> {
   const context = buildTestContext();
   const seededCase = await seedOneCase(context, seedCaseRef);
-  const contextWithLlm = Object.assign(context, { llm: new FakeLlmProvider(scriptedTurns) });
+  const contextWithLlm = Object.assign(context, {
+    llm: new FakeLlmProvider(buildScriptedTurns(seededCase)),
+  });
 
   await runAgentTurn(contextWithLlm, TENANT_ID, {
     userMessage: "how is that case doing?",
@@ -84,7 +86,7 @@ async function messagesSentOnRequest(
 
   const sentMessages = contextWithLlm.llm.receivedRequests[requestIndex]?.messages;
   expect(sentMessages, `the loop never made model call #${requestIndex + 1}`).toBeDefined();
-  return { messages: sentMessages!, caseId: seededCase.caseId };
+  return sentMessages!;
 }
 
 type AnthropicBlock = { type?: string; id?: string; tool_use_id?: string; [key: string]: unknown };
@@ -247,20 +249,24 @@ function expectEveryToolResultPaired(sentMessages: AgentMessage[], expectedPairC
 
 describe("the loop -> adapter seam: every tool result reaches the provider paired with its call", () => {
   it("pairs a single tool call with its result, through both real mappers", async () => {
-    const { messages, caseId } = await messagesSentOnRequest(
-      [
-        { text: "", toolCalls: [{ toolCallId: "toolu_01ABC", toolName: "get_case", input: { caseId: "" } }] },
-        { text: "It is still NEW.", toolCalls: [] },
-      ],
+    let seededCaseId = "";
+    const messages = await messagesSentOnRequest(
+      (seededCase) => {
+        seededCaseId = seededCase.caseId;
+        return [
+          {
+            text: "",
+            toolCalls: [
+              { toolCallId: "toolu_01ABC", toolName: "get_case", input: { caseId: seededCase.caseId } },
+            ],
+          },
+          { text: "It is still NEW.", toolCalls: [] },
+        ];
+      },
       1,
       "PAIR-01",
     );
 
-    // The scripted call above cannot know the seeded caseId, so the tool
-    // errors -- which is deliberate here and irrelevant to the invariant: a
-    // tool_result carrying an error message is still a tool_result, and still
-    // has to name a call the model actually made.
-    expect(caseId).toBeDefined();
     expectEveryToolResultPaired(messages, 1);
 
     // The concrete shape, spelled out once, so a reader of this file can see
@@ -271,13 +277,13 @@ describe("the loop -> adapter seam: every tool result reaches the provider paire
       type: "tool_use",
       id: "toolu_01ABC",
       name: "get_case",
-      input: { caseId: "" },
+      input: { caseId: seededCaseId },
     });
   });
 
   it("keeps the pairing when the model calls a tool with no text of its own", async () => {
-    const { messages } = await messagesSentOnRequest(
-      [
+    const messages = await messagesSentOnRequest(
+      () => [
         { text: "", toolCalls: [{ toolCallId: "toolu_silent", toolName: "list_partners", input: {} }] },
         { text: "Here they are.", toolCalls: [] },
       ],
@@ -299,8 +305,8 @@ describe("the loop -> adapter seam: every tool result reaches the provider paire
   });
 
   it("batches two tool calls made in one iteration into a single results message, still paired", async () => {
-    const { messages } = await messagesSentOnRequest(
-      [
+    const messages = await messagesSentOnRequest(
+      () => [
         {
           text: "Let me check both.",
           toolCalls: [
@@ -335,8 +341,8 @@ describe("the loop -> adapter seam: every tool result reaches the provider paire
   });
 
   it("pairs each iteration's results with that iteration's own calls, over two iterations", async () => {
-    const { messages } = await messagesSentOnRequest(
-      [
+    const messages = await messagesSentOnRequest(
+      () => [
         { text: "", toolCalls: [{ toolCallId: "toolu_it1", toolName: "list_partners", input: {} }] },
         { text: "", toolCalls: [{ toolCallId: "toolu_it2", toolName: "aggregate", input: { groupBy: "caseStatus" } }] },
         { text: "All done.", toolCalls: [] },
