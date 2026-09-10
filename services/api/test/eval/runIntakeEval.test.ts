@@ -357,12 +357,38 @@ describe("evaluateThreshold (task-12-review.md A7/m8, task-12-fix-2-brief.md A5/
     expect(result.failedChecks.some((check) => check.includes("class-2 trap recall"))).toBe(true);
   });
 
+  // task-12-fix-3-brief.md A1: P69's exact scenario -- eight of nine class-2
+  // traps satisfied, one fabricated. Every fixture above this one sets
+  // class2TrapRecall to 0 or 1, never to a value between them, so the gate's
+  // actual cut-point (>= 1.0, not merely "> 0") was unpinned: a mutation
+  // relaxing `< EVAL_THRESHOLDS.class2TrapRecallMin` to `< 0.75` left every
+  // test above green (8/9 = 0.888..., and 0/1 vs 1/1 never probe that range)
+  // while admitting exactly the fabricating provider P69 raised the
+  // threshold to reject.
+  it("fails on 8 of 9 class-2 traps satisfied (P69's exact scenario) -- the recall gate rejects anything short of all nine, not just total failure", () => {
+    const scorecard = { ...zeroScorecard(), class2TrapRecall: 8 / 9, class1TrapAccuracy: 1, coverage: 1 };
+    const result = evaluateThreshold(scorecard, FIXED_COVERAGE_THRESHOLD);
+    expect(result.passed).toBe(false);
+    expect(result.failedChecks.some((check) => check.includes("class-2 trap recall"))).toBe(true);
+  });
+
   // task-12-fix-2-brief.md A6/D5: the gate used to ignore class-1 accuracy
   // entirely -- a model that declines every unambiguous misspelling passed
   // identically to one that resolves them all. A worse outcome (no
   // destination at all) must not pass silently.
   it("fails, and names the reason, when class-1 trap accuracy is below the minimum -- a decliner must not pass identically to a resolver", () => {
     const scorecard = { ...zeroScorecard(), class2TrapRecall: 1, class1TrapAccuracy: 0, coverage: 1 };
+    const result = evaluateThreshold(scorecard, FIXED_COVERAGE_THRESHOLD);
+    expect(result.passed).toBe(false);
+    expect(result.failedChecks.some((check) => check.includes("class-1 trap accuracy"))).toBe(true);
+  });
+
+  // task-12-fix-3-brief.md A2: a class-1 accuracy strictly between 0 and 1,
+  // inside the range a mutated `< 0.5` cut-point would still wrongly admit
+  // (0.9 is not < 0.5), so this fixture requires the gate to actually hold
+  // at its pinned 1.0 minimum rather than merely somewhere above 0.5.
+  it("fails on class-1 trap accuracy of 0.9 -- strictly short of the pinned 1.0 minimum, not just total failure", () => {
+    const scorecard = { ...zeroScorecard(), class2TrapRecall: 1, class1TrapAccuracy: 0.9, coverage: 1 };
     const result = evaluateThreshold(scorecard, FIXED_COVERAGE_THRESHOLD);
     expect(result.passed).toBe(false);
     expect(result.failedChecks.some((check) => check.includes("class-1 trap accuracy"))).toBe(true);
@@ -711,5 +737,31 @@ describe("deriveCoverageThreshold (task-12-fix-2-brief.md A5)", () => {
     expect(coverageThreshold.perfectModelCoverageCeiling).toBeLessThan(1);
     expect(coverageThreshold.coverageMin).toBeGreaterThan(0);
     expect(coverageThreshold.coverageMin).toBeLessThan(coverageThreshold.perfectModelCoverageCeiling);
+  });
+
+  // task-12-fix-3-brief.md A3: the block above only pins that coverageMin
+  // sits SOMEWHERE strictly between 0 and the ceiling -- it never observes
+  // WHERE. A mutation changing the derivation factor from 0.8 to 0.1 (an
+  // almost-entirely-blank model would then clear the floor) left that
+  // fixture, and the rest of the suite, at 0 red. This pins the actual
+  // cut-point through the real evaluateThreshold gate a purchasing decision
+  // uses -- not a copy of the 0.8 literal out of deriveCoverageThreshold,
+  // which would just mirror the implementation rather than pin its
+  // consequence -- so a model covering as little as 79% of what a perfect
+  // model reaches must fail, and one covering 81% of it must pass.
+  it("the coverage floor sits at 80% of the perfect-model ceiling -- 79% of it fails, exactly the ceiling and 81% of it both pass", async () => {
+    const cases = await loadRealCases();
+    const coverageThreshold = await deriveCoverageThreshold(cases);
+    const { perfectModelCoverageCeiling } = coverageThreshold;
+
+    const passesAtCoverage = (coverage: number): boolean =>
+      evaluateThreshold(
+        { ...zeroScorecard(), class2TrapRecall: 1, class1TrapAccuracy: 1, coverage },
+        coverageThreshold,
+      ).passed;
+
+    expect(passesAtCoverage(perfectModelCoverageCeiling)).toBe(true);
+    expect(passesAtCoverage(perfectModelCoverageCeiling * 0.79)).toBe(false);
+    expect(passesAtCoverage(perfectModelCoverageCeiling * 0.81)).toBe(true);
   });
 });
