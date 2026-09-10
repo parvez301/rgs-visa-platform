@@ -1,0 +1,328 @@
+[
+  {
+    "id": "trap-country-misspelling-myannmar",
+    "trapKind": "misspelled country absent from the shared country map (docs/migration-questions-for-rgs.md §2: Myannmar, 13 rows)",
+    "trapField": "destinationCountry",
+    "rawText": "Country: Myannmar\nApplicant: Foram Shah\nPax: 2\nRef: (no referrer recorded)",
+    "expected": {
+      "travellerFullName": "Foram Shah",
+      "passportNumber": null,
+      "destinationCountry": null,
+      "partnerName": null,
+      "applicantCount": 2
+    }
+  },
+  {
+    "id": "trap-service-line-passport-new",
+    "trapKind": "a service line sitting in the destination-country position (docs/migration-questions-for-rgs.md §2: PASSPORT NEW, 34 rows)",
+    "trapField": "destinationCountry",
+    "rawText": "Country: PASSPORT NEW\nApplicant: Rakesh Sharma\nPax: 1",
+    "expected": {
+      "travellerFullName": "Rakesh Sharma",
+      "passportNumber": null,
+      "destinationCountry": null,
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "trap-multi-destination-tanzania-kenya",
+    "trapKind": "multi-country trip in one country cell (docs/migration-questions-for-rgs.md §2: TANZANIA/KENYA, 2 rows) -- also proves the pipeline resolves partnerName independently of the country trap in the same case",
+    "trapField": "destinationCountry",
+    "rawText": "Country: TANZANIA/KENYA\nApplicant: Meena Joshi\nPax: 2\nRef: Ozzy Travels",
+    "seed": {
+      "partner": {
+        "canonicalName": "Ozzy Travels"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Meena Joshi",
+      "passportNumber": null,
+      "destinationCountry": null,
+      "partnerName": "Ozzy Travels",
+      "applicantCount": 2
+    }
+  },
+  {
+    "id": "trap-partner-sammy-ac",
+    "trapKind": "referrer name matching no agency on file (docs/migration-questions-for-rgs.md §1: SAMMY A/C, 78 rows) -- also proves destinationCountry still resolves correctly in the same case",
+    "trapField": "partnerName",
+    "rawText": "Ref: SAMMY A/C\nCountry: Kenya\nApplicant: Divya Patel\nPax: 1",
+    "expected": {
+      "travellerFullName": "Divya Patel",
+      "passportNumber": null,
+      "destinationCountry": "KE",
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "trap-service-line-usa-drop-off",
+    "trapKind": "a service line sitting in the destination-country position (docs/migration-questions-for-rgs.md §2: USA DROP OFF, 15 rows)",
+    "trapField": "destinationCountry",
+    "rawText": "Country: USA DROP OFF\nApplicant: Nilesh Kapoor\nPax: 1\nRef: Ozzy Travels",
+    "seed": {
+      "partner": {
+        "canonicalName": "Ozzy Travels"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Nilesh Kapoor",
+      "passportNumber": null,
+      "destinationCountry": null,
+      "partnerName": "Ozzy Travels",
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "trap-country-misspelling-lexumbourg",
+    "trapKind": "misspelled country absent from the shared country map (docs/migration-questions-for-rgs.md §2: Lexumbourg, 7 rows)",
+    "trapField": "destinationCountry",
+    "rawText": "Country: Lexumbourg\nApplicant: Sunita Rao\nPax: 1",
+    "expected": {
+      "travellerFullName": "Sunita Rao",
+      "passportNumber": null,
+      "destinationCountry": null,
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "trap-multi-destination-egypt-jordan",
+    "trapKind": "multi-country trip in one country cell (docs/migration-questions-for-rgs.md §2: EGYPT & JORDAN)",
+    "trapField": "destinationCountry",
+    "rawText": "Country: EGYPT & JORDAN\nApplicant: Karan Mehta\nPax: 2\nRef: (no referrer recorded)",
+    "expected": {
+      "travellerFullName": "Karan Mehta",
+      "passportNumber": null,
+      "destinationCountry": null,
+      "partnerName": null,
+      "applicantCount": 2
+    }
+  },
+  {
+    "id": "trap-service-line-travel-insurance",
+    "trapKind": "a service line sitting in the destination-country position (docs/migration-questions-for-rgs.md §2: TRAVEL INSURANCE, 21 rows) -- not named in the brief or the controller notes, added because it is in the source document they both point at",
+    "trapField": "destinationCountry",
+    "rawText": "Country: TRAVEL INSURANCE\nApplicant: Ila Desai\nPax: 1\nRef: (no referrer recorded)",
+    "expected": {
+      "travellerFullName": "Ila Desai",
+      "passportNumber": null,
+      "destinationCountry": null,
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "distractor-garbled-submission-date",
+    "trapKind": "distractor only, not scored for unresolved-recall -- an unparseable date (docs/migration-questions-for-rgs.md §3: 24-02-026, 17 rows) sits in the middle of an otherwise clean, fully-resolving case, to check that a model does not let it corrupt an unrelated field (e.g. folding stray digits into the passport number or the applicant count). extractIntake has no date field to score directly: receivedDate is filled from context.now(), never extracted from text.",
+    "rawText": "WhatsApp from partner: 1 pax to Thailand, applicant Ritu Bansal, submitted on 24-02-026, ref Ozzy Travels, passport already on file T7654321.",
+    "seed": {
+      "traveller": {
+        "fullName": "Ritu Bansal",
+        "passportNumber": "T7654321"
+      },
+      "partner": {
+        "canonicalName": "Ozzy Travels"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Ritu Bansal",
+      "passportNumber": "T7654321",
+      "destinationCountry": "TH",
+      "partnerName": "Ozzy Travels",
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "clean-whatsapp-japan-couple",
+    "rawText": "2 pax for japan, ashok kumar + wife, passports attached",
+    "expected": {
+      "travellerFullName": "ashok kumar",
+      "passportNumber": null,
+      "destinationCountry": "JP",
+      "partnerName": null,
+      "applicantCount": 2
+    }
+  },
+  {
+    "id": "clean-email-forward-known-client",
+    "rawText": "Fwd: New case\n\nHi team, please open a file for our returning client. Applicant: Priya Nair, passport K7654321, travelling to Singapore. Referred by VWI Mumbai. Thanks.",
+    "seed": {
+      "traveller": {
+        "fullName": "Priya Nair",
+        "passportNumber": "K7654321"
+      },
+      "partner": {
+        "canonicalName": "VWI"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Priya Nair",
+      "passportNumber": "K7654321",
+      "destinationCountry": "SG",
+      "partnerName": "VWI",
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "clean-passport-mrz-block",
+    "rawText": "Passport copy received, MRZ below:\nP<INDIYER<<MEERA<<<<<<<<<<<<<<<<<<<<<<<<<<<\nM2345678<1IND9203015F3001012<<<<<<<<<<<<<<04\nPlease process tourist visa to Thailand, 1 applicant.",
+    "seed": {
+      "traveller": {
+        "fullName": "Meera Iyer",
+        "passportNumber": "M2345678"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Meera Iyer",
+      "passportNumber": "M2345678",
+      "destinationCountry": "TH",
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "clean-family-group-paradise-tours",
+    "rawText": "Family of 4 heading to Kenya, ref PARADISE TOURS, main applicant Suresh Iyer, no passport numbers yet.",
+    "seed": {
+      "partner": {
+        "canonicalName": "Paradise Tours"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Suresh Iyer",
+      "passportNumber": null,
+      "destinationCountry": "KE",
+      "partnerName": "Paradise Tours",
+      "applicantCount": 4
+    }
+  },
+  {
+    "id": "clean-walk-in-no-referrer",
+    "rawText": "Walk-in customer, no agent involved. 1 pax to United Kingdom, applicant Devika Shah, passport not yet provided.",
+    "expected": {
+      "travellerFullName": "Devika Shah",
+      "passportNumber": null,
+      "destinationCountry": "GB",
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "clean-dubai-alt-spelling",
+    "rawText": "Urgent: 1 pax to Dubai for business visa, applicant Arjun Verma, ref Ozzy Travels, passport U8765432.",
+    "seed": {
+      "traveller": {
+        "fullName": "Arjun Verma",
+        "passportNumber": "U8765432"
+      },
+      "partner": {
+        "canonicalName": "Ozzy Travels"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Arjun Verma",
+      "passportNumber": "U8765432",
+      "destinationCountry": "AE",
+      "partnerName": "Ozzy Travels",
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "clean-sri-lanka-eta",
+    "rawText": "1 pax needs Sri Lanka ETA, applicant Kavita Nair, no referrer, passport not on file.",
+    "expected": {
+      "travellerFullName": "Kavita Nair",
+      "passportNumber": null,
+      "destinationCountry": "LK",
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "clean-no-entities-generic-question",
+    "rawText": "What time does the visa application centre open on Monday?",
+    "expected": {
+      "travellerFullName": null,
+      "passportNumber": null,
+      "destinationCountry": null,
+      "partnerName": null,
+      "applicantCount": 0
+    }
+  },
+  {
+    "id": "clean-missing-documents-request",
+    "rawText": "Please chase applicant Farah Khan for their bank statement and photo before we can submit the Schengen file for France, 1 pax, ref Ozzy Travels.",
+    "seed": {
+      "partner": {
+        "canonicalName": "Ozzy Travels"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Farah Khan",
+      "passportNumber": null,
+      "destinationCountry": "FR",
+      "partnerName": "Ozzy Travels",
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "clean-passport-no-destination",
+    "rawText": "Received passport copy Y3456789 for Rohit Malhotra, awaiting instructions on which country.",
+    "expected": {
+      "travellerFullName": "Rohit Malhotra",
+      "passportNumber": "Y3456789",
+      "destinationCountry": null,
+      "partnerName": null,
+      "applicantCount": 1
+    }
+  },
+  {
+    "id": "clean-large-group-no-names",
+    "rawText": "Group booking: 6 pax for a Thailand tour package, corporate client, ref Ozzy Travels, individual names to follow.",
+    "seed": {
+      "partner": {
+        "canonicalName": "Ozzy Travels"
+      }
+    },
+    "expected": {
+      "travellerFullName": null,
+      "passportNumber": null,
+      "destinationCountry": "TH",
+      "partnerName": "Ozzy Travels",
+      "applicantCount": 6
+    }
+  },
+  {
+    "id": "clean-two-named-applicants-primary-stated",
+    "rawText": "2 pax to Canada: main applicant Meera Shah, plus spouse, no referrer, passports to follow.",
+    "expected": {
+      "travellerFullName": "Meera Shah",
+      "passportNumber": null,
+      "destinationCountry": "CA",
+      "partnerName": null,
+      "applicantCount": 2
+    }
+  },
+  {
+    "id": "clean-known-client-repeat-passport",
+    "rawText": "Repeat client Arjun Verma travelling again, this time to Germany, same passport U8765432 on file, ref Ozzy Travels.",
+    "seed": {
+      "traveller": {
+        "fullName": "Arjun Verma",
+        "passportNumber": "U8765432"
+      },
+      "partner": {
+        "canonicalName": "Ozzy Travels"
+      }
+    },
+    "expected": {
+      "travellerFullName": "Arjun Verma",
+      "passportNumber": "U8765432",
+      "destinationCountry": "DE",
+      "partnerName": "Ozzy Travels",
+      "applicantCount": 1
+    }
+  }
+]
