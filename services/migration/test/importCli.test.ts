@@ -3,6 +3,8 @@ import { buildTestContext } from "@rgs/api/test/helpers";
 import type { AppContext } from "@rgs/api/src/lib/context";
 import type { TableClient, TableItem } from "@rgs/api/src/lib/db";
 import { listCasesByStatus } from "@rgs/api/src/domain/crm/cases";
+import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
+import { withWriteRetries } from "@rgs/api/src/lib/tableRetry";
 import type { RawMiniCrmRow, WorkbookExtract } from "../src/readWorkbook";
 import {
   COMMIT_BANNER,
@@ -120,6 +122,63 @@ function tableFailingAfterWrites(table: TableClient, allowedWriteCount: number):
 
 function withTable(context: AppContext, table: TableClient): AppContext {
   return { ...context, table };
+}
+
+/** What DynamoDB throws when a burst outruns the table's capacity. */
+function buildThrottlingError(): Error {
+  const throttlingError = new Error("Throughput exceeds the current capacity of your table");
+  throttlingError.name = "ProvisionedThroughputExceededException";
+  return throttlingError;
+}
+
+/**
+ * Lets `allowedWriteCount` writes through, then throttles every write after
+ * it. `allowedWriteCount: 0` is "throttled from the first byte".
+ */
+function tableThrottlingAfterWrites(table: TableClient, allowedWriteCount: number): TableClient {
+  let writesSoFar = 0;
+  return {
+    get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
+    query: (partitionKey, options) => table.query(partitionKey, options),
+    queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    put: async (item: TableItem) => {
+      writesSoFar += 1;
+      if (writesSoFar > allowedWriteCount) throw buildThrottlingError();
+      await table.put(item);
+    },
+    delete: (partitionKey: string, sortKey: string) => table.delete(partitionKey, sortKey),
+  };
+}
+
+/** Throttles the first `failureCount` write ATTEMPTS, then behaves. */
+function tableThrottlingFirstWrites(
+  table: TableClient,
+  failureCount: number,
+  attemptLog: { putAttempts: number },
+): TableClient {
+  return {
+    get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
+    query: (partitionKey, options) => table.query(partitionKey, options),
+    queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    put: async (item: TableItem) => {
+      attemptLog.putAttempts += 1;
+      if (attemptLog.putAttempts <= failureCount) throw buildThrottlingError();
+      await table.put(item);
+    },
+    delete: (partitionKey: string, sortKey: string) => table.delete(partitionKey, sortKey),
+  };
+}
+
+/** The production wrapper, with the sleep injected so tests do not wait. */
+function withInstantWriteRetries(table: TableClient, maxAttempts: number): TableClient {
+  return withWriteRetries(table, {
+    maxAttempts,
+    initialDelayMs: 1,
+    maxDelayMs: 4,
+    sleep: async () => undefined,
+    random: () => 1,
+    onRetry: () => undefined,
+  });
 }
 
 describe("runImportCli", () => {
@@ -282,6 +341,104 @@ describe("runImportCli", () => {
 
     expect(cliResult.exitCode).not.toBe(0);
     expect(output.errors).toContain(DRY_RUN_ABORT_MESSAGE);
+  });
+
+  // --- N11: throttling, backoff, and what an exhausted cap leaves behind ---
+
+  it("finishes the import when the table throttles a few writes and then recovers", async () => {
+    const context = buildTestContext();
+    const attemptLog = { putAttempts: 0 };
+    const throttledContext = withTable(
+      context,
+      withInstantWriteRetries(tableThrottlingFirstWrites(context.table, 4, attemptLog), 5),
+    );
+    const { dependencies } = buildDependencies({
+      buildContext: () => throttledContext,
+      readWorkbookAt: async () => buildWorkbookExtract(3),
+    });
+
+    const cliResult = await runImportCli(["--workbook", "book.xlsx", "--commit"], dependencies);
+
+    // Unhandled, those four throttles would have aborted a 7,156-row import at
+    // whichever row was in flight -- on a transient condition a short sleep
+    // absorbs.
+    expect(cliResult.exitCode).toBe(0);
+    expect(cliResult.summary?.casesCreated).toBe(3);
+    expect(attemptLog.putAttempts).toBeGreaterThan(4);
+    const storedCases = await listCasesByStatus(context, "rgs", "CLOSED", 100);
+    expect(storedCases.cases).toHaveLength(3);
+  });
+
+  it("gives up when throttling never lets up, and the next run repairs what it left", async () => {
+    const context = buildTestContext();
+    // Ten rows; the table accepts a handful of writes and then throttles
+    // permanently, so the retries exhaust their cap mid-import.
+    const throttledContext = withTable(
+      context,
+      withInstantWriteRetries(tableThrottlingAfterWrites(context.table, 12), 3),
+    );
+    const { dependencies, output } = buildDependencies({
+      buildContext: () => throttledContext,
+      readWorkbookAt: async () => buildWorkbookExtract(10),
+    });
+
+    const abortedResult = await runImportCli(["--workbook", "book.xlsx", "--commit"], dependencies);
+
+    expect(abortedResult.exitCode).not.toBe(0);
+    // Accurate, per NEW-4: writes really did happen this time.
+    expect(output.errors).toContain(PARTIAL_WRITE_ABORT_MESSAGE);
+    // And the operator can see WHY, which is the difference between "raise the
+    // table's capacity" and "no idea".
+    expect(output.errors.join("\n")).toMatch(/ProvisionedThroughputExceededException/);
+
+    // The state it left is one the next run repairs -- which is precisely what
+    // the abort message promises. No checkpoint file, no --resume flag: the
+    // caseRef reservations already are the checkpoint, so resuming is running
+    // the same command again.
+    const { dependencies: healthyDependencies } = buildDependencies({
+      buildContext: () => context,
+      readWorkbookAt: async () => buildWorkbookExtract(10),
+    });
+    const resumedResult = await runImportCli(
+      ["--workbook", "book.xlsx", "--commit"],
+      healthyDependencies,
+    );
+
+    expect(resumedResult.exitCode).toBe(0);
+
+    const storedCases = await listCasesByStatus(context, "rgs", "CLOSED", 100);
+    // Nine of the ten come back whole, one case per ref: a resumed run
+    // repairs or skips, and never duplicates.
+    expect(storedCases.cases).toHaveLength(9);
+    expect(new Set(storedCases.cases.map((storedCase) => storedCase.caseRef)).size).toBe(9);
+
+    // The tenth is the case the throttle interrupted mid-write, and the
+    // resumed run deliberately does NOT re-create it: C1's ruling is that a
+    // second case under one REF NO. is worse than a missing one, so a
+    // half-written case is NAMED for a human rather than silently replaced.
+    // "The next run repairs it" is therefore exact about the two states the
+    // reservation distinguishes -- completed refs are skipped, reserved-but-
+    // never-written refs are re-written under their original caseId -- and
+    // deliberately not about this third one, which is a refusal, not a gap.
+    expect(storedCases.unreadableCaseIds).toHaveLength(1);
+    expect(resumedResult.summary?.casesSkippedUnreadable).toBe(1);
+    const openQueue = await listReviewItems(context, "rgs", "OPEN", 1_000);
+    const namedForRepair = openQueue.reviewItems.filter(
+      (reviewItem) => reviewItem.reason === "UNREADABLE_STORED_CASE",
+    );
+    expect(namedForRepair).toHaveLength(1);
+    expect(namedForRepair[0]!.detail).toMatch(/NOT imported/);
+
+    // Every row is accounted for exactly once, in one of the three buckets.
+    const resumedSummary = resumedResult.summary!;
+    expect(
+      resumedSummary.casesCreated +
+        resumedSummary.casesSkippedAlreadyImported +
+        resumedSummary.casesSkippedUnreadable,
+    ).toBe(10);
+    // And the checkpoint really was consulted: some refs were skipped because
+    // a completed reservation said they were already done.
+    expect(resumedSummary.casesSkippedAlreadyImported).toBeGreaterThan(0);
   });
 
   it("passes --tenant and --actor through instead of hard-coding them", async () => {

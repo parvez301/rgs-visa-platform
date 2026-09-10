@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda";
 import type { AppContext } from "../lib/context";
 import { DynamoTableClient } from "../lib/db";
+import { withWriteRetries, writeRetryOptionsFromEnvironment } from "../lib/tableRetry";
 import { S3DocumentStore } from "../lib/documentStore";
 import { BestEffortEmailSender, SesEmailSender } from "../lib/email";
 import { buildAdminRouter } from "./adminApi";
@@ -23,7 +24,14 @@ export function buildProductionContext(): AppContext {
     );
   }
   return {
-    table: new DynamoTableClient(tableName),
+    // N11: every write in the process goes through the retry seam, including
+    // the migration's -- `cli.ts` builds its context from this same function,
+    // which is why the wrapping belongs here and not at a call site. Reads are
+    // not wrapped; see `tableRetry.ts` for why.
+    table: withWriteRetries(
+      new DynamoTableClient(tableName),
+      writeRetryOptionsFromEnvironment(process.env),
+    ),
     documents: new S3DocumentStore(documentsBucket),
     email: new BestEffortEmailSender(new SesEmailSender(senderAddress)),
     adminNotificationAddress,

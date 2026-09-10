@@ -1104,6 +1104,25 @@ describe("runImport", () => {
     };
   }
 
+  /**
+   * Lets `allowedWriteCount` writes through, then fails every one after it --
+   * a run that dies part-way rather than at a nominated item.
+   */
+  function tableFailingAfterWrites(table: TableClient, allowedWriteCount: number): TableClient {
+    let writesSoFar = 0;
+    return {
+      get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
+      put: async (item) => {
+        writesSoFar += 1;
+        if (writesSoFar > allowedWriteCount) throw new Error("simulated write timeout");
+        return table.put(item);
+      },
+      delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
+      query: (partitionKey, options) => table.query(partitionKey, options),
+      queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    };
+  }
+
   /** Wraps a table so a GSI1 read returns nothing, as a lagging index does. */
   function tableWithLaggingGsi1(table: TableClient): TableClient {
     return {
@@ -1261,6 +1280,65 @@ describe("runImport", () => {
     expect(thirdSummary.casesCreated).toBe(0);
     expect(thirdSummary.casesSkippedAlreadyImported).toBe(1);
     expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual(["31376"]);
+  });
+
+  /**
+   * N11, checkpointing half. The finding asked for resumable checkpointing.
+   * Before building one, the question is whether the caseRef reservation index
+   * already IS the checkpoint -- and it is, so this proves that rather than
+   * adding a second mechanism on top of a working one. There is no checkpoint
+   * file, no `--resume` flag and no run-id: the reservation items ARE the
+   * durable per-ref record of what this import has and has not finished, and
+   * they are written into the same table, in the same partition as the ref
+   * they describe, ahead of the case itself.
+   *
+   * Resuming is therefore just "run the same command again", which is exactly
+   * what the abort message tells the operator to do.
+   */
+  it("resumes from the reservation index after a part-way death, repairing rather than duplicating", async () => {
+    const context = buildTestContext();
+    const rows = Array.from({ length: 6 }, (_unused, rowIndex) =>
+      buildMappedRow({
+        caseRef: String(60_001 + rowIndex),
+        sourceRow: rowIndex + 2,
+        passportNumber: `P${String(rowIndex).padStart(7, "0")}`,
+      }),
+    );
+
+    // Dies mid-import, at no particular boundary -- partway through some
+    // case's own multi-item write, which is the state that has no transaction
+    // protecting it.
+    const dyingContext = { ...context, table: tableFailingAfterWrites(context.table, 14) };
+    await expect(
+      runImport(dyingContext, "rgs", { ...baseInput, mappedRows: rows }),
+    ).rejects.toThrow(/simulated write timeout/);
+
+    const refsAfterCrash = await storedCaseRefsInStatus(context, "CLOSED");
+    // Some work survived and some did not: that is the only interesting
+    // starting state, and a test that happened to crash before or after
+    // everything would prove nothing about resuming.
+    expect(refsAfterCrash.length).toBeGreaterThan(0);
+    expect(refsAfterCrash.length).toBeLessThan(rows.length);
+
+    const resumedSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+
+    // The two properties C1/C2 exist for, which are exactly the two properties
+    // "resumable checkpointing" was asking for: refs that COMPLETED are
+    // skipped, and refs that were reserved but never finished are re-written
+    // under their original caseId rather than under a new one.
+    expect(resumedSummary.casesSkippedAlreadyImported).toBeGreaterThan(0);
+    expect(resumedSummary.casesCreated + resumedSummary.casesSkippedAlreadyImported).toBe(rows.length);
+
+    const refsAfterResume = await storedCaseRefsInStatus(context, "CLOSED");
+    expect(refsAfterResume.sort()).toEqual(rows.map((row) => row.caseRef).sort());
+    // One case per ref. A duplicate would show up here as a longer array with
+    // a repeated ref, which is the failure C1 was written about.
+    expect(new Set(refsAfterResume).size).toBe(rows.length);
+
+    // And the resumed run is itself a fixed point.
+    const thirdSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+    expect(thirdSummary.casesCreated).toBe(0);
+    expect(thirdSummary.casesSkippedAlreadyImported).toBe(rows.length);
   });
 
   it("completes each reservation, so a re-run reads no case partition at all", async () => {
