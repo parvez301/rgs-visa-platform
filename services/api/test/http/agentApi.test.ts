@@ -6,6 +6,7 @@ import { AGENT_ROUTES, registerAgentRoutes } from "../../src/http/agentApi";
 import { buildAdminRouter } from "../../src/http/adminApi";
 import { FakeLlmProvider } from "../../src/agent/providers/fake";
 import { mapMessagesToAnthropic } from "../../src/agent/providers/anthropic";
+import { readUserPrefs } from "../../src/agent/prefs";
 import { getProposal, listPendingProposals, stageProposal, type ProposedChange } from "../../src/agent/approval";
 import { ToolRegistry } from "../../src/agent/tools/registry";
 import { WRITE_TOOLS } from "../../src/agent/tools/writeTools";
@@ -675,6 +676,71 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
     const router = buildRouter(context);
     const response = await call(router, "PUT", "/api/v1/admin/crm/agent/proposals/prop_missing/approve", {});
     expect(response.statusCode).toBe(404);
+  });
+
+  // Branch review I4. `confirmedWithoutEditCount` was added to the shared
+  // schema in this branch specifically to be the trust-ladder advancement
+  // signal, and nothing anywhere wrote it -- Plan 5 would have inherited a
+  // counter permanently at 0 and a "propose advancing this user" screen with
+  // nothing to propose from. Asserted through the real route against the
+  // stored prefs row, not against the counter function directly.
+  it("counts an approval the human did not edit, as the trust-ladder advancement signal", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "AGT-APPR-COUNT-1");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, billingStatus: "BILL_SENT" },
+      ADMIN_EMAIL,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    expect((await readUserPrefs(context, TENANT_ID, ADMIN_EMAIL)).confirmedWithoutEditCount).toBe(0);
+
+    const router = buildRouter(context);
+    const response = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/agent/proposals/${staged.proposalId}/approve`,
+      {},
+    );
+    expect(response.statusCode).toBe(200);
+
+    const prefsAfterApproval = await readUserPrefs(context, TENANT_ID, ADMIN_EMAIL);
+    expect(prefsAfterApproval.confirmedWithoutEditCount).toBe(1);
+    // Counting a confirmation is NOT the same act as raising trust
+    // (task-10-controller-notes.md §6): advancement stays opt-in and never
+    // silent, so neither of these may move.
+    expect(prefsAfterApproval.trustLevel).toBe(0);
+    expect(prefsAfterApproval.autoApplyOptIn).toBe(false);
+  });
+
+  // The other direction, which is what makes the counter mean anything: an
+  // approval carrying an edit is evidence the agent got it WRONG, and must
+  // not be counted as evidence for trusting it more.
+  it("does not count an approval the human edited", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context, "AGT-APPR-COUNT-2");
+    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seededCase.caseId, visaType: "TOURIST" },
+      ADMIN_EMAIL,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    const router = buildRouter(context);
+    const response = await call(
+      router,
+      "PUT",
+      `/api/v1/admin/crm/agent/proposals/${staged.proposalId}/approve`,
+      { editedInput: { caseId: seededCase.caseId, visaType: "BUSINESS" } },
+    );
+    expect(response.statusCode).toBe(200);
+
+    expect((await readUserPrefs(context, TENANT_ID, ADMIN_EMAIL)).confirmedWithoutEditCount).toBe(0);
   });
 
   it("rejects an unauthenticated caller and applies nothing", async () => {

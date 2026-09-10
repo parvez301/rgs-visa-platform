@@ -25,7 +25,24 @@ import { buildUserRouter } from "./userApi";
 function tryBuildLlmProvider(): LlmProvider | undefined {
   try {
     return createLlmProvider(llmProviderConfigFromEnvironment(process.env));
-  } catch {
+  } catch (configurationError) {
+    // The laziness above is right (P27); the SILENCE was not (branch review
+    // M1). A typo'd LLM_PROVIDER or an unsupported LLM_THINKING value is
+    // indistinguishable, from outside, from "the agent is not enabled here":
+    // both present to the owner as every agent turn answering "This request
+    // has no LLM provider configured", with nothing anywhere saying why.
+    // `llmProviderConfigFromEnvironment` throws a message naming the missing
+    // or invalid variable, so logging it is the whole fix.
+    //
+    // Safe to log: providers/config.ts never puts LLM_API_KEY's VALUE in a
+    // thrown message, and providers.test.ts's two leak tests exist
+    // specifically to keep that true. Do not widen this to log the config
+    // object or process.env.
+    const configurationErrorMessage =
+      configurationError instanceof Error ? configurationError.message : String(configurationError);
+    console.warn(
+      `No LLM provider configured, so agent routes will refuse every turn: ${configurationErrorMessage}`,
+    );
     return undefined;
   }
 }

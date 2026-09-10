@@ -593,6 +593,14 @@ export async function discardProposal(
   // `proposalStatusGsi1Pk(tenantId, "DISCARDED")`. A future reader (Plan 5's
   // Today screen) that wants rejected proposals in a timeline should read
   // the proposal partition rather than conclude the trace is missing.
+  //
+  // The same applies to APPROVED memory tools (branch review M7): approving a
+  // `forget` records no CRM event anywhere -- `forgetMemory` deliberately
+  // records none, and `applyApprovedChange` skips its own because a memory
+  // proposal has no caseId. Each decision is defensible alone, but composed
+  // they mean the deletion of institutional memory, a HIGH_STAKES act, leaves
+  // its only trace on the proposal row. So Plan 5 must read the proposal
+  // partition for BOTH statuses, not only DISCARDED.
   if (proposal.caseId !== undefined) {
     await recordCrmEvent(context, tenantId, proposal.caseId, "PROPOSAL_DISCARDED", actorEmail, {
       proposalId,

@@ -15,6 +15,31 @@ import { CRM_USER_PREFS_SORT_KEY, crmUserPrefsPartitionKey } from "../domain/crm
  * `crm.CrmUserPrefsSchema` -- carried in packages/shared since Plan 1 with no
  * reader or writer until now (task-10-controller-notes.md §9) -- rather than
  * a parallel shape invented for this task alone.
+ *
+ * WHAT IS AND IS NOT WIRED, as of the end of Plan 4 (branch review I4,
+ * ruling P73). Read this before assuming the trust ladder is live:
+ *
+ * - `readUserPrefs` has one production caller: `loop.ts`, which reads the
+ *   ladder on every turn.
+ * - `recordConfirmedWithoutEdit` has one production caller: the approve
+ *   route (`http/agentApi.ts`), which counts an approval a human made
+ *   without changing a single field. That is the ADVANCEMENT SIGNAL, and
+ *   nothing more -- it never touches `trustLevel` or `autoApplyOptIn`.
+ * - `setUserPrefs` has NO production caller. Nothing in the product can move
+ *   a user off `trustLevel: 0` / `autoApplyOptIn: false`. A trust-prefs route
+ *   backed by it is a new product surface -- a screen where a human agrees to
+ *   auto-apply, with everything that implies -- and it belongs to Plan 5, not
+ *   to a fix round.
+ * - `readTrustLevel` likewise has no caller: it was carried as MIN-7 with the
+ *   note "Task 11 consumes it"; Task 11 read `readUserPrefs` directly.
+ *
+ * The consequence, stated plainly so the next reader does not have to grep
+ * for it: the auto-apply half of `runAgentTurn` (loop.ts's trust ladder,
+ * everything downstream of `eligibleForAutoApply`) is UNREACHABLE in
+ * production today and is exercised only by tests. Safe by default -- every
+ * write is staged for a human -- but it means the default-deny guard, the
+ * `autoApplied` audit flag and P25's human-vs-machine distinction are all
+ * currently proven by the suite rather than by production traffic.
  */
 
 function defaultUserPrefs(tenantId: string, email: string): crm.CrmUserPrefs {

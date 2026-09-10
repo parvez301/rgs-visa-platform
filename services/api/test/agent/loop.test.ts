@@ -301,6 +301,31 @@ describe("runAgentTurn", () => {
     const context = buildTestContextWithFakeLlm(neverStops);
     const result = await runAgentTurn(context, TENANT_ID, { userMessage: "hi", conversation: [], actorEmail: ACTOR });
     expect(result.toolCallsMade).toHaveLength(MAX_TOOL_ITERATIONS);
+    // Branch review M2: the reply here is "" -- the last completion's text
+    // for a tool-calling turn. Without this flag that blank answer is
+    // indistinguishable from a model that simply had nothing to say, so a
+    // caller cannot tell the user their turn was cut short.
+    expect(result.reply).toBe("");
+    expect(result.stoppedAtIterationCap).toBe(true);
+  });
+
+  // The other direction, which is what makes the flag mean anything: a turn
+  // that ended because the model stopped calling tools must report false,
+  // whether or not it used any tools at all.
+  it("reports stoppedAtIterationCap false for a turn the model ended on its own", async () => {
+    const context = buildTestContextWithFakeLlm([
+      { text: "", toolCalls: [{ toolCallId: "c1", toolName: "list_partners", input: {} }] },
+      { text: "Here are your partners.", toolCalls: [] },
+    ]);
+    const result = await runAgentTurn(context, TENANT_ID, { userMessage: "who do we work with?", conversation: [], actorEmail: ACTOR });
+    expect(result.reply).toBe("Here are your partners.");
+    expect(result.stoppedAtIterationCap).toBe(false);
+  });
+
+  it("reports stoppedAtIterationCap false for a turn that called no tools at all", async () => {
+    const context = buildTestContextWithFakeLlm([{ text: "Nothing to look up.", toolCalls: [] }]);
+    const result = await runAgentTurn(context, TENANT_ID, { userMessage: "hello", conversation: [], actorEmail: ACTOR });
+    expect(result.stoppedAtIterationCap).toBe(false);
   });
 
   it("feeds a failing tool's error back to the model instead of aborting the turn", async () => {

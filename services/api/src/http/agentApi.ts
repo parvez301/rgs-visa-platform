@@ -3,6 +3,7 @@ import type { AppContext } from "../lib/context";
 import { forbidden } from "../lib/errors";
 import { applyApprovedChange, discardProposal, listPendingProposals } from "../agent/approval";
 import { runAgentTurn } from "../agent/loop";
+import { recordConfirmedWithoutEdit } from "../agent/prefs";
 import {
   MEMORY_SCOPE_KINDS,
   forgetMemory,
@@ -281,13 +282,37 @@ const AGENT_ROUTE_DEFINITIONS: AgentRouteDefinition[] = [
       // path -- autoApplied stays at applyApprovedChange's default of
       // false, so PROPOSAL_APPROVED events from this route are
       // distinguishable from Task 10's auto-applied ones (ruling P25).
-      return applyApprovedChange(
+      const approvalResult = await applyApprovedChange(
         context,
         DEFAULT_TENANT_ID,
         requestContext.pathParams["proposalId"]!,
         adminEmail,
         body.editedInput,
       );
+
+      // The ladder-advancement signal, finally recorded (branch review I4).
+      // `confirmedWithoutEditCount` was added to the shared schema in this
+      // branch specifically to be it, and nothing wrote it -- so Plan 5 would
+      // have inherited a counter permanently at 0 and a "propose advancing
+      // this user" screen with nothing to propose from.
+      //
+      // Only when the human changed NOTHING: an approval carrying an edit is
+      // evidence the agent got it wrong, which is the opposite of the signal
+      // this counter stands for. Counting is not the same act as raising
+      // trust, and `recordConfirmedWithoutEdit` never touches `trustLevel` or
+      // `autoApplyOptIn` -- advancement stays opt-in and never silent
+      // (task-10-controller-notes.md §6).
+      //
+      // Awaited unguarded, after the change is applied: the same exposure
+      // `recordCrmEvent` already has inside applyApprovedChange -- a failure
+      // here answers 500 for a change that did happen. Swallowing it would
+      // make the counter quietly lossy, which is worse for the one thing it
+      // exists to be evidence for.
+      if (body.editedInput === undefined) {
+        await recordConfirmedWithoutEdit(context, DEFAULT_TENANT_ID, adminEmail);
+      }
+
+      return approvalResult;
     },
   },
   {

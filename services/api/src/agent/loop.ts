@@ -46,6 +46,18 @@ export interface AgentTurnResult {
    */
   appliedChanges: ProposedChange[];
   toolCallsMade: { toolName: string; kind: ToolKind }[];
+  /**
+   * True when the turn ended because it ran out of iterations rather than
+   * because the model stopped calling tools (branch review M2).
+   *
+   * Both exits return `replyText` from the last completion, and for a
+   * tool-calling turn that is `""` -- so without this flag a user who hit the
+   * cap got a blank answer indistinguishable from a model that had nothing
+   * to say. Same family as the rest of this branch's honesty rulings: the
+   * result must say what happened. A caller rendering the reply should say
+   * the turn was cut short when this is true.
+   */
+  stoppedAtIterationCap: boolean;
   usage: LlmUsage;
 }
 
@@ -126,6 +138,7 @@ export async function runAgentTurn(
   const appliedChanges: ProposedChange[] = [];
   const usage = emptyUsage();
   let replyText = "";
+  let stoppedAtIterationCap = false;
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
     const completion = await llm.complete({
@@ -155,6 +168,14 @@ export async function runAgentTurn(
     // turn. Empty text is not a reason to drop the turn; it is a turn whose
     // whole content is the calls.
     messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls });
+
+    // Set on the LAST iteration, and only if the model still wanted tools --
+    // which the `break` above has already ruled out by this line. Observed
+    // (the model asked for more and there is no more), not deduced from the
+    // loop variable alone.
+    if (iteration === MAX_TOOL_ITERATIONS - 1) {
+      stoppedAtIterationCap = true;
+    }
 
     for (const toolCall of completion.toolCalls) {
       const matchedTool = registry.get(toolCall.toolName);
@@ -353,5 +374,5 @@ export async function runAgentTurn(
     }
   }
 
-  return { reply: replyText, proposals, appliedChanges, toolCallsMade, usage };
+  return { reply: replyText, proposals, appliedChanges, toolCallsMade, stoppedAtIterationCap, usage };
 }

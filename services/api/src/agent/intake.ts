@@ -176,6 +176,15 @@ function parseRawExtraction(responseText: string): RawIntakeExtraction {
  * a future audit trail on the intake screen is the obvious next caller of
  * it; today's read-and-propose extraction has nothing to attribute, since it
  * makes no mutation.
+ *
+ * NOT REACHABLE FROM THE PRODUCT TODAY (branch review M4). This function has
+ * exactly one caller in the repository -- `eval/runIntakeEval.ts` -- and no
+ * HTTP route: `AGENT_ROUTE_DEFINITIONS` (http/agentApi.ts) does not mount it,
+ * and no other module imports it. Mounting one is a new product surface (an
+ * intake screen, with its own paste-and-review flow), so it belongs to Plan
+ * 5 rather than to a fix round. Recorded here so the next reader does not
+ * assume the extraction path is wired just because it is finished and
+ * tested.
  */
 export async function extractIntake(
   context: AppContext,

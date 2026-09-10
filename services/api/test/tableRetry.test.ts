@@ -341,6 +341,40 @@ describe("buildProductionContext", () => {
     }
   });
 
+  // Branch review M1: a misconfigured provider used to be silent and
+  // indistinguishable from "the agent is not enabled here" -- both present to
+  // the owner as every agent turn answering "This request has no LLM provider
+  // configured", with nothing saying why.
+  it("warns, naming the configuration error, when the LLM environment is present but wrong", async () => {
+    const savedEnvironment = { ...process.env };
+    process.env["TABLE_NAME"] = "rgs-table";
+    process.env["DOCUMENTS_BUCKET"] = "rgs-documents";
+    process.env["EMAIL_SENDER"] = "noreply@rgs.test";
+    process.env["ADMIN_NOTIFICATION_EMAIL"] = "info@rgs.test";
+    process.env["LLM_PROVIDER"] = "anthropik"; // the typo this exists for
+    process.env["LLM_MODEL"] = "claude-test-model";
+    process.env["LLM_API_KEY"] = "super-secret-key-value";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { buildProductionContext } = await import("../src/http/handler");
+      const productionContext = buildProductionContext();
+
+      // Still lazy: a bad LLM configuration must not take the whole API down
+      // at cold start for every non-agent route (P27).
+      expect(productionContext.llm).toBeUndefined();
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const warnedMessage = String(warnSpy.mock.calls[0]?.[0]);
+      expect(warnedMessage).toContain("anthropik");
+      // The whole reason this is safe to log at all -- the same guarantee
+      // providers.test.ts's two leak tests pin at the source.
+      expect(warnedMessage).not.toContain("super-secret-key-value");
+    } finally {
+      warnSpy.mockRestore();
+      process.env = savedEnvironment;
+    }
+  });
+
   it("builds a real llm provider when the LLM environment variables are present", async () => {
     const savedEnvironment = { ...process.env };
     process.env["TABLE_NAME"] = "rgs-table";
