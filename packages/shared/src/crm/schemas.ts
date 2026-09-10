@@ -159,6 +159,13 @@ export const CrmMemorySchema = z
     sourceCaseId: z.string().optional(),
     createdBy: z.enum(["agent", "human"]),
     createdAt: isoDateTime,
+    // Derived from the admin token's `email` claim, which is not guaranteed —
+    // the API defaults it away when absent rather than storing an empty
+    // string. Mirrors CrmCaseSchema.createdByEmail above exactly, including
+    // its reason. NOT what `createdBy` records: `createdBy` is "agent" |
+    // "human" (what kind of author), this is who -- keeping the two apart is
+    // what lets the refinement below key off `createdBy` alone.
+    createdByEmail: z.string().min(1).optional(),
   })
   .refine(
     (memory) => memory.createdBy !== "agent" || memory.sourceCaseId !== undefined,

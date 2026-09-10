@@ -127,3 +127,17 @@ export function proposalPartitionKey(tenantId: string, proposalId: string): stri
 export function proposalStatusGsi1Pk(tenantId: string, proposalStatus: string): string {
   return `TENANT#${tenantId}#PROPOSAL_STATUS#${proposalStatus}`;
 }
+
+/**
+ * The partition every row of one memory scope lives in. One builder, not
+ * two: recall needs no secondary index (task-9-controller-notes.md §4.1.3)
+ * -- the partition key already IS the scope, so a single
+ * `context.table.query(memoryPartitionKey(tenantId, scope))` per requested
+ * scope reads exactly that scope's rows off the base table. `memoryKey`
+ * (caller-supplied and meaningful, never a generated id) is the sort key,
+ * used directly with no prefix, per spec §"Memory" / the design doc's key
+ * layout (docs/superpowers/specs/2026-09-09-rgs-crm-design.md:460-462).
+ */
+export function memoryPartitionKey(tenantId: string, scope: string): string {
+  return `TENANT#${tenantId}#CRM_MEMORY#${scope}`;
+}

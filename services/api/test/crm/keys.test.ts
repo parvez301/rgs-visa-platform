@@ -10,6 +10,7 @@ import {
   casePartitionKey,
   caseStatusGsi1Pk,
   eventSortKey,
+  memoryPartitionKey,
   partnerCasesGsi2Pk,
   partnerPartitionKey,
   passportGsi3Pk,
@@ -77,6 +78,18 @@ describe("crm keys", () => {
 
   it("keeps review items in a different keyspace from cases", () => {
     expect(reviewItemPartitionKey("rgs", "x")).not.toBe(casePartitionKey("rgs", "x"));
+  });
+
+  // One builder, not a (partitionKey, gsiKey) pair: the memory table's
+  // partition key already IS the scope, so recall needs no secondary index
+  // (task-9-controller-notes.md §4.1.3).
+  it("partitions memory rows by their composite scope string", () => {
+    expect(memoryPartitionKey("rgs", "ORG")).toBe("TENANT#rgs#CRM_MEMORY#ORG");
+    expect(memoryPartitionKey("rgs", "PARTNER#p_1")).toBe("TENANT#rgs#CRM_MEMORY#PARTNER#p_1");
+    expect(memoryPartitionKey("rgs", "USER#alice@rgs.local")).toBe(
+      "TENANT#rgs#CRM_MEMORY#USER#alice@rgs.local",
+    );
+    expect(memoryPartitionKey("rgs", "ORG")).not.toBe(memoryPartitionKey("other", "ORG"));
   });
 
   it("scopes review keys per tenant", () => {

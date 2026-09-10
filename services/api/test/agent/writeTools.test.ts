@@ -72,7 +72,7 @@ describe("the write tool registry", () => {
     const registry = new ToolRegistry(WRITE_TOOLS);
     expect(registry.readTools()).toHaveLength(0);
     expect(registry.writeTools().map((tool) => tool.name).sort()).toEqual(
-      ["add_line_item", "create_case", "set_billing", "set_custody", "update_case"],
+      ["add_line_item", "create_case", "forget", "remember", "set_billing", "set_custody", "update_case"],
     );
   });
 
@@ -161,6 +161,15 @@ function minimalInputFor(
       return { caseId: seededCase.caseId, applicantRef: "A1", custody: "WITH_RGS" };
     case "set_billing":
       return { caseId: seededCase.caseId, billingStatus: "BILL_SENT" };
+    case "remember":
+      return {
+        scope: "ORG",
+        memoryKey: "morning-slots",
+        text: "prefers morning appointment slots",
+        sourceCaseId: seededCase.caseId,
+      };
+    case "forget":
+      return { scope: "ORG", memoryKey: "morning-slots" };
     default:
       throw new Error(`no minimal input registered for write tool "${toolName}" -- add one above`);
   }

@@ -12,6 +12,7 @@ import {
 } from "../../domain/crm/cases";
 import { addLineItem } from "../../domain/crm/lineItems";
 import type { ProposedChange } from "../approval";
+import { forgetTool, rememberTool } from "./memoryTools";
 import type { AgentTool } from "./registry";
 
 /** Stands in for "there is no prior value" on a proposal with no stored case to read yet. */
@@ -371,4 +372,6 @@ export const WRITE_TOOLS: AgentTool[] = [
   addLineItemTool,
   setCustodyTool,
   setBillingTool,
+  rememberTool,
+  forgetTool,
 ];

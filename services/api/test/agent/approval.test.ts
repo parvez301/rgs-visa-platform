@@ -13,6 +13,7 @@ import {
 } from "../../src/agent/approval";
 import { changeBillingStatus, createCase, getCase, updateCaseDetails } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
+import { memoryScope, recallMemories, rememberMemory } from "../../src/domain/crm/memory";
 import {
   PROPOSAL_SORT_KEY,
   caseIdFromPartitionKey,
@@ -107,12 +108,30 @@ function tableThatRefusesCaseWrites(context: TestContext, toolNameForMessage: st
  * function implicitly returns `undefined`, which then reaches a write tool's
  * `execute` as its `input` and throws a genuine TypeError there -- a real net,
  * just a later and noisier one than a compile error would be. Keeping this
- * switch exhaustive over the CURRENT five names is still worth doing (it is
+ * switch exhaustive over the CURRENT seven names is still worth doing (it is
  * what forces a fixture here whenever this file's own union is widened by
  * hand), but it is not what catches a tool silently added only to
  * `WRITE_TOOLS`.
+ *
+ * `remember`'s case reuses the pre-seeded case's id as its `sourceCaseId` --
+ * CrmMemorySchema's refinement (schemas.ts:153-170) refuses an agent-created
+ * memory with none. `forget`'s targets the exact (scope, memoryKey) the
+ * it.each block below pre-seeds with a real `rememberMemory` call before
+ * running the guarded flow, so the deletion it proves durable is a deletion
+ * of something, not a no-op on a key nothing ever occupied.
  */
-type WriteToolName = "create_case" | "update_case" | "add_line_item" | "set_custody" | "set_billing";
+type WriteToolName =
+  | "create_case"
+  | "update_case"
+  | "add_line_item"
+  | "set_custody"
+  | "set_billing"
+  | "remember"
+  | "forget";
+
+/** The (scope, memoryKey) sampleInputFor's "remember"/"forget" cases and the it.each pre-seed below agree on. */
+const SAMPLE_MEMORY_SCOPE_KIND = "ORG";
+const SAMPLE_MEMORY_KEY = "morning-slots";
 
 function sampleInputFor(
   toolName: WriteToolName,
@@ -144,6 +163,15 @@ function sampleInputFor(
       return { caseId: seededCase.caseId, applicantRef: "A1", custody: "WITH_RGS" };
     case "set_billing":
       return { caseId: seededCase.caseId, billingStatus: "BILL_SENT" };
+    case "remember":
+      return {
+        scope: SAMPLE_MEMORY_SCOPE_KIND,
+        memoryKey: SAMPLE_MEMORY_KEY,
+        text: "prefers morning appointment slots, take 2",
+        sourceCaseId: seededCase.caseId,
+      };
+    case "forget":
+      return { scope: SAMPLE_MEMORY_SCOPE_KIND, memoryKey: SAMPLE_MEMORY_KEY };
   }
 }
 
@@ -195,6 +223,28 @@ function expectMutationVisible(toolName: WriteToolName, storedCase: crm.CrmCase)
   }
 }
 
+/**
+ * The memory-shaped counterpart of expectMutationVisible + the getCase
+ * re-read above it: remember/forget have no case to compare against, so
+ * durability is proven by recalling SAMPLE_MEMORY_SCOPE_KIND's ORG scope
+ * directly and checking the one row both tools agree on
+ * (SAMPLE_MEMORY_KEY).
+ */
+async function expectMemoryMutationDurable(
+  context: TestContext,
+  toolName: "remember" | "forget",
+): Promise<void> {
+  const { memories } = await recallMemories(context, TENANT_ID, [memoryScope("ORG")]);
+  const matchingMemory = memories.find((memory) => memory.memoryKey === SAMPLE_MEMORY_KEY);
+  if (toolName === "remember") {
+    expect(matchingMemory?.text, "remember: the memory was not durably written").toBe(
+      "prefers morning appointment slots, take 2",
+    );
+  } else {
+    expect(matchingMemory, "forget: the memory is still present after applyApprovedChange").toBeUndefined();
+  }
+}
+
 describe("an approved change is the only thing that writes", () => {
   // The property, over EVERY registered write tool: staging never reaches a
   // case, and applyApprovedChange is what makes the mutation real and
@@ -225,6 +275,24 @@ describe("an approved change is the only thing that writes", () => {
         },
         ACTOR,
       );
+      // "forget"'s durability proof (below) needs a real row to delete --
+      // seeded through the real, unguarded context, exactly as seededCase
+      // itself is. Without this, forgetting SAMPLE_MEMORY_KEY would be a
+      // no-op on a key nothing ever occupied, and the "no longer present"
+      // assertion would pass whether or not applyApprovedChange did anything.
+      if (writeTool.name === "forget") {
+        await rememberMemory(
+          context,
+          TENANT_ID,
+          {
+            scope: memoryScope("ORG"),
+            memoryKey: SAMPLE_MEMORY_KEY,
+            text: "prefers morning appointment slots",
+            sourceCaseId: seededCase.caseId,
+          },
+          ACTOR,
+        );
+      }
 
       const input = sampleInputFor(writeTool.name as WriteToolName, seededCase, partner.partnerId, traveller.travellerId);
       const guardedContext = tableThatRefusesCaseWrites(context, writeTool.name);
@@ -257,6 +325,14 @@ describe("an approved change is the only thing that writes", () => {
       expect(storedProposal?.decidedAt, `${writeTool.name}'s proposal has no decidedAt`).toBe(
         context.now().toISOString(),
       );
+
+      // remember/forget have no case to re-read -- their durability proof is
+      // a recall, not a getCase -- so they branch off the case-shaped check
+      // the other five tools share below.
+      if (writeTool.name === "remember" || writeTool.name === "forget") {
+        await expectMemoryMutationDurable(context, writeTool.name as "remember" | "forget");
+        return;
+      }
 
       // The mutation is not only returned but durable: re-reading the case
       // (via the domain result's own caseId, since create_case has none of

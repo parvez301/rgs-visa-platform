@@ -68,8 +68,18 @@ const ProposedChangeSchema = z.object({
  * a case to PAID, which is effectively irreversible in practice even though
  * the state machine allows further moves. The trust ladder (Task 10) may
  * relax over time, but this is the set it can never relax past.
+ *
+ * `remember` and `forget` join them (ruling P46, task-9-controller-notes.md
+ * §5): spec §7 says memories are "staged and confirmed like any other
+ * write, never silently absorbed," and `forget` is a deletion -- neither
+ * belongs in an auto-apply allow-list at any trust level.
  */
-export const HIGH_STAKES_TOOLS: ReadonlySet<string> = new Set(["add_line_item", "set_billing"]);
+export const HIGH_STAKES_TOOLS: ReadonlySet<string> = new Set([
+  "add_line_item",
+  "set_billing",
+  "remember",
+  "forget",
+]);
 
 /**
  * The ONLY tools a trust level may apply without staging. A write tool added
