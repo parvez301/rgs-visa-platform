@@ -266,7 +266,16 @@ export async function getMemoryOrUndefined(
   scope: string,
   memoryKey: string,
 ): Promise<crm.CrmMemory | undefined> {
-  const storedItem = await context.table.get(memoryPartitionKey(tenantId, scope), memoryKey);
+  // Strongly consistent, the same opt-in caseStore.readCase takes (db.ts's
+  // GetOptions). A write tool's `execute` builds its approval card's "from"
+  // value from this read: an eventually consistent get inside the
+  // replication window shows "(new memory)" for a key that already holds
+  // text, so the approver is shown a creation where the truth is an
+  // overwrite of something they might not have wanted to lose (branch
+  // review I1).
+  const storedItem = await context.table.get(memoryPartitionKey(tenantId, scope), memoryKey, {
+    consistentRead: true,
+  });
   return storedItem === undefined ? undefined : parseStoredMemory(storedItem);
 }
 
@@ -292,7 +301,14 @@ export async function memoryRowExists(
   scope: string,
   memoryKey: string,
 ): Promise<boolean> {
-  const storedItem = await context.table.get(memoryPartitionKey(tenantId, scope), memoryKey);
+  // Strongly consistent for the same reason as getMemoryOrUndefined above,
+  // with a sharper consequence: this is the DELETE route's read-before-delete
+  // (agentApi.ts), so a stale miss makes the route report `forgotten: false`
+  // for a row it is about to delete -- the exact dishonesty that read exists
+  // to prevent (branch review I1).
+  const storedItem = await context.table.get(memoryPartitionKey(tenantId, scope), memoryKey, {
+    consistentRead: true,
+  });
   return storedItem !== undefined;
 }
 

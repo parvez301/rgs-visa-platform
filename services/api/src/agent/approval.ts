@@ -279,7 +279,21 @@ export async function getProposal(
   tenantId: string,
   proposalId: string,
 ): Promise<ProposedChange | undefined> {
-  const storedItem = await context.table.get(proposalPartitionKey(tenantId, proposalId), PROPOSAL_SORT_KEY);
+  // Strongly consistent, the same opt-in `caseStore.readCase` takes and for
+  // the same documented reason (db.ts's GetOptions: "an eventually consistent
+  // get can miss an item that was written moments earlier, which reads back
+  // as a record that does not exist"). This is the ONE read every proposal
+  // path goes through -- readProposalOrThrow, and therefore approve and
+  // discard -- and the window it would otherwise open is measured in
+  // consequences, not milliseconds (branch review I1): `stageProposal` hands
+  // the user a proposalId immediately, so a human clicking Approve inside the
+  // replication window would get "404 Proposal not found" for a proposal that
+  // exists, and the trust ladder's auto-apply path (loop.ts) stages and
+  // approves in the same breath, where a stale read sends the turn into its
+  // indeterminate arm and tells the user to go check a proposal by hand.
+  const storedItem = await context.table.get(proposalPartitionKey(tenantId, proposalId), PROPOSAL_SORT_KEY, {
+    consistentRead: true,
+  });
   if (storedItem === undefined) return undefined;
   return parseStoredProposal(storedItem);
 }
@@ -356,6 +370,31 @@ export async function applyApprovedChange(
   // text, finding NEW-4) and paid for it in review.
   autoApplied = false,
 ): Promise<unknown> {
+  // READ-CHECK-WRITE, and knowingly not atomic. Recorded as a decision
+  // rather than left as an absence (branch review I1, ruling P72), because
+  // this is the first mutation in this codebase that must not run twice.
+  //
+  // What is closed: the SEQUENTIAL-and-settled case. The status check below
+  // is what makes a second approval of a settled proposal a 409, and it is
+  // pinned (approval.test.ts, "refuses to apply the same proposal twice (a
+  // double-approved line item is a double-charge)"). `getProposal` now reads
+  // strongly consistently, so a second approver cannot see a stale PENDING
+  // copy of a row that was already written APPROVED.
+  //
+  // What is NOT closed: genuine concurrency. Two approvals in flight at once
+  // -- a double-clicked button, an API Gateway retry, two operators -- can
+  // both read PENDING before either reaches `putProposal` below, both pass
+  // this check, and both run `writeTool.apply`. For `add_line_item` that is
+  // a duplicated charge on a real client's bill.
+  //
+  // Closing it needs the proposal to be CLAIMED before `apply` runs, with a
+  // conditional write that fails if the row is no longer PENDING.
+  // `TableClient` (lib/db.ts) has no conditional-write primitive at all --
+  // `put(item)` is the whole write surface -- so this cannot be done from
+  // here; it is a port change with blast radius across three services and it
+  // belongs to Plan 5, not to a fix round. Until then this window is real,
+  // and it is documented here rather than discovered later from a duplicated
+  // line item.
   const proposal = await readProposalOrThrow(context, tenantId, proposalId);
   if (proposal.status !== "PENDING") {
     throw conflict(`Proposal ${proposalId} is already ${proposal.status}`);

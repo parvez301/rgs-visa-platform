@@ -17,6 +17,8 @@ import { memoryPartitionKey } from "../../src/domain/crm/keys";
 import {
   MEMORY_RECALL_PAGE_LIMIT,
   forgetMemory,
+  getMemoryOrUndefined,
+  memoryRowExists,
   memoryScope,
   parseMemoryScope,
   recallMemories,
@@ -24,6 +26,8 @@ import {
 } from "../../src/domain/crm/memory";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
+import type { AppContext } from "../../src/lib/context";
+import type { GetOptions } from "../../src/lib/db";
 import { buildTestContext, type TestContext } from "../helpers";
 
 const TENANT_ID = "rgs";
@@ -880,5 +884,74 @@ describe("remember/forget classification (ruling P46, §5)", () => {
   it("leaves both out of AUTO_APPLIABLE_TOOLS at every trust level", () => {
     expect(AUTO_APPLIABLE_TOOLS.has("remember")).toBe(false);
     expect(AUTO_APPLIABLE_TOOLS.has("forget")).toBe(false);
+  });
+});
+
+// Branch review I1. Both single-row memory reads take the same strong-read
+// opt-in caseStore.readCase takes (db.ts's GetOptions: "an eventually
+// consistent get can miss an item that was written moments earlier, which
+// reads back as a record that does not exist").
+//
+// Pinned by capturing GetOptions, the way caseRefIndex.test.ts pins its own:
+// InMemoryTableClient is always strongly consistent, so no behavioural test
+// in this suite can tell the two apart -- the flag is the only observable.
+describe("the single-row memory reads are strongly consistent", () => {
+  function watchGetOptions(context: TestContext): {
+    watchingContext: AppContext;
+    lastGetOptions: () => GetOptions | undefined;
+  } {
+    let capturedGetOptions: GetOptions | undefined;
+    const watchingContext: AppContext = {
+      ...context,
+      table: {
+        get: (partitionKey, sortKey, options) => {
+          capturedGetOptions = options;
+          return context.table.get(partitionKey, sortKey, options);
+        },
+        put: (item) => context.table.put(item),
+        delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
+        query: (partitionKey, options) => context.table.query(partitionKey, options),
+        queryGsi: (indexName, partitionKey, options) =>
+          context.table.queryGsi(indexName, partitionKey, options),
+      },
+    };
+    return { watchingContext, lastGetOptions: () => capturedGetOptions };
+  }
+
+  // A stale miss here shows the approver "(new memory)" as the card's `from`
+  // for a key that already holds text -- an overwrite rendered as a creation.
+  it("getMemoryOrUndefined reads consistently, so a write tool's card cannot show a stale prior value", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context, ALICE);
+    await rememberMemory(
+      context,
+      TENANT_ID,
+      { scope: memoryScope("ORG"), memoryKey: "slots", text: "prefers mornings", sourceCaseId: seeded.caseId },
+      "human",
+      ALICE,
+    );
+    const { watchingContext, lastGetOptions } = watchGetOptions(context);
+
+    await getMemoryOrUndefined(watchingContext, TENANT_ID, memoryScope("ORG"), "slots");
+    expect(lastGetOptions()?.consistentRead).toBe(true);
+  });
+
+  // A stale miss here makes the admin DELETE route report `forgotten: false`
+  // for a row it is about to delete -- the exact dishonesty that
+  // read-before-delete exists to prevent.
+  it("memoryRowExists reads consistently, so the DELETE route cannot under-report a real deletion", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context, ALICE, "90002");
+    await rememberMemory(
+      context,
+      TENANT_ID,
+      { scope: memoryScope("ORG"), memoryKey: "slots", text: "prefers mornings", sourceCaseId: seeded.caseId },
+      "human",
+      ALICE,
+    );
+    const { watchingContext, lastGetOptions } = watchGetOptions(context);
+
+    await expect(memoryRowExists(watchingContext, TENANT_ID, memoryScope("ORG"), "slots")).resolves.toBe(true);
+    expect(lastGetOptions()?.consistentRead).toBe(true);
   });
 });

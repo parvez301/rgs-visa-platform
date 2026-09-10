@@ -990,6 +990,52 @@ describe("getProposal", () => {
     await expect(getProposal(context, TENANT_ID, "prop_never_existed")).resolves.toBeUndefined();
   });
 
+  // Branch review I1. Every proposal read in the system goes through this
+  // function -- readProposalOrThrow, and so approve and discard. On DynamoDB
+  // an eventually consistent get can miss an item written moments earlier
+  // (db.ts's GetOptions says so in as many words), and stageProposal hands
+  // the user a proposalId the instant the row is written: a human clicking
+  // Approve inside the replication window would get a 404 for a proposal
+  // that exists, and the trust ladder's stage-then-approve-in-one-breath
+  // path would fall into its indeterminate arm for a row that was simply
+  // read too soon.
+  //
+  // Pinned the way caseRefIndex.test.ts pins its own -- by capturing
+  // GetOptions -- because InMemoryTableClient is always strongly consistent
+  // (db.ts) and therefore CANNOT show the difference. The flag itself is the
+  // only observable thing here.
+  it("reads a proposal strongly consistently, never from a stale copy", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
+    const proposal = (await tool.execute(
+      context,
+      TENANT_ID,
+      { caseId: seeded.caseId, processing: "EXPRESS" },
+      ACTOR,
+    )) as ProposedChange;
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    let consistentReadRequested: boolean | undefined;
+    const watchingContext: AppContext = {
+      ...context,
+      table: {
+        get: (partitionKey, sortKey, options) => {
+          consistentReadRequested = options?.consistentRead;
+          return context.table.get(partitionKey, sortKey, options);
+        },
+        put: (item) => context.table.put(item),
+        delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
+        query: (partitionKey, options) => context.table.query(partitionKey, options),
+        queryGsi: (indexName, partitionKey, options) =>
+          context.table.queryGsi(indexName, partitionKey, options),
+      },
+    };
+
+    await getProposal(watchingContext, TENANT_ID, staged.proposalId);
+    expect(consistentReadRequested).toBe(true);
+  });
+
   // fix-round-1 M3's schema-level backstop: ProposedChangeSchema's
   // `decidedBy` now carries `.min(1)`, so a stored row that names nobody as
   // the decider fails to parse rather than round-tripping as a legitimate
