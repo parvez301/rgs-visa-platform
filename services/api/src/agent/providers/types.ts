@@ -4,6 +4,14 @@ export interface AgentMessage {
   content: string;
   /** Present only on tool_result messages; ties the result to its call. */
   toolCallId?: string;
+  /**
+   * Required on a tool_result message; the name of the tool whose result this
+   * is. Anthropic ignores it -- it attributes a result to its call via
+   * tool_use_id alone -- but Gemini attributes by function name, not by call
+   * id, so its adapter needs this field to build a `functionResponse` the
+   * vendor can match back to the declared tool.
+   */
+  toolName?: string;
 }
 
 export interface ToolDefinition {

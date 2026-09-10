@@ -18,7 +18,10 @@ export interface AnthropicRawResponse {
     | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
     | { type: string; [key: string]: unknown }
   >;
-  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number };
+  // The real SDK types this `number | null`: the field is never *absent*, it
+  // is `null` on a cache miss. `?? 0` below coalesces both, so this was
+  // harmless, but `?: number` claimed a shape the vendor does not send.
+  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null };
 }
 
 export interface AnthropicAdapterOptions {
@@ -125,6 +128,11 @@ export class AnthropicLlmProvider implements LlmProvider {
     injectedClient?: AnthropicMessagesClient,
     private readonly options: AnthropicAdapterOptions = {},
   ) {
+    // `as unknown as AnthropicMessagesClient` bypasses tsc for this
+    // construction: a future @anthropic-ai/sdk upgrade that changes
+    // `messages.create`'s shape will not fail the build here. Re-check
+    // AnthropicMessagesClient and AnthropicRawResponse by hand against the
+    // installed SDK types when bumping this dependency.
     this.client =
       injectedClient ?? (new Anthropic({ apiKey: providerConfig.apiKey }) as unknown as AnthropicMessagesClient);
     this.thinkingMode = options.thinkingMode;

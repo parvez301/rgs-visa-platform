@@ -15,9 +15,9 @@ describe("mapMessagesToGemini", () => {
     expect(mapped[1]).toEqual({ role: "model", parts: [{ text: "hi" }] });
   });
 
-  it("maps a tool_result to a functionResponse part", () => {
+  it("maps a tool_result to a functionResponse part, using toolName (not toolCallId) as the name Gemini attributes by", () => {
     const mapped = mapMessagesToGemini([
-      { role: "tool_result", content: '{"caseId":"c1"}', toolCallId: "get_case" },
+      { role: "tool_result", content: '{"caseId":"c1"}', toolCallId: "get_case-0", toolName: "get_case" },
     ]);
     expect(mapped[0]).toEqual({
       role: "user",
@@ -29,9 +29,19 @@ describe("mapMessagesToGemini", () => {
   // are covered the same way -- without this, a tool_result could not be
   // attributed to its call.
   it("refuses a tool_result with no toolCallId rather than sending an unattributable block", () => {
-    expect(() => mapMessagesToGemini([{ role: "tool_result", content: "{}" }])).toThrow(
-      /toolCallId/,
-    );
+    expect(() =>
+      mapMessagesToGemini([{ role: "tool_result", content: "{}", toolName: "get_case" }]),
+    ).toThrow(/toolCallId/);
+  });
+
+  // MAJOR 1: toolCallId alone is not enough for Gemini -- it attributes by
+  // function name, and toolCallId is not the function name. Falling back to
+  // toolCallId here would silently reproduce the bug this guard exists to
+  // catch.
+  it("refuses a tool_result with no toolName rather than falling back to toolCallId", () => {
+    expect(() =>
+      mapMessagesToGemini([{ role: "tool_result", content: "{}", toolCallId: "get_case-0" }]),
+    ).toThrow(/toolName/);
   });
 });
 
@@ -63,6 +73,83 @@ describe("mapGeminiResponse", () => {
     expect(mapped.text).toBe("");
     expect(mapped.toolCalls).toEqual([]);
     expect(mapped.usage).toEqual({ inputTokens: 0, outputTokens: 0, cachedTokens: 0 });
+  });
+
+  it("prefers the vendor's own functionCall.id over a synthesised one when the vendor supplies it", () => {
+    const mapped = mapGeminiResponse({
+      candidates: [
+        { content: { parts: [{ functionCall: { id: "vendor-id-1", name: "get_case", args: { caseId: "c1" } } }] } },
+      ],
+    });
+    expect(mapped.toolCalls[0]?.toolCallId).toBe("vendor-id-1");
+  });
+
+  it("defaults functionCall.args to an empty object when the vendor omits it", () => {
+    const mapped = mapGeminiResponse({
+      candidates: [{ content: { parts: [{ functionCall: { name: "get_case" } }] } }],
+    });
+    expect(mapped.toolCalls[0]?.input).toEqual({});
+  });
+
+  it("skips a functionCall with no usable name rather than emitting a nameless tool call", () => {
+    const mapped = mapGeminiResponse({
+      candidates: [{ content: { parts: [{ functionCall: { args: { caseId: "c1" } } }] } }],
+    });
+    expect(mapped.toolCalls).toEqual([]);
+  });
+});
+
+// MAJOR 1: mapGeminiResponse and mapMessagesToGemini were never tested against
+// each other, which is exactly how a mismatched id/name convention hid. This
+// takes mapGeminiResponse's output, builds the tool_result AgentMessage the
+// way a provider-neutral loop would (toolCallId from the call, toolName from
+// the call), and asserts mapMessagesToGemini sends Gemini the declared
+// function name -- never the synthesised or vendor call id.
+describe("mapGeminiResponse -> mapMessagesToGemini round trip", () => {
+  it("round-trips to the declared function name when the vendor supplies its own functionCall.id", () => {
+    const geminiResponse = mapGeminiResponse({
+      candidates: [
+        { content: { parts: [{ functionCall: { id: "vendor-id-1", name: "get_case", args: { caseId: "c1" } } }] } },
+      ],
+    });
+    const toolCall = geminiResponse.toolCalls[0];
+    expect(toolCall).toBeDefined();
+    expect(toolCall?.toolCallId).toBe("vendor-id-1");
+
+    const roundTrippedRequest = mapMessagesToGemini([
+      {
+        role: "tool_result",
+        content: '{"status":"with RGS"}',
+        toolCallId: toolCall!.toolCallId,
+        toolName: toolCall!.toolName,
+      },
+    ]);
+    expect(roundTrippedRequest[0]).toEqual({
+      role: "user",
+      parts: [{ functionResponse: { name: "get_case", response: { result: '{"status":"with RGS"}' } } }],
+    });
+  });
+
+  it("round-trips to the declared function name via the positional fallback when the vendor omits functionCall.id", () => {
+    const geminiResponse = mapGeminiResponse({
+      candidates: [{ content: { parts: [{ functionCall: { name: "get_case", args: { caseId: "c1" } } }] } }],
+    });
+    const toolCall = geminiResponse.toolCalls[0];
+    expect(toolCall).toBeDefined();
+    expect(toolCall?.toolCallId).toBe("get_case-0");
+
+    const roundTrippedRequest = mapMessagesToGemini([
+      {
+        role: "tool_result",
+        content: '{"status":"with RGS"}',
+        toolCallId: toolCall!.toolCallId,
+        toolName: toolCall!.toolName,
+      },
+    ]);
+    expect(roundTrippedRequest[0]).toEqual({
+      role: "user",
+      parts: [{ functionResponse: { name: "get_case", response: { result: '{"status":"with RGS"}' } } }],
+    });
   });
 });
 
@@ -126,6 +213,33 @@ describe("GeminiLlmProvider", () => {
     });
     expect(JSON.parse(response.text)).toEqual({ status: "with RGS" });
     expect(response.toolCalls).toEqual([]);
+  });
+
+  // MAJOR 2 / ruling P14: responseSchema promises an empty toolCalls contract
+  // (ruling P9). A non-empty tools array riding alongside it would break that
+  // promise the moment a functionCall part came back, so the combination is
+  // refused before any request is built -- matching what
+  // anthropicProvider.test.ts asserts for the Anthropic adapter.
+  it("refuses a request that sets both responseSchema and tools", async () => {
+    const provider = new GeminiLlmProvider(
+      { providerName: "gemini", model: "gemini-2.5-flash", apiKey: "k" },
+      {
+        models: {
+          generateContent: async () => {
+            throw new Error("should not be called");
+          },
+        },
+      },
+    );
+
+    await expect(
+      provider.complete({
+        system: "s",
+        messages: [],
+        tools: [{ name: "get_case", description: "d", inputSchema: {} }],
+        responseSchema: { type: "object" },
+      }),
+    ).rejects.toThrow(/responseSchema.*tools|tools.*responseSchema/s);
   });
 
   // Controller notes §3 / attention item carried from the Task 1 review: the

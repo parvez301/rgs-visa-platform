@@ -144,4 +144,15 @@ describe("createLlmProvider", () => {
     expect(provider).toBeInstanceOf(AnthropicLlmProvider);
     expect((provider as AnthropicLlmProvider).thinkingMode).toBe("adaptive");
   });
+
+  // MINOR 4: the "gemini" branch had no coverage anywhere -- exercised here
+  // the same way the "anthropic" branch above is.
+  it("returns a Gemini provider whose name matches the configured one", () => {
+    const provider = createLlmProvider({
+      providerName: "gemini",
+      model: "gemini-2.5-flash",
+      apiKey: "k",
+    });
+    expect(provider.name).toBe("gemini");
+  });
 });
