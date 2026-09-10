@@ -79,7 +79,13 @@ export async function addLineItem(
   await recordCrmEvent(context, tenantId, caseId, "LINE_ITEM_ADDED", actorEmail, {
     lineItemCode: input.lineItemCode,
     quantity: input.quantity,
+    // The UNIT price -- matches the stored line's own amountInr field. See
+    // lineTotalInr below for what this line actually moved the case total by.
     amountInr: input.unitPriceInr,
+    // amountInr above is the unit price, so a quantity > 1 line makes a
+    // reader multiply to see what it did to the case total. Naming that
+    // product explicitly means an audit-trail reader never has to.
+    lineTotalInr: newLineItem.amountInr * newLineItem.quantity,
   });
   return updatedCase;
 }

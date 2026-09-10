@@ -80,7 +80,7 @@ describe("addLineItem", () => {
     expect(afterAdd.totalInr).toBe(6000);
   });
 
-  it("refuses a code that is not in the catalog", async () => {
+  it("refuses a code that is not in the catalog, as a 400 ApiError rather than a bare Error", async () => {
     const context = buildTestContext();
     const seededCase = await seedOneCase(context);
     await expect(
@@ -91,17 +91,40 @@ describe("addLineItem", () => {
         { lineItemCode: "MADE_UP", quantity: 1, unitPriceInr: 100 },
         ACTOR,
       ),
-    ).rejects.toThrow(/MADE_UP/);
+      // router.ts maps only ApiError subclasses, so the statusCode is what
+      // actually determines whether a route answers 400 or a bare-Error 500
+      // -- the message alone can't tell the two apart.
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining("MADE_UP") });
   });
 
-  it("records an auditable event naming the code and the amount", async () => {
+  it("rejects a quantity that fails LineItemSchema as a 400 ApiError, not an unhandled ZodError", async () => {
+    const context = buildTestContext();
+    const seededCase = await seedOneCase(context);
+
+    // quantity: 0 clears the catalog-membership check (VISA_SERVICE_FEE is
+    // real) and reaches the LineItemSchema.parse guard, where .int().positive()
+    // rejects it. An unwrapped ZodError here is not an ApiError, and
+    // router.ts maps only ApiError subclasses -- so this would otherwise
+    // surface as a bare 500 instead of a 400 naming the problem.
+    await expect(
+      addLineItem(
+        context,
+        TENANT_ID,
+        seededCase.caseId,
+        { lineItemCode: "VISA_SERVICE_FEE", quantity: 0, unitPriceInr: 5000 },
+        ACTOR,
+      ),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("records an auditable event naming the code, quantity, unit amount, and line total", async () => {
     const context = buildTestContext();
     const seededCase = await seedOneCase(context);
     await addLineItem(
       context,
       TENANT_ID,
       seededCase.caseId,
-      { lineItemCode: "VISA_SERVICE_FEE", quantity: 1, unitPriceInr: 5000 },
+      { lineItemCode: "VISA_SERVICE_FEE", quantity: 3, unitPriceInr: 1000 },
       ACTOR,
     );
 
@@ -109,9 +132,15 @@ describe("addLineItem", () => {
     const lineItemEvents = events.filter((event) => event.eventType === "LINE_ITEM_ADDED");
     expect(lineItemEvents).toHaveLength(1);
     expect(lineItemEvents[0]?.actorEmail).toBe(ACTOR);
+    // amountInr (unit price) and lineTotalInr (amountInr x quantity) are
+    // asserted as distinct values on purpose: a quantity-3 line at 1000 each
+    // moves the case total by 3000, and a reader of the event who sees only
+    // amountInr: 1000 would have to multiply to know that.
     expect(lineItemEvents[0]?.meta).toMatchObject({
       lineItemCode: "VISA_SERVICE_FEE",
-      amountInr: 5000,
+      quantity: 3,
+      amountInr: 1000,
+      lineTotalInr: 3000,
     });
   });
 
