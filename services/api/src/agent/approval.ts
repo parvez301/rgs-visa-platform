@@ -277,12 +277,25 @@ export async function applyApprovedChange(
   // Principle 3), but `proposal.input` is not pre-validated either --
   // `stageProposal` checks only `status` -- so both sources get the same
   // guarantee from one unconditional validation rather than only the edited
-  // one (Minor 2). A schema-violating input of either kind is refused with
-  // nothing written, never handed to `apply`.
+  // one (Minor 2, fix-round-1). A schema-violating input of either kind is
+  // refused with nothing written, never handed to `apply`. The message names
+  // which side was at fault -- "Edited input" vs. "Input" -- so a Task 11
+  // caller can tell whether it was the human's edit or the model's original
+  // proposal that failed (fix-round-2).
   const parsedInput = writeTool.inputSchema.safeParse(editedInput ?? proposal.input);
   if (!parsedInput.success) {
-    throw badRequest(`Input for proposal ${proposalId}: ${describeFirstZodIssue(parsedInput.error)}`);
+    const rejectedInputDescription = editedInput !== undefined ? "Edited input" : "Input";
+    throw badRequest(
+      `${rejectedInputDescription} for proposal ${proposalId}: ${describeFirstZodIssue(parsedInput.error)}`,
+    );
   }
+  // The value actually handed to `apply` -- always the validated/coerced
+  // parse, on either source, so `apply` never sees a schema-violating shape.
+  // What gets STORED on the approved row is a separate decision, below: the
+  // validated copy here has already been stripped of any key the tool's
+  // Zod schema does not declare (z.object's default "strip" mode), which is
+  // correct for a value about to be handed to a domain function that only
+  // reads its own declared fields, but wrong for an audit record.
   const effectiveInput = parsedInput.data as Record<string, unknown>;
 
   // Snapshotted before `apply` runs -- the "before" side of the deep compare
@@ -298,7 +311,15 @@ export async function applyApprovedChange(
   const decidedAt = context.now().toISOString();
   const approvedProposal: ProposedChange = {
     ...proposal,
-    input: effectiveInput,
+    // NOT `effectiveInput` unconditionally: on a non-edited approval that
+    // would silently replace the model's original proposal -- extras
+    // included -- with the Zod-stripped copy `apply` was called with (fix-
+    // round-2). This is the one subsystem whose entire purpose is recording
+    // what happened, so a non-edited approval keeps `proposal.input`
+    // byte-identical to what was staged; only a genuine human edit
+    // overwrites it, with the validated copy of what the human actually
+    // supplied.
+    input: editedInput !== undefined ? effectiveInput : proposal.input,
     status: "APPROVED",
     decidedBy: actorEmail,
     decidedAt,

@@ -98,10 +98,19 @@ function tableThatRefusesCaseWrites(context: TestContext, toolNameForMessage: st
 
 /**
  * One valid, minimal input per write tool, keyed by name rather than
- * enumerated as a list -- an exhaustive switch with NO default branch, so a
- * sixth write tool added to `WRITE_TOOLS` later fails this file to compile
- * until someone supplies its sample here too (the same trick the registry
- * property test itself relies on, applied to the test's own fixtures).
+ * enumerated as a list. `WriteToolName` is a hand-written union, not derived
+ * from `WRITE_TOOLS`, and both call sites reach it through an `as
+ * WriteToolName` cast -- so adding a sixth tool to `WRITE_TOOLS` does NOT
+ * fail this file to compile; `pnpm -r typecheck` stays clean either way
+ * (fix-round-2 correction). What actually happens is a runtime failure: the
+ * switch below has no `default`, so an unhandled name falls through and this
+ * function implicitly returns `undefined`, which then reaches a write tool's
+ * `execute` as its `input` and throws a genuine TypeError there -- a real net,
+ * just a later and noisier one than a compile error would be. Keeping this
+ * switch exhaustive over the CURRENT five names is still worth doing (it is
+ * what forces a fixture here whenever this file's own union is widened by
+ * hand), but it is not what catches a tool silently added only to
+ * `WRITE_TOOLS`.
  */
 type WriteToolName = "create_case" | "update_case" | "add_line_item" | "set_custody" | "set_billing";
 
@@ -140,17 +149,20 @@ function sampleInputFor(
 
 /**
  * The mutation-visibility half of the property test (fix-round-1 Major 1).
- * `sampleInputFor`'s twin: an equally exhaustive, no-`default` switch, so a
- * sixth write tool fails this file to compile until someone states what its
- * mutation looks like -- not merely that `apply` "resolved" or that a read
- * agrees with whatever `apply` returned, both of which a tool whose `apply`
- * only reads would also satisfy (this is exactly how the reviewer's
- * `probe_sixth` -- a read-only `apply` -- passed the property test outright
- * before this fix). Every assertion targets a value OFF the fixture's
+ * `sampleInputFor`'s twin: an equally exhaustive, no-`default` switch over
+ * the same hand-written `WriteToolName` union -- so, as with `sampleInputFor`
+ * above, a sixth tool added only to `WRITE_TOOLS` does not fail this file to
+ * compile (fix-round-2 correction); it falls through this switch with no
+ * assertion run at all. In practice that path is unreachable in a passing
+ * run: `sampleInputFor`'s own fall-through already throws first (see its
+ * comment above), so this function is never called with a name it doesn't
+ * recognize. Every assertion below targets a value OFF the fixture's
  * default, per the same rule Task 7's fix round established: `seedOneCase`
  * case is `billingStatus: "UNBILLED"`, `lineItems: []` / `totalInr: 0`,
  * `appointmentDate` unset, and applicant `A1`'s `custody` defaults to
- * `"NOT_HELD"` (`packages/shared/src/crm/schemas.ts:87`).
+ * `"NOT_HELD"` (`packages/shared/src/crm/schemas.ts:87`). This is what
+ * caught the reviewer's `probe_sixth` -- a read-only `apply` -- which the
+ * pre-fix-round-1 property test passed outright.
  */
 function expectMutationVisible(toolName: WriteToolName, storedCase: crm.CrmCase): void {
   switch (toolName) {
@@ -459,7 +471,11 @@ describe("applyApprovedChange", () => {
         caseId: seeded.caseId,
         billingStatus: "NOT_A_REAL_STATUS",
       }),
-    ).rejects.toMatchObject({ statusCode: 400 });
+      // fix-round-2: the message names which side was at fault -- an EDITED
+      // input's failure must say so, distinctly from the model's original
+      // input failing (covered by the next test), so a Task 11 caller can
+      // tell the human's own edit was what got rejected.
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining("Edited input for proposal") });
 
     // Major 2: "writes nothing" has to mean the CASE is untouched, not
     // merely that the proposal is still pending -- a real write inserted
@@ -471,6 +487,68 @@ describe("applyApprovedChange", () => {
     // And the proposal itself is unaffected: still PENDING, still approvable.
     const { proposals } = await listPendingProposals(context, TENANT_ID);
     expect(proposals.find((pending) => pending.proposalId === staged.proposalId)).toBeDefined();
+  });
+
+  // The other prose path (fix-round-2): a hand-rolled proposal, the same
+  // pattern the phantom-tool test above uses, with an input that fails
+  // set_billing's own schema and no edit supplied at approval time. The
+  // message must say "Input", not "Edited input" -- nobody edited anything,
+  // the model's own original proposal was the one Zod rejected.
+  it("refuses the model's own original input when it fails the tool's schema, distinctly from an edit failing", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    const proposal: ProposedChange = {
+      proposalId: "prop_bad_original",
+      toolName: "set_billing",
+      input: { caseId: seeded.caseId, billingStatus: "NOT_A_REAL_STATUS" },
+      summary: [{ field: "billingStatus", from: "UNBILLED", to: "NOT_A_REAL_STATUS" }],
+      caseId: seeded.caseId,
+      proposedBy: ACTOR,
+      proposedAt: context.now().toISOString(),
+      status: "PENDING",
+    };
+    await stageProposal(context, TENANT_ID, proposal);
+
+    const rejection = await applyApprovedChange(context, TENANT_ID, "prop_bad_original", ACTOR).catch(
+      (error: unknown) => error,
+    );
+    expect(rejection).toMatchObject({ statusCode: 400, message: expect.stringContaining("Input for proposal") });
+    expect((rejection as { message: string }).message).not.toContain("Edited input");
+  });
+
+  // fix-round-2: the guard that validates proposal.input before apply()
+  // (Minor 2, fix-round-1) must not become the thing that OVERWRITES the
+  // record with its own stripped copy. A model can legally attach a field a
+  // tool's schema doesn't declare -- Zod's default "strip" mode drops it
+  // from the validated value handed to `apply`, which is correct for the
+  // domain call, but wrong for an audit trail: at 8055851, a non-edited
+  // approval stored `proposal.input` verbatim, extras included.
+  it("leaves a non-edited approval's stored input byte-identical to what was staged, extras included", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    const proposal: ProposedChange = {
+      proposalId: "prop_with_extra_field",
+      toolName: "set_billing",
+      // `modelNote` is not a field set_billing's inputSchema declares --
+      // exactly the kind of extra a model might attach and a human never
+      // touched. It must survive on the record precisely because nobody
+      // edited it.
+      input: { caseId: seeded.caseId, billingStatus: "BILL_SENT", modelNote: "partner confirmed by phone" },
+      summary: [{ field: "billingStatus", from: "UNBILLED", to: "BILL_SENT" }],
+      caseId: seeded.caseId,
+      proposedBy: ACTOR,
+      proposedAt: context.now().toISOString(),
+      status: "PENDING",
+    };
+    const staged = await stageProposal(context, TENANT_ID, proposal);
+
+    await applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR);
+
+    const storedProposal = await context.table.get(
+      proposalPartitionKey(TENANT_ID, staged.proposalId),
+      PROPOSAL_SORT_KEY,
+    );
+    expect(storedProposal?.input).toEqual(proposal.input);
   });
 
   it("records PROPOSAL_APPROVED against the case's own event list for create_case, though caseId is unknown at stage time", async () => {
