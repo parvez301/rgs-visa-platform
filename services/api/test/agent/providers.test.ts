@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AnthropicLlmProvider } from "../../src/agent/providers/anthropic";
 import {
   llmProviderConfigFromEnvironment,
 } from "../../src/agent/providers/config";
@@ -59,6 +60,35 @@ describe("llmProviderConfigFromEnvironment", () => {
     expect(thrownMessage).not.toBe("");
     expect(thrownMessage).not.toContain("super-secret-key-value");
   });
+
+  // Ruling P7 (task 2, link 1 of 3: env -> config).
+  it("reads LLM_THINKING into thinkingMode when set to adaptive, and omits the field when absent", () => {
+    const configWithThinking = llmProviderConfigFromEnvironment({
+      LLM_PROVIDER: "anthropic",
+      LLM_MODEL: "claude-opus-5",
+      LLM_API_KEY: "k",
+      LLM_THINKING: "adaptive",
+    });
+    expect(configWithThinking.thinkingMode).toBe("adaptive");
+
+    const configWithoutThinking = llmProviderConfigFromEnvironment({
+      LLM_PROVIDER: "anthropic",
+      LLM_MODEL: "claude-opus-5",
+      LLM_API_KEY: "k",
+    });
+    expect("thinkingMode" in configWithoutThinking).toBe(false);
+  });
+
+  it("refuses an LLM_THINKING value other than adaptive, naming the variable and the allowed value", () => {
+    expect(() =>
+      llmProviderConfigFromEnvironment({
+        LLM_PROVIDER: "anthropic",
+        LLM_MODEL: "claude-opus-5",
+        LLM_API_KEY: "k",
+        LLM_THINKING: "hard",
+      }),
+    ).toThrow(/LLM_THINKING.*adaptive/s);
+  });
 });
 
 describe("FakeLlmProvider", () => {
@@ -101,5 +131,17 @@ describe("createLlmProvider", () => {
       apiKey: "k",
     });
     expect(provider.name).toBe("anthropic");
+  });
+
+  // Ruling P7 (task 2, link 2 of 3: config -> factory -> adapter).
+  it("threads thinkingMode from the config through to the Anthropic adapter", () => {
+    const provider = createLlmProvider({
+      providerName: "anthropic",
+      model: "claude-opus-5",
+      apiKey: "k",
+      thinkingMode: "adaptive",
+    });
+    expect(provider).toBeInstanceOf(AnthropicLlmProvider);
+    expect((provider as AnthropicLlmProvider).thinkingMode).toBe("adaptive");
   });
 });

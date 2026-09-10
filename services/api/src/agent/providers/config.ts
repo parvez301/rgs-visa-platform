@@ -1,5 +1,8 @@
 import { LLM_PROVIDER_NAMES, type LlmProviderConfig, type LlmProviderName } from "./types";
 
+const LLM_THINKING_MODES = ["adaptive"] as const;
+type LlmThinkingMode = (typeof LLM_THINKING_MODES)[number];
+
 function requireProviderName(rawValue: string | undefined, variableName: string): LlmProviderName {
   // The raw value is echoed back deliberately -- it is a provider name, never a
   // secret -- but nothing else from the environment is, and the API key in
@@ -14,6 +17,18 @@ function requireProviderName(rawValue: string | undefined, variableName: string)
     );
   }
   return matchedName;
+}
+
+function requireThinkingMode(rawValue: string, variableName: string): LlmThinkingMode {
+  // Same echo-back reasoning as requireProviderName above: a thinking-mode
+  // name is never a secret, so it is safe to fold into the thrown message.
+  const matchedMode = LLM_THINKING_MODES.find((candidate) => candidate === rawValue);
+  if (matchedMode === undefined) {
+    throw new Error(
+      `${variableName} must be one of: ${LLM_THINKING_MODES.join(", ")} (received "${rawValue}")`,
+    );
+  }
+  return matchedMode;
 }
 
 /**
@@ -42,10 +57,17 @@ export function llmProviderConfigFromEnvironment(
       ? undefined
       : requireProviderName(rawFallback, "LLM_FALLBACK_PROVIDER");
 
+  const rawThinkingMode = environment.LLM_THINKING;
+  const thinkingMode =
+    rawThinkingMode === undefined || rawThinkingMode === ""
+      ? undefined
+      : requireThinkingMode(rawThinkingMode, "LLM_THINKING");
+
   return {
     providerName,
     model,
     apiKey,
     ...(fallbackProviderName !== undefined ? { fallbackProviderName } : {}),
+    ...(thinkingMode !== undefined ? { thinkingMode } : {}),
   };
 }

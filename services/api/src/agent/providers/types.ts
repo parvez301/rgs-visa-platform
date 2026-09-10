@@ -57,4 +57,10 @@ export interface LlmProviderConfig {
   model: string;
   apiKey: string;
   fallbackProviderName?: LlmProviderName;
+  /**
+   * Anthropic-only. Absent by default: a 400 on every request beats a thinking
+   * block a model does not accept, and we cannot infer support from a model
+   * string alone (spec §7, task-2 ruling P7).
+   */
+  thinkingMode?: "adaptive";
 }
