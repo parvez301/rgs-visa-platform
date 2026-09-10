@@ -1104,25 +1104,6 @@ describe("runImport", () => {
     };
   }
 
-  /**
-   * Lets `allowedWriteCount` writes through, then fails every one after it --
-   * a run that dies part-way rather than at a nominated item.
-   */
-  function tableFailingAfterWrites(table: TableClient, allowedWriteCount: number): TableClient {
-    let writesSoFar = 0;
-    return {
-      get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
-      put: async (item) => {
-        writesSoFar += 1;
-        if (writesSoFar > allowedWriteCount) throw new Error("simulated write timeout");
-        return table.put(item);
-      },
-      delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
-      query: (partitionKey, options) => table.query(partitionKey, options),
-      queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
-    };
-  }
-
   /** Wraps a table so a GSI1 read returns nothing, as a lagging index does. */
   function tableWithLaggingGsi1(table: TableClient): TableClient {
     return {
@@ -1304,35 +1285,53 @@ describe("runImport", () => {
         passportNumber: `P${String(rowIndex).padStart(7, "0")}`,
       }),
     );
+    const firstFourRows = rows.slice(0, 4);
 
-    // Dies mid-import, at no particular boundary -- partway through some
-    // case's own multi-item write, which is the state that has no transaction
-    // protecting it.
-    const dyingContext = { ...context, table: tableFailingAfterWrites(context.table, 14) };
+    // A first run that finished: four completed reservations.
+    const finishedSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: firstFourRows });
+    expect(finishedSummary.casesCreated).toBe(4);
+
+    // A second run over all six that dies between a ref's reservation and its
+    // case -- the one window `writeCase` has no transaction across.
+    const dyingContext = {
+      ...context,
+      table: tableFailingPuts(context.table, (item) => item.SK === "META" && item.PK.includes("#CASE#")),
+    };
     await expect(
       runImport(dyingContext, "rgs", { ...baseInput, mappedRows: rows }),
     ).rejects.toThrow(/simulated write timeout/);
 
-    const refsAfterCrash = await storedCaseRefsInStatus(context, "CLOSED");
-    // Some work survived and some did not: that is the only interesting
-    // starting state, and a test that happened to crash before or after
-    // everything would prove nothing about resuming.
-    expect(refsAfterCrash.length).toBeGreaterThan(0);
-    expect(refsAfterCrash.length).toBeLessThan(rows.length);
+    // The state that leaves: four refs complete, one reserved and unwritten.
+    const unfinishedReservations = [];
+    for (const row of rows) {
+      const reservation = await readCaseRefReservation(context, "rgs", row.caseRef);
+      if (reservation !== undefined && reservation.completedAt === undefined) {
+        unfinishedReservations.push(reservation);
+      }
+    }
+    expect(unfinishedReservations).toHaveLength(1);
+    expect(await storedCaseRefsInStatus(context, "CLOSED")).toHaveLength(4);
 
     const resumedSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
 
-    // The two properties C1/C2 exist for, which are exactly the two properties
-    // "resumable checkpointing" was asking for: refs that COMPLETED are
-    // skipped, and refs that were reserved but never finished are re-written
-    // under their original caseId rather than under a new one.
-    expect(resumedSummary.casesSkippedAlreadyImported).toBeGreaterThan(0);
-    expect(resumedSummary.casesCreated + resumedSummary.casesSkippedAlreadyImported).toBe(rows.length);
+    // Completed refs skipped -- the checkpoint doing its job -- and the rest
+    // written.
+    expect(resumedSummary.casesSkippedAlreadyImported).toBe(4);
+    expect(resumedSummary.casesCreated).toBe(2);
+
+    // Repaired under the RESERVED caseId, not a fresh one. A fresh id is how a
+    // second case ends up under one REF NO., which is C1's failure and the
+    // reason a checkpoint has to name the id as well as the ref.
+    for (const unfinishedReservation of unfinishedReservations) {
+      const repairedCase = await readCase(context, "rgs", unfinishedReservation.caseId);
+      expect({ caseRef: repairedCase?.caseRef, caseId: repairedCase?.caseId }).toEqual({
+        caseRef: unfinishedReservation.caseRef,
+        caseId: unfinishedReservation.caseId,
+      });
+    }
 
     const refsAfterResume = await storedCaseRefsInStatus(context, "CLOSED");
     expect(refsAfterResume.sort()).toEqual(rows.map((row) => row.caseRef).sort());
-    // One case per ref. A duplicate would show up here as a longer array with
-    // a repeated ref, which is the failure C1 was written about.
     expect(new Set(refsAfterResume).size).toBe(rows.length);
 
     // And the resumed run is itself a fixed point.
