@@ -330,6 +330,33 @@ describe("runImportCli", () => {
     expect(storedItems.length).toBeGreaterThan(0);
   });
 
+  it("DOES claim a case may have been written when the very first put times out", async () => {
+    const context = buildTestContext();
+    // allowedWriteCount 0: the FIRST put throws, before any write has ever
+    // succeeded. The existing "died after writing some" test above lets five
+    // writes land first, so `anyWriteAttempted` is already true no matter
+    // which side of the call the flag is set on -- it cannot tell "before"
+    // from "after" apart. This one can: only "before" observes a write that
+    // never got a chance to complete.
+    const failingFromTheFirstWriteContext = withTable(
+      context,
+      tableFailingAfterWrites(context.table, 0),
+    );
+    const { dependencies, output } = buildDependencies({
+      buildContext: () => failingFromTheFirstWriteContext,
+      readWorkbookAt: async () => buildWorkbookExtract(1),
+    });
+
+    const cliResult = await runImportCli(["--workbook", "book.xlsx", "--commit"], dependencies);
+
+    expect(cliResult.exitCode).not.toBe(0);
+    // The timed-out put may well have landed on the table before the timeout
+    // was raised locally, so "we tried and do not know" must count as
+    // written -- the understating message here would be the dangerous lie.
+    expect(output.errors).toContain(PARTIAL_WRITE_ABORT_MESSAGE);
+    expect(output.errors).not.toContain(NO_WRITES_ABORT_MESSAGE);
+  });
+
   it("says nothing was written when a DRY run fails, whatever the cause", async () => {
     const { dependencies, output } = buildDependencies({
       readWorkbookAt: async () => {
