@@ -874,4 +874,144 @@ describe("runAgentTurn", () => {
     expect(toolResult?.content).toContain("Applied on your behalf");
     expect(toolResult?.content).not.toContain("Staged for human approval");
   });
+
+  // fix-round-3: the third arm of N1's classification -- the one that fires
+  // when the loop is least sure of itself -- had no test at all. The
+  // coordinator's own probe (routing this arm into `proposals`, exactly
+  // round 1's discredited behaviour) left the suite green, so this branch
+  // guaranteed nothing by test. Two distinct routes reach it, and both are
+  // pinned on message CONTENT, not merely on some message existing
+  // (Task 9's `forget` test already taught this branch that a test pinned
+  // by absence is worth much less).
+  it("reports indeterminate, naming the proposal, when the read-back itself fails after apply throws", async () => {
+    const baseContext = buildTestContext();
+    const seededCase = await seedOneCase(baseContext, "N1-INDET-01");
+    const context = await contextAtTrustLevel(
+      2,
+      [
+        {
+          text: "",
+          toolCalls: [
+            {
+              toolCallId: "c1",
+              toolName: "update_case",
+              input: { caseId: seededCase.caseId, processing: "EXPRESS" },
+            },
+          ],
+        },
+        { text: "done", toolCalls: [] },
+      ],
+      { context: baseContext },
+    );
+
+    // Every read of a proposal row fails from this point on -- both
+    // `applyApprovedChange`'s own internal read (which is what makes it
+    // throw in the first place) and the catch's own `getProposal`
+    // read-back. `stageProposal` itself still succeeds: it only ever
+    // `put`s.
+    const realTableGet = context.table.get.bind(context.table);
+    context.table.get = async (partitionKey, sortKey, options) => {
+      if (partitionKey.includes("#PROPOSAL#")) {
+        throw new Error("proposal read blew up");
+      }
+      return realTableGet(partitionKey, sortKey, options);
+    };
+    // Captured from the stage write itself -- the one call in this turn
+    // that still succeeds -- so the assertion below is pinned to the real,
+    // dynamically-minted id rather than a guess at its shape.
+    let stagedProposalId: string | undefined;
+    const realTablePut = context.table.put.bind(context.table);
+    context.table.put = async (item) => {
+      if (typeof item.proposalId === "string") stagedProposalId = item.proposalId;
+      return realTablePut(item);
+    };
+
+    const result = await runAgentTurn(context, TENANT_ID, {
+      userMessage: "switch to express",
+      conversation: [],
+      actorEmail: ACTOR,
+    });
+
+    expect(stagedProposalId).toBeDefined();
+    // All three together, because this defect is precisely a set of them
+    // disagreeing: neither bucket claims it, and the model is told the
+    // truth about not knowing rather than one of the two false certainties
+    // N1 removed.
+    expect({
+      returnedProposals: result.proposals.length,
+      returnedApplied: result.appliedChanges.length,
+    }).toEqual({ returnedProposals: 0, returnedApplied: 0 });
+
+    const secondRequestMessages = context.llm.receivedRequests[1]?.messages ?? [];
+    const toolResult = secondRequestMessages.find((message) => message.role === "tool_result");
+    expect(toolResult?.content).toContain(stagedProposalId);
+    expect(toolResult?.content).toContain("could not confirm whether it went through");
+    expect(toolResult?.content).toContain("rather than assuming either way");
+  });
+
+  it("reports indeterminate, naming the proposal, when the row is neither PENDING nor APPROVED", async () => {
+    const baseContext = buildTestContext();
+    const seededCase = await seedOneCase(baseContext, "N1-INDET-02");
+    const context = await contextAtTrustLevel(
+      2,
+      [
+        {
+          text: "",
+          toolCalls: [
+            {
+              toolCallId: "c1",
+              toolName: "update_case",
+              input: { caseId: seededCase.caseId, processing: "EXPRESS" },
+            },
+          ],
+        },
+        { text: "done", toolCalls: [] },
+      ],
+      { context: baseContext },
+    );
+
+    // Simulates a race this loop cannot see: by the time the ladder's own
+    // apply call reads back the row it just staged, something else has
+    // already discarded it. `applyApprovedChange`'s own PENDING check
+    // throws first (the row genuinely is not PENDING any more), and the
+    // status the catch's read-back observes is neither PENDING nor
+    // APPROVED -- the exact state the branch this test pins exists for.
+    // GSI1PK is deliberately left saying PENDING (this test never queries
+    // it) -- only the `status` field itself, the one the catch actually
+    // reads, is changed.
+    let stagedProposalId: string | undefined;
+    const realTablePut = context.table.put.bind(context.table);
+    context.table.put = async (item) => {
+      if (item.PK.includes("#PROPOSAL#") && item.status === "PENDING") {
+        stagedProposalId = item.proposalId as string;
+        await realTablePut({
+          ...item,
+          status: "DISCARDED",
+          decidedBy: "someone-else@rgs.local",
+          decidedAt: context.now().toISOString(),
+          discardReason: "raced by another approver",
+        });
+        return;
+      }
+      return realTablePut(item);
+    };
+
+    const result = await runAgentTurn(context, TENANT_ID, {
+      userMessage: "switch to express",
+      conversation: [],
+      actorEmail: ACTOR,
+    });
+
+    expect(stagedProposalId).toBeDefined();
+    expect({
+      returnedProposals: result.proposals.length,
+      returnedApplied: result.appliedChanges.length,
+    }).toEqual({ returnedProposals: 0, returnedApplied: 0 });
+
+    const secondRequestMessages = context.llm.receivedRequests[1]?.messages ?? [];
+    const toolResult = secondRequestMessages.find((message) => message.role === "tool_result");
+    expect(toolResult?.content).toContain(stagedProposalId);
+    expect(toolResult?.content).toContain("could not confirm whether it went through");
+    expect(toolResult?.content).toContain("rather than assuming either way");
+  });
 });
