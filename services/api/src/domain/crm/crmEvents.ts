@@ -8,7 +8,16 @@ export type CrmEventType =
   | "CUSTODY_CHANGED"
   | "BILLING_CHANGED"
   | "CASE_UPDATED"
-  | "APPLICANT_OUTCOME_CHANGED";
+  | "APPLICANT_OUTCOME_CHANGED"
+  | "LINE_ITEM_ADDED"
+  // Widening this union is safe here: the admin activity feed switches on
+  // ActivityEventType (packages/shared/src/statuses.ts), a different union,
+  // and a CrmEvent never reaches it (task-8-controller-notes.md P36).
+  | "PROPOSAL_APPROVED"
+  | "PROPOSAL_DISCARDED"
+  // Recorded by rememberMemory when the memory cites a sourceCaseId (fix
+  // round 1, Minor 5) -- same safety argument as PROPOSAL_APPROVED above.
+  | "MEMORY_REMEMBERED";
 
 export interface CrmEvent {
   eventId: string;

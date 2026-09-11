@@ -116,6 +116,40 @@ describe.skipIf(!workbookIsPresent)(
       expect(populated((row) => row.trackingNumber)).toBe(2657);
     }, 30_000);
 
+    // --- task-12-fix-2-brief.md A1/D2: adding MYANNMAR/LEXUMBOURG to the
+    // shared country map (packages/shared/src/crm/normalize/country.ts) was
+    // made for the intake eval, but it also changed what THIS importer does
+    // with real rows -- and this suite stayed 165/165 green with the map
+    // entries removed, so nothing here noticed. Neither correct spelling
+    // ("Myanmar", "Luxembourg") appears anywhere in the sheet; these 20 rows
+    // only resolve because the map now carries the misspelling itself. Pins
+    // the delta so the next lookup-table edit cannot move it silently. -----
+    it("resolves the Myannmar/Lexumbourg misspellings, and the second-order grouping effect that rode in with them (task-12-fix-2-brief.md A1/D2)", async () => {
+      const extract = await readWorkbook(WORKBOOK_PATH);
+      const mappedRows = extract.miniCrmRows.map(mapRow);
+
+      const resolvedToMyanmar = mappedRows.filter((row) => row.caseDraft.destinationCountry === "MM");
+      const resolvedToLuxembourg = mappedRows.filter((row) => row.caseDraft.destinationCountry === "LU");
+      expect(resolvedToMyanmar.length).toBe(13);
+      expect(resolvedToLuxembourg.length).toBe(7);
+
+      const unmappedCountryItems = mappedRows.flatMap((row) =>
+        row.reviewItems.filter((reviewItem) => reviewItem.reason === "UNMAPPED_COUNTRY"),
+      );
+      expect(unmappedCountryItems.length).toBe(225); // was 245 before the map change
+
+      // groupCases.ts skips any row with no destinationCountry, so giving
+      // these 20 rows a destination made 13 of them eligible for grouping.
+      // Four new PROPOSED_GROUP candidates followed, all under partner
+      // "ONE 97" -- a real change to what a human is asked to approve, not a
+      // scoring artefact, and exactly the kind of consequence a
+      // packages/shared edit can produce in a sibling service without
+      // touching that service's own code at all.
+      const proposedGroups = proposeGroups(mappedRows);
+      expect(proposedGroups.length).toBe(1480); // was 1476 before the map change
+      expect(proposedGroups.filter((group) => group.partnerName === "ONE 97").length).toBe(41); // was 37
+    }, 30_000);
+
     // --- The plan's central promise: the sheet is LIVE, so a re-run is the
     // expected case, not the exception. A full 7,156-row run must be exactly
     // as idempotent as the small fixture-backed cases in importRun.test.ts --

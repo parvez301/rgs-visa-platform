@@ -4,7 +4,7 @@ import type { AppContext } from "../../lib/context";
 import type { TableItem } from "../../lib/db";
 import { badRequest, conflict, corruptRecord, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
-import { collectReadableRecords } from "../../lib/storedRecords";
+import { collectReadableRecords, describeFirstZodIssue } from "../../lib/storedRecords";
 import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
 import {
@@ -108,6 +108,110 @@ export async function getCase(
   caseId: string,
 ): Promise<crm.CrmCase> {
   return readCaseOrThrow(context, tenantId, caseId);
+}
+
+/**
+ * The fields `updateCaseDetails` is allowed to touch. `caseStatus`, per-
+ * applicant `custody`, per-applicant `outcome` and `billingStatus` each have a
+ * state machine and their own mutator (`changeCaseStatus`,
+ * `changeApplicantCustody`, `changeApplicantOutcome`, `changeBillingStatus`
+ * below) -- a general "update any field" route would let a caller walk around
+ * every one of them.
+ */
+export interface UpdateCaseDetailsInput {
+  visaType?: crm.VisaType;
+  entryType?: crm.EntryType;
+  processing?: crm.ProcessingSpeed;
+  submissionDate?: string;
+  appointmentDate?: string;
+  expectedCollectionDate?: string;
+}
+
+/**
+ * Updates the six plain-field, non-state-machine details on a case.
+ *
+ * The update is built one named field at a time -- never by spreading `input`
+ * onto the case and deleting the axes it must not touch -- because a
+ * delete-list is one forgotten key away from letting `caseStatus` or
+ * `billingStatus` move through this route. Picking the six names explicitly
+ * means a caller cannot smuggle either axis through no matter what extra
+ * properties its input object carries.
+ */
+export async function updateCaseDetails(
+  context: AppContext,
+  tenantId: string,
+  caseId: string,
+  input: UpdateCaseDetailsInput,
+  actorEmail: string,
+): Promise<crm.CrmCase> {
+  const currentCase = await readCaseOrThrow(context, tenantId, caseId);
+
+  // Named for the audit trail: a field that actually MOVED, not merely one the
+  // caller supplied. Re-supplying a value the case already has must not read
+  // back as a change nobody made.
+  const changedFieldNames: string[] = [];
+  if (input.visaType !== undefined && input.visaType !== currentCase.visaType) {
+    changedFieldNames.push("visaType");
+  }
+  if (input.entryType !== undefined && input.entryType !== currentCase.entryType) {
+    changedFieldNames.push("entryType");
+  }
+  if (input.processing !== undefined && input.processing !== currentCase.processing) {
+    changedFieldNames.push("processing");
+  }
+  if (input.submissionDate !== undefined && input.submissionDate !== currentCase.submissionDate) {
+    changedFieldNames.push("submissionDate");
+  }
+  if (input.appointmentDate !== undefined && input.appointmentDate !== currentCase.appointmentDate) {
+    changedFieldNames.push("appointmentDate");
+  }
+  if (
+    input.expectedCollectionDate !== undefined &&
+    input.expectedCollectionDate !== currentCase.expectedCollectionDate
+  ) {
+    changedFieldNames.push("expectedCollectionDate");
+  }
+
+  // Nothing moved -- an empty input, or every supplied value already matches
+  // what's stored. Returning the case as-is, before the parse/write/event
+  // below, is what keeps a no-op call from bumping updatedAt and recording a
+  // CASE_UPDATED event that names no real change.
+  if (changedFieldNames.length === 0) {
+    return currentCase;
+  }
+
+  // Unwrapped, a ZodError here is not an ApiError, and router.ts maps only
+  // ApiError subclasses -- so a caller-supplied date that fails CrmCaseSchema's
+  // isoDate check (or a visaType offered to a non-VISA case) would answer a
+  // bare 500 instead of a 400 naming the problem. Same guard as createCase.
+  let updatedCase: crm.CrmCase;
+  try {
+    updatedCase = crm.CrmCaseSchema.parse({
+      ...currentCase,
+      ...(input.visaType !== undefined ? { visaType: input.visaType } : {}),
+      ...(input.entryType !== undefined ? { entryType: input.entryType } : {}),
+      ...(input.processing !== undefined ? { processing: input.processing } : {}),
+      ...(input.submissionDate !== undefined ? { submissionDate: input.submissionDate } : {}),
+      ...(input.appointmentDate !== undefined ? { appointmentDate: input.appointmentDate } : {}),
+      ...(input.expectedCollectionDate !== undefined
+        ? { expectedCollectionDate: input.expectedCollectionDate }
+        : {}),
+      updatedAt: context.now().toISOString(),
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw badRequest(describeFirstZodIssue(error));
+    }
+    throw error;
+  }
+
+  await writeCase(context, updatedCase);
+  await recordCrmEvent(context, tenantId, caseId, "CASE_UPDATED", actorEmail, {
+    // meta values are scalars only (crmEvents.ts) -- a joined string is how an
+    // array of changed field names travels through that constraint.
+    changedFields: changedFieldNames.join(","),
+  });
+  return updatedCase;
 }
 
 export async function changeCaseStatus(
@@ -388,6 +492,76 @@ export async function listCaseRefsByStatus(
     );
   }
   return { storedCaseRefs, unreadableCaseIds };
+}
+
+/**
+ * The fields a "how many cases" question can group and count by. Every one of
+ * these lives directly on the case META item -- `writeCase` (`caseStore.ts`)
+ * spreads `...caseBody` onto it -- so counting never needs a case reassembled.
+ */
+export const CASE_COUNT_GROUP_BY_FIELDS = [
+  "caseStatus",
+  "destinationCountry",
+  "billingStatus",
+  "partnerId",
+] as const;
+export type CaseCountGroupByField = (typeof CASE_COUNT_GROUP_BY_FIELDS)[number];
+
+/**
+ * A count-by-field result plus the ids of the rows it could not count. Named
+ * rather than dropped in silence, for the same reason `CaseListing` names its
+ * unreadable rows: a case missing from a count an owner will act on is worse
+ * than one missing from a list, because nothing about a bare number signals
+ * that some cases never made it into it.
+ */
+export interface CaseCountByField {
+  counts: Record<string, number>;
+  total: number;
+  uncountedCaseIds: string[];
+}
+
+/**
+ * Counts every case in the tenant by one field, grouped by that field's
+ * value, without reassembling a single case.
+ *
+ * `listCasesByStatus` cannot answer a "how many" question cheaply: it hands
+ * every META item to `readCase`, which costs one strongly-consistent GetItem
+ * plus one strongly-consistent Query per case -- on the real ledger, 7,156
+ * partition reads to answer a question the GSI1 query per status already
+ * answered on its own. Every field this counts by is already sitting on the
+ * META item that query returns, so the GSI1 query -- one per `CASE_STATUSES`
+ * entry -- is the entire cost. No `context.table.get` or `context.table.query`
+ * (the base-table, partition-scoped reads) ever runs.
+ *
+ * A META item whose counted field is missing or not a string is named in
+ * `uncountedCaseIds` rather than counted under a bogus `"undefined"` key or
+ * silently skipped -- the same rule `listCaseRefsByStatus` follows for a
+ * missing `caseRef`.
+ */
+export async function countCasesByField(
+  context: AppContext,
+  tenantId: string,
+  groupByField: CaseCountGroupByField,
+): Promise<CaseCountByField> {
+  const counts: Record<string, number> = {};
+  const uncountedCaseIds: string[] = [];
+  let total = 0;
+
+  for (const caseStatus of crm.CASE_STATUSES) {
+    const metaItems = await context.table.queryGsi("GSI1", caseStatusGsi1Pk(tenantId, caseStatus));
+    for (const metaItem of metaItems) {
+      if (metaItem["SK"] !== META_SORT_KEY) continue;
+      const groupFieldValue = metaItem[groupByField];
+      if (typeof groupFieldValue === "string" && groupFieldValue.length > 0) {
+        counts[groupFieldValue] = (counts[groupFieldValue] ?? 0) + 1;
+        total += 1;
+        continue;
+      }
+      uncountedCaseIds.push(caseIdOfMetaItem(metaItem) ?? metaItem.PK);
+    }
+  }
+
+  return { counts, total, uncountedCaseIds };
 }
 
 export async function listCasesByPartner(

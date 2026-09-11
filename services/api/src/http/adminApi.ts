@@ -25,6 +25,7 @@ import {
   upsertNotice,
 } from "../domain/notices";
 import { Router, parseBody, parseQueryParam, type RequestContext } from "./router";
+import { registerAgentRoutes } from "./agentApi";
 import { registerCrmRoutes } from "./crmApi";
 
 const TransitionSchema = z.object({
@@ -196,5 +197,5 @@ export function buildAdminRouter(context: AppContext): Router {
       const seededCount = await seedCountryConfig(context);
       return { seededCount };
     });
-  return registerCrmRoutes(adminRouter, context);
+  return registerAgentRoutes(registerCrmRoutes(adminRouter, context), context);
 }

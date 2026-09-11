@@ -70,6 +70,10 @@ export type CrmTraveller = z.infer<typeof CrmTravellerSchema>;
 export const LineItemSchema = z.object({
   code: z.string().min(1),
   label: z.string().min(1),
+  // The UNIT price, not a line total -- CrmCase.totalInr is the sum, across
+  // every line item, of amountInr × quantity. A stored per-line total sitting
+  // next to a quantity is redundant and the two can disagree; a unit price
+  // cannot disagree with itself.
   amountInr: z.number().int().nonnegative(),
   quantity: z.number().int().positive().default(1),
   kind: z.enum(LINE_ITEM_KINDS),
@@ -155,6 +159,13 @@ export const CrmMemorySchema = z
     sourceCaseId: z.string().optional(),
     createdBy: z.enum(["agent", "human"]),
     createdAt: isoDateTime,
+    // Derived from the admin token's `email` claim, which is not guaranteed —
+    // the API defaults it away when absent rather than storing an empty
+    // string. Mirrors CrmCaseSchema.createdByEmail above exactly, including
+    // its reason. NOT what `createdBy` records: `createdBy` is "agent" |
+    // "human" (what kind of author), this is who -- keeping the two apart is
+    // what lets the refinement below key off `createdBy` alone.
+    createdByEmail: z.string().min(1).optional(),
   })
   .refine(
     (memory) => memory.createdBy !== "agent" || memory.sourceCaseId !== undefined,
@@ -171,5 +182,11 @@ export const CrmUserPrefsSchema = z.object({
   trustLevel: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(0),
   autoApplyOptIn: z.boolean().default(false),
   defaultFilters: z.record(z.string(), z.string()).default({}),
+  // Added for the agent trust ladder (task-10-controller-notes.md §9): how
+  // many staged proposals this user has approved with no edit, one signal a
+  // future screen can use to PROPOSE advancing trustLevel. Counting alone
+  // never moves trustLevel or autoApplyOptIn -- advancement is opt-in, never
+  // silent (task-10-controller-notes.md §6).
+  confirmedWithoutEditCount: z.number().int().nonnegative().default(0),
 });
 export type CrmUserPrefs = z.infer<typeof CrmUserPrefsSchema>;

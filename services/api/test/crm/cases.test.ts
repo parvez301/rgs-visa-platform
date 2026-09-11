@@ -16,6 +16,7 @@ import {
   changeApplicantOutcome,
   changeBillingStatus,
   changeCaseStatus,
+  countCasesByField,
   createCase,
   getCase,
   listCaseRefsByStatus,
@@ -928,5 +929,89 @@ describe("listCaseRefsByStatus", () => {
     const listed = await listCaseRefsByStatus(context, "rgs", "NEW", 1000);
     expect(listed.storedCaseRefs).toEqual([]);
     expect(listed.unreadableCaseIds).toEqual(["case_no_ref"]);
+  });
+});
+
+describe("countCasesByField", () => {
+  it("counts cases by caseStatus without reassembling any of them", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    await seedCase(context, partnerId, "31378");
+    const thirdCase = await seedCase(context, partnerId, "31379");
+    await changeCaseStatus(context, "rgs", thirdCase.caseId, "IN_PROGRESS", "ops@rgs.test");
+
+    const counted = await countCasesByField(context, "rgs", "caseStatus");
+    expect(counted.counts).toEqual({ NEW: 2, IN_PROGRESS: 1 });
+    expect(counted.total).toBe(3);
+    expect(counted.uncountedCaseIds).toEqual([]);
+  });
+
+  it("counts by destinationCountry, billingStatus and partnerId too", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377"); // seedCase's destinationCountry is BH
+
+    expect((await countCasesByField(context, "rgs", "destinationCountry")).counts).toEqual({ BH: 1 });
+    expect((await countCasesByField(context, "rgs", "billingStatus")).counts).toEqual({ UNBILLED: 1 });
+    expect((await countCasesByField(context, "rgs", "partnerId")).counts).toEqual({ [partnerId]: 1 });
+  });
+
+  it("names a case whose META item carries no value for the counted field, instead of dropping it or counting it as 'undefined'", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    // Same corruption shape as "names a META item that records no ref rather
+    // than dropping it" above: indexed under NEW, but the body carries no
+    // caseStatus for countCasesByField to read off it.
+    await context.table.put({
+      PK: casePartitionKey("rgs", "case_no_status"),
+      SK: "META",
+      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
+      GSI1SK: "2026-01-02T10:00:00.000Z",
+      tenantId: "rgs",
+      caseId: "case_no_status",
+    });
+
+    const counted = await countCasesByField(context, "rgs", "caseStatus");
+    expect(counted.counts).toEqual({ NEW: 1 });
+    expect(counted.total).toBe(1);
+    expect(counted.uncountedCaseIds).toEqual(["case_no_status"]);
+  });
+
+  it("counts every case in the tenant with zero base-table (partition) reads", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    await seedCase(context, partnerId, "31377");
+    await seedCase(context, partnerId, "31378");
+
+    // Same wrapping pattern as listCaseRefsByStatus's cost test above: `get`
+    // and `query` are the base-table, strongly-consistent operations readCase
+    // uses to reassemble a case out of its META item and applicant items.
+    // countCasesByField must never call either -- everything it needs is
+    // already on the META items the GSI1 query per status hands back.
+    let baseTableReadCount = 0;
+    const countingContext = {
+      ...context,
+      table: {
+        ...context.table,
+        get: (partitionKey: string, sortKey: string) => {
+          baseTableReadCount += 1;
+          return context.table.get(partitionKey, sortKey);
+        },
+        query: (partitionKey: string, options?: QueryOptions) => {
+          baseTableReadCount += 1;
+          return context.table.query(partitionKey, options);
+        },
+        put: (item: TableItem) => context.table.put(item),
+        delete: (partitionKey: string, sortKey: string) => context.table.delete(partitionKey, sortKey),
+        queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) =>
+          context.table.queryGsi(indexName, partitionKey, options),
+      },
+    };
+
+    const counted = await countCasesByField(countingContext, "rgs", "caseStatus");
+    expect(counted.total).toBe(2);
+    expect(baseTableReadCount).toBe(0);
   });
 });

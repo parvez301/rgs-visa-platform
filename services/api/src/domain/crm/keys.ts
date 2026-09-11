@@ -102,3 +102,76 @@ export function reviewItemPartitionKey(tenantId: string, reviewItemId: string): 
 export function reviewQueueGsi1Pk(tenantId: string, reviewStatus: string): string {
   return `TENANT#${tenantId}#REVIEW_STATUS#${reviewStatus}`;
 }
+
+/**
+ * A tenant-wide reference record, not a case: one checklist per destination
+ * country rather than per case, so every case bound for that country reads
+ * the same list of required documents.
+ */
+export function countryChecklistPartitionKey(tenantId: string, countryCode: string): string {
+  return `TENANT#${tenantId}#COUNTRY#${countryCode}`;
+}
+
+/**
+ * The sort key for a proposed change's own "the record itself" item. Reuses
+ * META_SORT_KEY rather than a second "META" literal, for the same reason
+ * REVIEW_ITEM_SORT_KEY does: proposals share the same storage decision as
+ * cases, partners, travellers and review items.
+ */
+export const PROPOSAL_SORT_KEY = META_SORT_KEY;
+
+export function proposalPartitionKey(tenantId: string, proposalId: string): string {
+  return `TENANT#${tenantId}#PROPOSAL#${proposalId}`;
+}
+
+export function proposalStatusGsi1Pk(tenantId: string, proposalStatus: string): string {
+  return `TENANT#${tenantId}#PROPOSAL_STATUS#${proposalStatus}`;
+}
+
+/**
+ * The partition every row of one memory scope lives in. One builder, not
+ * two: recall needs no secondary index (task-9-controller-notes.md §4.1.3)
+ * -- the partition key already IS the scope, so a single
+ * `context.table.query(memoryPartitionKey(tenantId, scope))` per requested
+ * scope reads exactly that scope's rows off the base table. `memoryKey`
+ * (caller-supplied and meaningful, never a generated id) is the sort key,
+ * used directly with no prefix, per spec §"Memory" / the design doc's key
+ * layout (docs/superpowers/specs/2026-09-09-rgs-crm-design.md:460-462).
+ */
+export function memoryPartitionKey(tenantId: string, scope: string): string {
+  return `TENANT#${tenantId}#CRM_MEMORY#${scope}`;
+}
+
+/**
+ * The three shapes a memory `scope` string takes (fix round 1, Minor 4):
+ * these are as much a piece of the key layout as `memoryPartitionKey` above
+ * -- the scope half of `TENANT#<t>#CRM_MEMORY#<scope>` -- so they live here,
+ * the one file allowed a CRM key literal, rather than in `memory.ts`.
+ * `memory.ts`'s `memoryScope`/`parseMemoryScope` import these; they stay
+ * domain logic and stay there -- this file owns the literals, not the
+ * semantics of building or parsing a composite scope.
+ */
+export const MEMORY_ORG_SCOPE = "ORG";
+export const MEMORY_PARTNER_SCOPE_PREFIX = "PARTNER#";
+export const MEMORY_USER_SCOPE_PREFIX = "USER#";
+
+/**
+ * The sort key for a CRM user's own trust-ladder preferences row (task-10
+ * brief: `TENANT#<t>#CRM_USER#<email>` / `PREFS`). A dedicated literal, not a
+ * reuse of META_SORT_KEY: unlike a case, partner or traveller, a prefs row is
+ * not "the record itself" for some other entity -- it is its own thing, one
+ * per (tenant, user), and giving it a distinct sort key keeps that legible
+ * rather than borrowing a name that means something else everywhere else it
+ * appears.
+ */
+export const CRM_USER_PREFS_SORT_KEY = "PREFS";
+
+/**
+ * The partition one CRM user's trust-ladder preferences row lives in
+ * (spec §7 / task-10-controller-notes.md §9). Keyed on email, not a minted
+ * id: a user's prefs row is looked up by who they are, never listed, so
+ * there is nothing for a generated id to do here.
+ */
+export function crmUserPrefsPartitionKey(tenantId: string, email: string): string {
+  return `TENANT#${tenantId}#CRM_USER#${email}`;
+}

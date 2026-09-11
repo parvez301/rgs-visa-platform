@@ -31,6 +31,25 @@ export class Router {
     return this;
   }
 
+  /**
+   * What this router actually has registered -- not a declaration of what
+   * was meant to be registered. `task-11-fix-2-brief.md` A1/M4: a test that
+   * enumerates a separate array a route table is *built from* can only ever
+   * prove things about that array; nothing stops a second, later call to
+   * `add` from registering a route that never touches the array at all, and
+   * such a route would be invisible to a test driven off it. `add` stays
+   * public and this router stays a plain mutable object -- the fix is not to
+   * lock the router down, it is to make it able to say, truthfully, what is
+   * actually on it, so a test can walk THAT instead of a stand-in for it.
+   * `segments` was always the source of truth for matching; this just
+   * reassembles it back into the same `pathPattern` string `add` was called
+   * with (every caller in this codebase passes a single leading "/" and
+   * single-"/"-separated segments, so the join is lossless).
+   */
+  get registeredRoutes(): { method: string; path: string }[] {
+    return this.routes.map((route) => ({ method: route.method, path: `/${route.segments.join("/")}` }));
+  }
+
   private match(
     method: string,
     path: string,
