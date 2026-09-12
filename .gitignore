@@ -16,3 +16,6 @@ packages/shared/src/CLAUDE.md
 
 # operational infra details — kept local, provided to maintainers out-of-band
 docs/staging-environment.md
+
+# Subagent-driven-development scratch (ledger, briefs, review packages)
+.superpowers/
