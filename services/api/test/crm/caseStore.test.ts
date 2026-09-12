@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildTestContext } from "../helpers";
 import { readCase, readCaseOrThrow, writeCase } from "../../src/domain/crm/caseStore";
+import { changeApplicantCustody } from "../../src/domain/crm/cases";
 import { CorruptRecordError } from "../../src/lib/errors";
-import { APPLICANT_SORT_KEY_PREFIX, casePartitionKey } from "../../src/domain/crm/keys";
+import {
+  APPLICANT_SORT_KEY_PREFIX,
+  META_SORT_KEY,
+  casePartitionKey,
+} from "../../src/domain/crm/keys";
 import type { crm } from "@rgs/shared";
 
 function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
@@ -259,5 +264,89 @@ describe("caseStore", () => {
     // Without 2-digit padding, APPLICANT#10 would sort before APPLICANT#09,
     // and loaded.applicants would be reordered, failing this assertion.
     expect(loaded!.applicants).toEqual(original.applicants);
+  });
+});
+
+describe("writeCase applicantSummary", () => {
+  it("puts a roll-up of every applicant's custody and outcome on the META item", async () => {
+    const context = buildTestContext();
+    const crmCase = buildCase({
+      applicants: [
+        { applicantRef: "A1", travellerId: "trav_1", custody: "WITH_RGS", outcome: "PENDING" },
+        { applicantRef: "A2", travellerId: "trav_2", custody: "AT_EMBASSY", outcome: "PENDING" },
+      ],
+    });
+
+    await writeCase(context, crmCase);
+
+    const metaItem = await context.table.get(
+      casePartitionKey(crmCase.tenantId, crmCase.caseId),
+      META_SORT_KEY,
+    );
+    expect(metaItem?.["applicantSummary"]).toEqual({
+      count: 2,
+      custody: { WITH_RGS: 1, AT_EMBASSY: 1 },
+      outcome: { PENDING: 2 },
+    });
+  });
+
+  it("moves the stored roll-up when one applicant's custody moves", async () => {
+    // The property that matters: not that writeCase can compute a summary
+    // once, but that no mutator can change an applicant without the stored
+    // summary following. changeApplicantCustody goes through writeCase like
+    // every other mutator, so this is the test that goes red if the
+    // computation is ever lifted out of it.
+    const context = buildTestContext();
+    const crmCase = buildCase({
+      applicants: [
+        { applicantRef: "A1", travellerId: "trav_1", custody: "WITH_RGS", outcome: "PENDING" },
+        { applicantRef: "A2", travellerId: "trav_2", custody: "WITH_RGS", outcome: "PENDING" },
+      ],
+    });
+    await writeCase(context, crmCase);
+
+    await changeApplicantCustody(
+      context,
+      crmCase.tenantId,
+      crmCase.caseId,
+      "A1",
+      "AT_EMBASSY",
+      "ops@rgs.test",
+    );
+
+    const metaItem = await context.table.get(
+      casePartitionKey(crmCase.tenantId, crmCase.caseId),
+      META_SORT_KEY,
+    );
+    expect(metaItem?.["applicantSummary"]).toEqual({
+      count: 2,
+      custody: { WITH_RGS: 1, AT_EMBASSY: 1 },
+      outcome: { PENDING: 2 },
+    });
+  });
+
+  it("drops a stale summary carried in on the case body rather than storing it", async () => {
+    // CrmCaseSchema strips unknown keys, so a CrmCase cannot legally carry
+    // applicantSummary -- but writeCase spreads ...caseBody onto the item, and
+    // a caller that hand-built the object could. The computed value must win.
+    const context = buildTestContext();
+    const crmCase = buildCase({
+      applicants: [{ applicantRef: "A1", travellerId: "trav_1", custody: "NOT_HELD", outcome: "PENDING" }],
+    });
+
+    await writeCase(context, {
+      ...crmCase,
+      applicantSummary: { count: 99, custody: { RETURNED: 99 }, outcome: {} },
+    } as typeof crmCase);
+
+    const metaItem = await context.table.get(
+      casePartitionKey(crmCase.tenantId, crmCase.caseId),
+      META_SORT_KEY,
+    );
+    expect(metaItem?.["applicantSummary"]).toEqual({
+      count: 1,
+      custody: { NOT_HELD: 1 },
+      outcome: { PENDING: 1 },
+    });
   });
 });

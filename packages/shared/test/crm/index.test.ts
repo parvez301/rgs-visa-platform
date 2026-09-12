@@ -11,6 +11,7 @@ import {
   normalizePartnerName,
   normalizeStatus,
   normalizeVisaType,
+  summariseApplicants,
 } from "../../src/crm";
 
 describe("crm barrel export", () => {
@@ -32,6 +33,14 @@ describe("crm barrel export", () => {
     expect(typeof CrmCaseSchema.parse).toBe("function");
     expect(LINE_ITEM_CATALOG.length).toBeGreaterThan(0);
     expect(WATCHDOG_RULE_IDS).toContain("custody_held");
+  });
+
+  it("exposes the applicant roll-up", () => {
+    expect(summariseApplicants([{ custody: "WITH_RGS", outcome: "PENDING" }])).toEqual({
+      count: 1,
+      custody: { WITH_RGS: 1 },
+      outcome: { PENDING: 1 },
+    });
   });
 });
 

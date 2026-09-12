@@ -29,6 +29,18 @@ export async function writeCase(context: AppContext, crmCase: crm.CrmCase): Prom
     GSI2PK: partnerCasesGsi2Pk(crmCase.tenantId, crmCase.partnerId),
     GSI2SK: crmCase.receivedDate,
     ...caseBody,
+    // AFTER the spread, deliberately: a caller that hand-built a case object
+    // carrying a stale applicantSummary must not be able to store it. The
+    // computed value is the only one that can reach the item.
+    //
+    // Computed here and nowhere else because here is the only place a case
+    // can reach storage -- every mutator in cases.ts reassembles the whole
+    // case and calls this function -- so there is no way to persist a case
+    // whose roll-up disagrees with its applicants. `readCase` never reads this
+    // attribute back: CrmCaseSchema strips unknown keys, so the domain object
+    // stays exactly what it was, and the Ledger projection (Plan 5 Task 3) is
+    // the only reader.
+    applicantSummary: crm.summariseApplicants(applicants),
   });
 
   for (const [applicantIndex, caseApplicant] of applicants.entries()) {
