@@ -184,14 +184,15 @@ describe("withWriteRetries", () => {
       queryGsiPage: async (
         indexName: "GSI1" | "GSI2" | "GSI3",
         partitionKey: string,
-        options?: PagedQueryOptions,
+        options: PagedQueryOptions,
       ) => {
-        pagedReads.push({ indexName, partitionKey, startKey: options?.startKey });
+        pagedReads.push({ indexName, partitionKey, startKey: options.startKey });
         return { items: [{ PK: "a", SK: "META" }], nextStartKey: { PK: "a", SK: "META" } };
       },
     } as unknown as TableClient);
 
     const page = await retryingTable.queryGsiPage("GSI1", "TENANT#rgs#CASE_STATUS#NEW", {
+      limit: 25,
       startKey: { PK: "z", SK: "META" },
     });
 

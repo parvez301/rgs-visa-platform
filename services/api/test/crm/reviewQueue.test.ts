@@ -328,7 +328,7 @@ describe("crm review queue", () => {
         queryGsiPage: (
           indexName: "GSI1" | "GSI2" | "GSI3",
           partitionKey: string,
-          options?: PagedQueryOptions,
+          options: PagedQueryOptions,
         ): Promise<QueryPage> => context.table.queryGsiPage(indexName, partitionKey, options),
       },
     };

@@ -1,7 +1,12 @@
 import { DynamoDBClient, type QueryCommandInput } from "@aws-sdk/client-dynamodb";
 import type { GetCommandInput } from "@aws-sdk/lib-dynamodb";
 import { describe, expect, it } from "vitest";
-import { DynamoTableClient, InMemoryTableClient, type TableItem } from "../src/lib/db";
+import {
+  DynamoTableClient,
+  InMemoryTableClient,
+  type TableItem,
+  type TableItemKey,
+} from "../src/lib/db";
 
 interface StubbedQueryPage {
   Items?: TableItem[];
@@ -40,6 +45,26 @@ function buildStubbedTableClient<CapturedInput = QueryCommandInput>(
 
 function buildItem(sortKey: string): TableItem {
   return { PK: "PARTITION#1", SK: sortKey };
+}
+
+const NEW_STATUS_PARTITION = "TENANT#rgs#CASE_STATUS#NEW";
+
+function caseIdsOf(items: TableItem[]): string[] {
+  return items.map((item) => String(item["caseId"]));
+}
+
+/**
+ * A case changes status. GSI1 partitions cases BY caseStatus, so the row does
+ * not disappear -- it moves to a different GSI1 partition, which from the
+ * reading partition's point of view is indistinguishable from a delete.
+ */
+async function moveCaseToAnotherStatusPartition(
+  tableClient: InMemoryTableClient,
+  caseId: string,
+): Promise<void> {
+  const storedCase = await tableClient.get(`TENANT#rgs#CASE#${caseId}`, "META");
+  if (storedCase === undefined) throw new Error(`no META item seeded for ${caseId}`);
+  await tableClient.put({ ...storedCase, GSI1PK: "TENANT#rgs#CASE_STATUS#IN_PROGRESS" });
 }
 
 describe("DynamoTableClient query paging", () => {
@@ -147,10 +172,32 @@ describe("InMemoryTableClient projection and paging", () => {
     return tableClient;
   }
 
+  /**
+   * Every row shares one GSI1SK, which a bulk import stamping one timestamp
+   * across a whole spreadsheet produces routinely. Written in an order that is
+   * deliberately NOT the key order: with the sort key tied for every row, an
+   * adapter that leaves ties in insertion order serves them in an order its own
+   * cursor comparison disagrees with, and rows go missing.
+   */
+  function buildClientWithTiedSortKeys(caseIdsInWriteOrder: readonly string[]): InMemoryTableClient {
+    const tableClient = new InMemoryTableClient();
+    for (const caseId of caseIdsInWriteOrder) {
+      void tableClient.put({
+        PK: `TENANT#rgs#CASE#${caseId}`,
+        SK: "META",
+        GSI1PK: NEW_STATUS_PARTITION,
+        GSI1SK: "2026-03-01T00:00:00.000Z",
+        caseId,
+      });
+    }
+    return tableClient;
+  }
+
   it("returns only the projected attributes", async () => {
     const tableClient = buildPopulatedClient(1);
 
     const page = await tableClient.queryGsiPage("GSI1", "TENANT#rgs#CASE_STATUS#NEW", {
+      limit: 1,
       projection: ["PK", "SK", "caseId", "caseRef"],
     });
 
@@ -208,6 +255,171 @@ describe("InMemoryTableClient projection and paging", () => {
     expect(firstPage.items.map((item) => item["caseId"])).toEqual(["case_005", "case_004"]);
     expect(secondPage.items.map((item) => item["caseId"])).toEqual(["case_003", "case_002"]);
   });
+
+  it("does not rewind when the cursor row leaves the partition between two pages", async () => {
+    const tableClient = buildPopulatedClient(6);
+
+    const firstPage = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, { limit: 3 });
+    expect(caseIdsOf(firstPage.items)).toEqual(["case_000", "case_001", "case_002"]);
+
+    await moveCaseToAnotherStatusPartition(tableClient, "case_002");
+
+    const secondPage = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, {
+      limit: 3,
+      startKey: firstPage.nextStartKey,
+    });
+
+    // Resuming by identity made "the cursor row is gone" (findIndex -> -1)
+    // identical to "start from the beginning" (-1 + 1 === 0), re-serving rows
+    // the caller already had. DynamoDB's ExclusiveStartKey resumes by position
+    // and never requires the cursor row to still exist.
+    expect(caseIdsOf(secondPage.items)).toEqual(["case_003", "case_004", "case_005"]);
+    const firstPageCaseIds = caseIdsOf(firstPage.items);
+    expect(caseIdsOf(secondPage.items).filter((caseId) => firstPageCaseIds.includes(caseId))).toEqual(
+      [],
+    );
+    const everyCaseIdRead = [...firstPageCaseIds, ...caseIdsOf(secondPage.items)];
+    expect(new Set(everyCaseIdRead).size).toBe(everyCaseIdRead.length);
+  });
+
+  it("does not rewind when the cursor row is deleted between two pages", async () => {
+    const tableClient = buildPopulatedClient(6);
+
+    const firstPage = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, { limit: 3 });
+    expect(caseIdsOf(firstPage.items)).toEqual(["case_000", "case_001", "case_002"]);
+
+    await tableClient.delete("TENANT#rgs#CASE#case_002", "META");
+
+    const secondPage = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, {
+      limit: 3,
+      startKey: firstPage.nextStartKey,
+    });
+
+    expect(caseIdsOf(secondPage.items)).toEqual(["case_003", "case_004", "case_005"]);
+    const firstPageCaseIds = caseIdsOf(firstPage.items);
+    expect(caseIdsOf(secondPage.items).filter((caseId) => firstPageCaseIds.includes(caseId))).toEqual(
+      [],
+    );
+    const everyCaseIdRead = [...firstPageCaseIds, ...caseIdsOf(secondPage.items)];
+    expect(new Set(everyCaseIdRead).size).toBe(everyCaseIdRead.length);
+  });
+
+  it("reports an exhausted partition for a cursor past the end, not a rewind", async () => {
+    const tableClient = buildPopulatedClient(4);
+
+    const wholePartition = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, {
+      limit: 4,
+    });
+    expect(wholePartition.nextStartKey).toBeUndefined();
+    const lastRow = wholePartition.items[wholePartition.items.length - 1];
+    const cursorAtTheEnd: TableItemKey = {
+      PK: lastRow!.PK,
+      SK: lastRow!.SK,
+      GSI1PK: lastRow!["GSI1PK"],
+      GSI1SK: lastRow!["GSI1SK"],
+    };
+
+    const pageFromTheEnd = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, {
+      limit: 4,
+      startKey: cursorAtTheEnd,
+    });
+    expect(pageFromTheEnd.items).toEqual([]);
+    expect(pageFromTheEnd.nextStartKey).toBeUndefined();
+
+    // And still exhausted once that last row leaves: -1 from the position
+    // search means "nothing after the cursor", which is the opposite of where
+    // the old `+ 1` sent it.
+    await moveCaseToAnotherStatusPartition(tableClient, "case_003");
+    const pageAfterTheRowLeft = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, {
+      limit: 4,
+      startKey: cursorAtTheEnd,
+    });
+    expect(pageAfterTheRowLeft.items).toEqual([]);
+    expect(pageAfterTheRowLeft.nextStartKey).toBeUndefined();
+  });
+
+  it("serves every row of a sort-key tie exactly once while paging across it", async () => {
+    const tableClient = buildClientWithTiedSortKeys([
+      "case_003",
+      "case_001",
+      "case_000",
+      "case_002",
+    ]);
+
+    const readCaseIds: string[] = [];
+    let cursor: TableItemKey | undefined;
+    for (let pageNumber = 1; pageNumber <= 8; pageNumber += 1) {
+      const page = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, {
+        limit: 1,
+        startKey: cursor,
+      });
+      readCaseIds.push(...caseIdsOf(page.items));
+      cursor = page.nextStartKey;
+      if (cursor === undefined) break;
+      // The row just served changes status. Every row here shares one GSI1SK,
+      // so a cursor that carried only the sort key could not tell the served
+      // rows from the unread ones -- which is why the position a cursor indexes
+      // has to include the base-table key.
+      if (pageNumber === 2) await moveCaseToAnotherStatusPartition(tableClient, "case_001");
+    }
+
+    expect(readCaseIds).toEqual(["case_000", "case_001", "case_002", "case_003"]);
+    expect(new Set(readCaseIds).size).toBe(readCaseIds.length);
+  });
+
+  it("hands back a cursor carrying the index key as well as the base-table key", async () => {
+    const tableClient = buildPopulatedClient(4);
+
+    const page = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, { limit: 2 });
+
+    // The shape DynamoDB hands back off a GSI query. Not cosmetic: resuming by
+    // position reads the index sort key straight off the cursor, so a double
+    // that omits it cannot be resumed the way the real thing is.
+    expect(page.nextStartKey).toEqual({
+      PK: "TENANT#rgs#CASE#case_001",
+      SK: "META",
+      GSI1PK: NEW_STATUS_PARTITION,
+      GSI1SK: "2026-03-01T00:00:01.000Z",
+    });
+  });
+
+  it("throws on a non-positive limit instead of reporting a live partition exhausted", async () => {
+    const tableClient = buildPopulatedClient(3);
+
+    // Paired with the DynamoTableClient test below, and the PAIR is the point:
+    // a guard on one adapter only is the seam, not the fix. `limit: 0` used to
+    // be an empty page with no cursor here -- a partition reported exhausted
+    // that is not -- and a ValidationException on the wire over there.
+    await expect(
+      tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, { limit: 0 }),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, { limit: 0 }),
+    ).rejects.toThrow("queryGsiPage needs a positive integer limit, got 0");
+  });
+
+  it("does not rewind on a backward scan when the cursor row leaves the partition", async () => {
+    const tableClient = buildPopulatedClient(6);
+
+    const firstPage = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, {
+      limit: 3,
+      scanForward: false,
+    });
+    expect(caseIdsOf(firstPage.items)).toEqual(["case_005", "case_004", "case_003"]);
+
+    await moveCaseToAnotherStatusPartition(tableClient, "case_003");
+
+    const secondPage = await tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, {
+      limit: 3,
+      scanForward: false,
+      startKey: firstPage.nextStartKey,
+    });
+
+    // The position comparison flips with the scan direction, so an inverted
+    // sign here reads as either a rewind to the newest row or an empty page.
+    expect(caseIdsOf(secondPage.items)).toEqual(["case_002", "case_001", "case_000"]);
+    expect(secondPage.nextStartKey).toBeUndefined();
+  });
 });
 
 describe("DynamoTableClient.queryGsiPage", () => {
@@ -215,6 +427,7 @@ describe("DynamoTableClient.queryGsiPage", () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([{ Items: [] }]);
 
     await tableClient.queryGsiPage("GSI1", "TENANT#rgs#CASE_STATUS#NEW", {
+      limit: 10,
       projection: ["PK", "caseStatus"],
     });
 
@@ -249,6 +462,7 @@ describe("DynamoTableClient.queryGsiPage", () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([{ Items: [] }]);
 
     await tableClient.queryGsiPage("GSI1", "TENANT#rgs#CASE_STATUS#NEW", {
+      limit: 10,
       startKey: { PK: "b", SK: "META" },
     });
 
@@ -261,5 +475,22 @@ describe("DynamoTableClient.queryGsiPage", () => {
     const page = await tableClient.queryGsiPage("GSI1", "TENANT#rgs#CASE_STATUS#NEW", { limit: 10 });
 
     expect(page.nextStartKey).toBeUndefined();
+  });
+
+  it("throws on a non-positive limit before any command reaches the wire", async () => {
+    const { tableClient, capturedInputs } = buildStubbedTableClient([{ Items: [] }]);
+
+    // The twin of the InMemoryTableClient test above, and the PAIR is the
+    // point: DynamoDB's Query rejects Limit < 1 with a ValidationException, so
+    // a guard on the double alone would leave the failure production-only.
+    await expect(
+      tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, { limit: 0 }),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      tableClient.queryGsiPage("GSI1", NEW_STATUS_PARTITION, { limit: 0 }),
+    ).rejects.toThrow("queryGsiPage needs a positive integer limit, got 0");
+    // It must throw BEFORE the wire, not after: a rejected send is a round trip
+    // and a 400 in CloudWatch either way.
+    expect(capturedInputs).toEqual([]);
   });
 });

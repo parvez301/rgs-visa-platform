@@ -51,6 +51,14 @@ export interface QueryPage {
 }
 
 export interface PagedQueryOptions extends QueryOptions {
+  /**
+   * Required, unlike `QueryOptions.limit`. A page read with no limit is a
+   * drain, and a drain is `queryGsi`'s job -- this method exists to stop
+   * early and say where to continue. Narrowing the inherited optional to
+   * required is legal and is what makes "forgot the limit" a compile error
+   * instead of a 7,156-row read.
+   */
+  limit: number;
   startKey?: TableItemKey;
 }
 
@@ -79,14 +87,16 @@ export interface TableClient {
   ): Promise<TableItem[]>;
   /**
    * One page of a GSI partition, resumable. The opposite contract to
-   * `queryGsi`, which drains: this fills up to `limit` and reports where to
-   * continue. Use it when a caller pages a partition across HTTP requests;
-   * use `queryGsi` when a truncated answer would be a wrong answer.
+   * `queryGsi`, which drains: this ALWAYS pages -- it fills up to the
+   * required `limit` and reports where to continue, and there is no calling
+   * convention that makes it read a whole partition. Use it when a caller
+   * pages a partition across HTTP requests; use `queryGsi` when a truncated
+   * answer would be a wrong answer.
    */
   queryGsiPage(
     indexName: "GSI1" | "GSI2" | "GSI3",
     partitionKey: string,
-    options?: PagedQueryOptions,
+    options: PagedQueryOptions,
   ): Promise<QueryPage>;
 }
 
@@ -206,6 +216,11 @@ export class DynamoTableClient implements TableClient {
    * hundred others are DynamoDB reserved words, and a raw name in a
    * ProjectionExpression is a ValidationException at runtime that no unit
    * test over the in-memory adapter would catch.
+   *
+   * NOT pure, despite the `build` in the name: it WRITES its placeholders
+   * into the `attributeNames` map it is handed, because those placeholders
+   * and the expression that references them have to reach the same command.
+   * Callers must pass the very map they are about to send.
    */
   private static buildProjection(
     projection: readonly string[] | undefined,
@@ -232,8 +247,16 @@ export class DynamoTableClient implements TableClient {
   async queryGsiPage(
     indexName: "GSI1" | "GSI2" | "GSI3",
     partitionKey: string,
-    options: PagedQueryOptions = {},
+    options: PagedQueryOptions,
   ): Promise<QueryPage> {
+    // Both adapters, identically: DynamoDB's Query rejects Limit < 1 with a
+    // ValidationException, and the in-memory adapter answered an empty page
+    // with no cursor -- reporting a partition exhausted that is not. A caller
+    // computing a page size (`pageSize - alreadyCollected`) can legitimately
+    // reach 0 and must stop looping rather than ask for nothing.
+    if (!Number.isInteger(options.limit) || options.limit < 1) {
+      throw new RangeError(`queryGsiPage needs a positive integer limit, got ${options.limit}`);
+    }
     const pkAttribute = `${indexName}PK`;
     const skAttribute = `${indexName}SK`;
     const hasSkPrefix = options.skPrefix !== undefined;
@@ -241,8 +264,7 @@ export class DynamoTableClient implements TableClient {
     let exclusiveStartKey: TableItemKey | undefined = options.startKey;
 
     do {
-      const remainingLimit =
-        options.limit === undefined ? undefined : options.limit - collectedItems.length;
+      const remainingLimit = options.limit - collectedItems.length;
       const attributeNames: Record<string, string> = { "#pk": pkAttribute };
       if (hasSkPrefix) attributeNames["#sk"] = skAttribute;
       const projectionExpression = DynamoTableClient.buildProjection(
@@ -272,10 +294,7 @@ export class DynamoTableClient implements TableClient {
       // caller is paging, and the unread remainder is what nextStartKey is
       // for. DynamoDB's own Limit means collectedItems can never overshoot,
       // so nothing is ever sliced off behind its own cursor.
-    } while (
-      exclusiveStartKey !== undefined &&
-      (options.limit === undefined || collectedItems.length < options.limit)
-    );
+    } while (exclusiveStartKey !== undefined && collectedItems.length < options.limit);
 
     return {
       items: collectedItems,
@@ -339,34 +358,68 @@ export class InMemoryTableClient implements TableClient {
   async queryGsiPage(
     indexName: "GSI1" | "GSI2" | "GSI3",
     partitionKey: string,
-    options: PagedQueryOptions = {},
+    options: PagedQueryOptions,
   ): Promise<QueryPage> {
+    // Both adapters, identically: DynamoDB's Query rejects Limit < 1 with a
+    // ValidationException, and the in-memory adapter answered an empty page
+    // with no cursor -- reporting a partition exhausted that is not. A caller
+    // computing a page size (`pageSize - alreadyCollected`) can legitimately
+    // reach 0 and must stop looping rather than ask for nothing.
+    if (!Number.isInteger(options.limit) || options.limit < 1) {
+      throw new RangeError(`queryGsiPage needs a positive integer limit, got ${options.limit}`);
+    }
     const pkAttribute = `${indexName}PK` as const;
     const skAttribute = `${indexName}SK` as const;
     // Ordered exactly as queryGsi would, and NOT limited yet: the cursor is a
-    // position in this order, so slicing before finding it would lose it.
+    // position in this order, so slicing before finding it would lose it. Read
+    // ascending always and reverse afterwards, so the total re-sort below runs
+    // on one known direction.
     const orderedItems = this.filterAndSort(
       (item) => item[pkAttribute] === partitionKey,
       (item) => String(item[skAttribute] ?? ""),
-      { ...options, limit: undefined, projection: undefined },
+      { ...options, limit: undefined, projection: undefined, scanForward: true },
     );
+    orderedItems.sort((leftItem, rightItem) =>
+      indexPositionOf(leftItem, skAttribute).localeCompare(indexPositionOf(rightItem, skAttribute)),
+    );
+    if (options.scanForward === false) orderedItems.reverse();
 
-    const resumeIndex =
-      options.startKey === undefined
+    // Resume by POSITION, not by identity. DynamoDB's ExclusiveStartKey does not
+    // require the cursor row to still exist, and on a GSI1 partition keyed by
+    // caseStatus a row leaving between two pages is the ordinary case. Matching
+    // on PK/SK and letting findIndex's -1 fall through to 0 rewound the page to
+    // the start of the partition and re-served rows the caller already had.
+    const cursorPosition =
+      options.startKey === undefined ? undefined : indexPositionOf(options.startKey, skAttribute);
+    const firstUnreadIndex =
+      cursorPosition === undefined
         ? 0
-        : orderedItems.findIndex(
-            (item) =>
-              item.PK === options.startKey!["PK"] && item.SK === options.startKey!["SK"],
-          ) + 1;
-    const pageSize = options.limit ?? orderedItems.length;
-    const pageItems = orderedItems.slice(resumeIndex, resumeIndex + pageSize);
+        : orderedItems.findIndex((item) => {
+            const comparison = indexPositionOf(item, skAttribute).localeCompare(cursorPosition);
+            return options.scanForward === false ? comparison < 0 : comparison > 0;
+          });
+    // -1 here means every remaining row is at or before the cursor: the
+    // partition is exhausted, which is the opposite of where the old `+ 1` sent
+    // it.
+    const resumeIndex = firstUnreadIndex === -1 ? orderedItems.length : firstUnreadIndex;
+    const pageItems = orderedItems.slice(resumeIndex, resumeIndex + options.limit);
     const lastItem = pageItems[pageItems.length - 1];
     const hasMore = resumeIndex + pageItems.length < orderedItems.length;
 
     return {
       items: pageItems.map((item) => projectItem(item, options.projection)),
+      // The same shape DynamoDB hands back off a GSI query: the base-table key
+      // AND the index key. Not cosmetic -- resuming by position (see above)
+      // reads the index sort key straight off the cursor.
       ...(hasMore && lastItem !== undefined
-        ? { nextStartKey: { PK: lastItem.PK, SK: lastItem.SK } }
+        ? {
+            nextStartKey: {
+              PK: lastItem.PK,
+              SK: lastItem.SK,
+              [pkAttribute]: lastItem[pkAttribute],
+              [skAttribute]: lastItem[skAttribute],
+            },
+          }
         : {}),
     };
   }
@@ -386,6 +439,24 @@ export class InMemoryTableClient implements TableClient {
     if (options.limit !== undefined) matches = matches.slice(0, options.limit);
     return matches.map((item) => projectItem(structuredClone(item), options.projection));
   }
+}
+
+/**
+ * A row's total position in a GSI partition: the index sort key first, then the
+ * base-table key, which is unique. A cursor is a position in this order, so the
+ * order has to be total -- two rows sharing a GSI sort key would otherwise swap
+ * between two reads and be served twice, or skipped. Joined on NUL, which sorts
+ * below every printable character, so a sort key that is a prefix of another
+ * cannot borrow the next field's ordering.
+ */
+function indexPositionOf(
+  itemOrKey: Record<string, unknown>,
+  indexSortKeyAttribute: string,
+): string {
+  const indexSortKey = String(itemOrKey[indexSortKeyAttribute] ?? "");
+  const basePartitionKey = String(itemOrKey["PK"] ?? "");
+  const baseSortKey = String(itemOrKey["SK"] ?? "");
+  return `${indexSortKey}\u0000${basePartitionKey}\u0000${baseSortKey}`;
 }
 
 /**
