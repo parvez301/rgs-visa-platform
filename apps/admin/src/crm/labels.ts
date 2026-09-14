@@ -92,9 +92,18 @@ export const VISA_TYPE_LABELS: Record<crm.VisaType, string> = {
  * signal that expanding is rarely needed. One value when every applicant
  * agrees; counts, commonest first, when they do not.
  *
- * `undefined` is a real and different answer: a case imported before the
- * roll-up existed has no summary, and "Not summarised" is the honest thing to
- * show. A zero would claim the case has no applicants.
+ * "Not summarised" deliberately covers two different inputs, not one:
+ * `counts === undefined` (a case imported before the roll-up existed, so it
+ * carries no summary at all) and a present-but-empty summary (every state's
+ * count is zero or absent). Both get the same honest answer because neither
+ * has anything truer to say -- a zero would claim the case has no
+ * applicants, which is not what either input means.
+ *
+ * The empty-but-present case is unreachable today: `CrmCaseSchema` requires
+ * at least one applicant, so a real case cannot summarise to zero states. If
+ * it ever shows up in practice, the bug is upstream of this function (in
+ * whatever produced the summary), not something this string should grow a
+ * second message to paper over.
  */
 export function describeCustodyRollUp(summary: crm.ApplicantSummary | undefined): string {
   return describeRollUp(summary?.custody, CUSTODY_LABELS);
