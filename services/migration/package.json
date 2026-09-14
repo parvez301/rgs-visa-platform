@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "import": "tsx src/cli.ts"
+    "import": "tsx src/cli.ts",
+    "backfill:summary": "tsx src/backfillCli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",

@@ -465,7 +465,15 @@ export async function listCaseRefsByStatus(
   context: AppContext,
   tenantId: string,
   caseStatus: crm.CaseStatus,
-  limit = 50,
+  // No default: `queryGsi` (via `runQuery`) drains the whole partition when
+  // `limit` is `undefined`, and `InMemoryTableClient` returns everything
+  // unsliced for the same input. A sentinel like Number.MAX_SAFE_INTEGER
+  // would instead reach DynamoDB's real `Limit` parameter, which rejects
+  // anything that large with a ValidationException -- a production-only
+  // failure no in-memory test would catch. The backfill sweep is the caller
+  // that needs the drain; every other caller already passes an explicit page
+  // size, so widening this changes no existing behaviour.
+  limit?: number,
 ): Promise<CaseRefListing> {
   const metaItems = await context.table.queryGsi(
     "GSI1",
