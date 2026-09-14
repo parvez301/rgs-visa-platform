@@ -1099,11 +1099,27 @@ describe("PUT /api/v1/admin/crm/cases/{caseId}", () => {
     const context = buildTestContext();
     await seedLedgerCase(context, "case_1", "NEW");
 
-    const { statusCode } = await call(buildRouter(context), "PUT", "/api/v1/admin/crm/cases/case_1", {
-      appointmentDate: "01/04/2026",
-    });
+    const { statusCode, payload } = await call(
+      buildRouter(context),
+      "PUT",
+      "/api/v1/admin/crm/cases/case_1",
+      { appointmentDate: "01/04/2026" },
+    );
 
     expect(statusCode).toBe(400);
+    // The message, not just the status, because the inline Ledger editor shows
+    // it in the cell the caller got wrong -- a 400 that does not name the field
+    // is useless there.
+    //
+    // It deliberately does NOT try to prove the route's own isoDateBody regex
+    // is load-bearing, because it cannot be: shared's isoDate
+    // (packages/shared/src/crm/schemas.ts:16) carries the identical
+    // "expected YYYY-MM-DD" message and describeFirstZodIssue formats it
+    // exactly as parseBody does, so both layers answer byte-identically.
+    // Measured, not assumed -- dropping the route regex leaves this assertion
+    // green. The route copy is kept because it rejects before the case read,
+    // not because anything can observe it.
+    expect(payload.message).toBe("appointmentDate: expected YYYY-MM-DD");
   });
 
   it("404s an unknown case", async () => {
