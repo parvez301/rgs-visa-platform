@@ -35,11 +35,26 @@ async function apiFetch<ResponseType>(
   return responsePayload as ResponseType;
 }
 
+/**
+ * What the server actually sends back (crmApi.ts:251): `partnerId` and
+ * `statuses` are mutually exclusive, not both-optional. In partner mode the
+ * status filter is not enforced server-side, so `statuses` is omitted
+ * entirely rather than echoed back as a synthesised list; in status mode
+ * there is no partner scoping, so `partnerId` is omitted. A both-optional
+ * shape would compile and would let a consumer write `appliedQuery.statuses!`
+ * and be wrong at runtime the moment that consumer runs in partner mode --
+ * the union instead forces every consumer to narrow before it can read
+ * either field.
+ */
+export type LedgerAppliedQuery =
+  | { statuses: crm.CaseStatus[]; limit: number }
+  | { partnerId: string; limit: number };
+
 export interface LedgerPageResponse {
   rows: crm.LedgerRow[];
   unreadableCaseIds: string[];
   nextCursor?: string;
-  appliedQuery: { statuses: crm.CaseStatus[]; partnerId?: string; limit: number };
+  appliedQuery: LedgerAppliedQuery;
 }
 
 export interface LedgerLoad {
@@ -47,7 +62,7 @@ export interface LedgerLoad {
   unreadableCaseIds: string[];
   /** True when the page cap stopped the walk before the cursor ran out. */
   truncated: boolean;
-  appliedQuery: LedgerPageResponse["appliedQuery"];
+  appliedQuery: LedgerAppliedQuery;
 }
 
 /**
@@ -201,11 +216,10 @@ async function loadLedger(
   const rows: crm.LedgerRow[] = [];
   const unreadableCaseIds: string[] = [];
   let cursor: string | undefined;
-  let appliedQuery: LedgerPageResponse["appliedQuery"] = {
-    statuses: params.statuses ?? [],
-    ...(params.partnerId !== undefined ? { partnerId: params.partnerId } : {}),
-    limit: 0,
-  };
+  // Overwritten by the first page's own `appliedQuery` below on every call --
+  // the loop always runs at least once -- so this placeholder only has to
+  // satisfy the union's shape, not describe the actual request.
+  let appliedQuery: LedgerAppliedQuery = { statuses: params.statuses ?? [], limit: 0 };
   let pagesRead = 0;
 
   do {
@@ -380,7 +394,7 @@ export const crmClient = {
     idToken: string,
     scope: "ORG" | "PARTNER" | "USER",
     partnerId?: string,
-  ): Promise<{ memories: crm.CrmMemory[] }> {
+  ): Promise<{ memories: crm.CrmMemory[]; unreadableMemoryKeys: string[] }> {
     const queryParams = new URLSearchParams({ scope });
     if (partnerId !== undefined) queryParams.set("partnerId", partnerId);
     return apiFetch(`${CRM_BASE}/agent/memories?${queryParams.toString()}`, { idToken });

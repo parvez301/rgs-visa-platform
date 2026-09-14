@@ -8,8 +8,15 @@ import { crmClient } from "./crmClient";
  * visa-platform pages sharing this QueryClient.
  */
 export const crmQueryKeys = {
+  // Sorted on a COPY: `listLedgerRows` already canonicalizes (dedupes and
+  // sorts) the same status list server-side (R9), so a client key built from
+  // the caller's own order would treat ["NEW","SUBMITTED"] and
+  // ["SUBMITTED","NEW"] as two different queries for one identical server
+  // response -- harmless on its own, but a later invalidation keyed off the
+  // canonical order would then miss the entry built from the other order.
+  // `[...statuses].sort()` never touches the array the caller passed in.
   ledger: (statuses: crm.CaseStatus[], partnerId: string | undefined) =>
-    ["crm", "ledger", statuses.join(","), partnerId ?? ""] as const,
+    ["crm", "ledger", [...statuses].sort().join(","), partnerId ?? ""] as const,
   case: (caseId: string) => ["crm", "case", caseId] as const,
   caseEvents: (caseId: string) => ["crm", "case", caseId, "events"] as const,
   partners: () => ["crm", "partners"] as const,
