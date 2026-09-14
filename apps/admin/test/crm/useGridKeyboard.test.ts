@@ -48,6 +48,28 @@ describe("gridReducer", () => {
     expect(moved.expandedRowIndexes).toEqual([]);
   });
 
+  it("does not wrap focus from the last column back to the first", () => {
+    // expandedRowIndexes: [0] takes the REF-column overload out of play, so
+    // this is purely the ordinary right-edge clamp on the last column.
+    const atLastColumn = { ...initialState, focus: { rowIndex: 0, columnIndex: 9 }, expandedRowIndexes: [0] };
+    const moved = gridReducer(atLastColumn, { kind: "move", direction: "right" }, bounds);
+    expect(moved.focus).toEqual({ rowIndex: 0, columnIndex: 9 });
+  });
+
+  it("clamps Shift+arrow selection extension at both row edges, rather than wrapping the selection", () => {
+    // A wrapped extension is worse than a wrapped focus move: a desk agent
+    // sees a wrapped cursor and corrects it, but a selection that silently
+    // wraps to the far end of a 7,156-row ledger selects rows nobody saw.
+    const extendedUpFromTopRow = gridReducer(initialState, { kind: "extendSelection", direction: "up" }, bounds);
+    expect(extendedUpFromTopRow.focus.rowIndex).toBe(0);
+    expect(extendedUpFromTopRow.selectedRowIndexes).toEqual([0]);
+
+    const atLastRow = { ...initialState, focus: { rowIndex: 9, columnIndex: 0 } };
+    const extendedDownFromLastRow = gridReducer(atLastRow, { kind: "extendSelection", direction: "down" }, bounds);
+    expect(extendedDownFromLastRow.focus.rowIndex).toBe(9);
+    expect(extendedDownFromLastRow.selectedRowIndexes).toEqual([9]);
+  });
+
   it("toggles selection with Space and extends it with Shift+arrow", () => {
     const selected = gridReducer(initialState, { kind: "toggleSelection" }, bounds);
     expect(selected.selectedRowIndexes).toEqual([0]);

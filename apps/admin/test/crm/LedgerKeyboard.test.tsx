@@ -3,76 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { crm } from "@rgs/shared";
 import { LedgerTable } from "../../src/crm/ledger/LedgerTable";
-import { mountedCell, renderLedger } from "./virtual";
+import { installVirtualScrolling, mountedCell, renderLedger } from "./virtual";
 
-/**
- * jsdom implements neither `Element.scrollTo` nor `Element.scroll` at all --
- * confirmed by construction, not assumption: calling either throws
- * "is not a function". @tanstack/react-virtual's default `scrollToFn`
- * (`scrollWithAdjustments`) calls `scrollElement.scrollTo?.(...)`, so under
- * plain jsdom `rowVirtualizer.scrollToIndex()` is a silent no-op -- it never
- * throws, it just never moves anything.
- *
- * A real browser's `scrollTo` both sets the scroll position AND fires the
- * 'scroll' event that the virtualizer's own `observeElementOffset` listens
- * for (this is exactly what `scrollLedgerTo` in ./virtual.ts already does by
- * hand for mouse-driven scrolling) -- but a real browser fires that event
- * asynchronously (the next frame), never inside the synchronous call to
- * `scrollTo` itself. That asynchrony matters here: `LedgerTable` calls
- * `scrollToIndex` from a `useEffect`, i.e. from inside a React commit: a
- * *synchronous* 'scroll' event there re-enters react-virtual's own
- * `flushSync(rerender)` while React is still rendering, which React refuses
- * (a console error, and the mount-range update is silently dropped) --
- * confirmed by making this synchronous first and watching the 40-press test
- * fail with exactly that warning. Deferring the dispatch with `setTimeout`
- * reproduces the real browser's timing and avoids the reentrancy.
- */
-if (typeof HTMLElement.prototype.scrollTo !== "function") {
-  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
-    configurable: true,
-    writable: true,
-    value(this: HTMLElement, xCoordinateOrOptions?: ScrollToOptions | number, maybeYCoordinate?: number) {
-      if (typeof xCoordinateOrOptions === "object" && xCoordinateOrOptions !== null) {
-        if (xCoordinateOrOptions.top !== undefined) this.scrollTop = xCoordinateOrOptions.top;
-        if (xCoordinateOrOptions.left !== undefined) this.scrollLeft = xCoordinateOrOptions.left;
-      } else {
-        if (xCoordinateOrOptions !== undefined) this.scrollLeft = xCoordinateOrOptions;
-        if (maybeYCoordinate !== undefined) this.scrollTop = maybeYCoordinate;
-      }
-      const scrollTargetElement = this;
-      setTimeout(() => {
-        scrollTargetElement.dispatchEvent(new Event("scroll"));
-      }, 0);
-    },
-  });
-}
-
-/**
- * `scrollToIndex`'s target offset is clamped through `getMaxScrollOffset()`,
- * which virtual-core computes as `scrollElement.scrollHeight -
- * scrollElement.clientHeight`. jsdom has no layout engine: neither property
- * reflects the table's actual (virtualized, absolutely-positioned) content
- * height, and both default to 0 -- so that clamp collapses every computed
- * target back to 0 regardless of which row was asked for. Confirmed by
- * instrumenting `scrollToIndex` directly: it computed the correct non-zero
- * offset internally and then clamped it away. test/setup.ts's
- * offsetHeight/offsetWidth shim sizes the *viewport* for the mount-window
- * calculation and does not touch this; `clientHeight` mirrors it here, and
- * `scrollHeight` is given enough headroom for any row count this suite
- * renders.
- */
-Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-  configurable: true,
-  get(this: HTMLElement): number {
-    return this.offsetHeight;
-  },
-});
-Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
-  configurable: true,
-  get(): number {
-    return 10_000_000;
-  },
-});
+// This test drives the virtualizer's own scrollToIndex (keyboard nav past
+// the mounted window) rather than only the scrollTop+dispatchEvent that
+// scrollLedgerTo already covers, so it needs the two-part jsdom shim -- see
+// installVirtualScrolling's doc comment in ./virtual.ts for both causes.
+installVirtualScrolling();
 
 function buildRows(rowCount: number): crm.LedgerRow[] {
   return Array.from({ length: rowCount }, (_unused, rowIndex) => ({
