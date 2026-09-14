@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { UseQueryResult } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, type UseQueryResult } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
@@ -8,10 +8,25 @@ import { crm } from "@rgs/shared";
 import { LedgerPage } from "../../src/crm/ledger/LedgerPage";
 import { useLedgerRows, usePartners } from "../../src/crm/api/hooks";
 import type { LedgerLoad } from "../../src/crm/api/crmClient";
+import { UndoToastProvider } from "../../src/crm/UndoToast";
 
-/** `AdminShell` renders a react-router `<Link>`/`<NavLink>` in its header. */
+/**
+ * `AdminShell` renders a react-router `<Link>`/`<NavLink>` in its header.
+ * `LedgerTable` (Task 12) calls `useLedgerEdit()` unconditionally, which
+ * needs a `QueryClientProvider` and an `UndoToastProvider` as ancestors even
+ * though this file mocks `useLedgerRows`/`usePartners` themselves away.
+ */
 function renderLedgerPage(element: ReactElement = <LedgerPage />) {
-  return render(<MemoryRouter>{element}</MemoryRouter>);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <UndoToastProvider>
+        <MemoryRouter>{element}</MemoryRouter>
+      </UndoToastProvider>
+    </QueryClientProvider>,
+  );
 }
 
 /**

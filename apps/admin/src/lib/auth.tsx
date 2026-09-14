@@ -30,7 +30,10 @@ export interface AuthState {
   signOut(): void;
 }
 
-const AuthContext = createContext<AuthState | null>(null);
+// Exported so tests that need a real `useAuth()` consumer (rather than a
+// `vi.mock` of this whole module) can supply a fixed `AuthState` directly --
+// see `apps/admin/test/crm/virtual.ts`'s `renderLedger`.
+export const AuthContext = createContext<AuthState | null>(null);
 
 function cognitoUserFor(email: string): CognitoUser {
   return new CognitoUser({ Username: email, Pool: userPool });

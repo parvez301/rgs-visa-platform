@@ -1,6 +1,9 @@
 import { render, type RenderResult } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { expect } from "vitest";
-import type { ReactElement } from "react";
+import { createElement, type ReactElement } from "react";
+import { AuthContext, type AuthState } from "../../src/lib/auth";
+import { UndoToastProvider } from "../../src/crm/UndoToast";
 
 /**
  * Rows the virtualizer ACTUALLY mounted, with a guard.
@@ -47,8 +50,46 @@ export async function scrollLedgerTo(container: HTMLElement, scrollTop: number):
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * A fixed, signed-in `AuthState` for `LedgerTable`'s own `useLedgerEdit` call
+ * (Task 12), which reads `idToken` via `useAuth()`. Supplied through the
+ * real `AuthContext` rather than a per-file `vi.mock` of the whole auth
+ * module -- one fixture here covers every test that renders `LedgerTable`
+ * through this helper, instead of each test file needing its own mock.
+ */
+const TEST_AUTH_STATE: AuthState = {
+  isLoading: false,
+  isSignedIn: true,
+  email: "agent@example.com",
+  idToken: "test-id-token",
+  needsNewPassword: false,
+  signIn: async () => "signedIn",
+  completeNewPassword: async () => {},
+  signOut: () => {},
+};
+
+/**
+ * `LedgerTable` now calls `useLedgerEdit()` (Task 12) unconditionally, which
+ * needs a `QueryClientProvider` (for the optimistic cache work) and an
+ * `UndoToastProvider` (for the undo toast) as ancestors, on top of the auth
+ * context above. A fresh `QueryClient` per render keeps one test's cache
+ * from leaking into the next.
+ */
 export function renderLedger(element: ReactElement): RenderResult {
-  const result = render(element);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  // Plain `createElement` rather than JSX -- this file is `.ts`, not `.tsx`
+  // (see the brief's own note that it stays `virtual.ts`), and TypeScript
+  // refuses JSX syntax outside a `.tsx` file regardless of the `jsx` compiler
+  // option.
+  const result = render(
+    createElement(
+      AuthContext.Provider,
+      { value: TEST_AUTH_STATE },
+      createElement(QueryClientProvider, { client: queryClient }, createElement(UndoToastProvider, null, element)),
+    ),
+  );
   // Fail fast, once, at the render rather than at the first confusing
   // assertion three lines later.
   expect(result.container.querySelector("[data-testid='ledger-scroll']")).not.toBeNull();

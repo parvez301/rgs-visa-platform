@@ -1,7 +1,9 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef } from "react";
 import { crm } from "@rgs/shared";
+import { describeLedgerEditValue, useLedgerEdit } from "../api/mutations";
 import { LEDGER_COLUMNS, LEDGER_ROW_HEIGHT } from "./columns";
+import { EditableCell, readLedgerColumnValue } from "./EditableCell";
 import { useGridKeyboard } from "./useGridKeyboard";
 
 interface LedgerTableProps {
@@ -24,6 +26,13 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
     rowCount: rows.length,
     columnCount: LEDGER_COLUMNS.length,
   });
+
+  // Direct human edits go straight to the REST routes -- the agent's
+  // approval gate governs what the agent writes, not a desk agent's own
+  // click (rule 1). One call here, shared by every editable cell: a second
+  // call site would keep its own `pendingConflict` state, and the two would
+  // silently disagree about whether a conflict prompt is open.
+  const { commitEdit, pendingConflict, resolveConflict } = useLedgerEdit();
 
   // Moving focus to a row outside the mounted window must scroll it in
   // first -- otherwise `↓` held down walks the focus off the mounted window
@@ -54,7 +63,7 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
   const gridTemplateColumns = LEDGER_COLUMNS.map((column) => `${column.width}px`).join(" ");
 
   return (
-    <div className="crm-root flex h-full flex-col border border-crm-rule-box rounded-crm-card overflow-hidden">
+    <div className="crm-root relative flex h-full flex-col border border-crm-rule-box rounded-crm-card overflow-hidden">
       <div
         data-testid="ledger-header"
         className="sticky top-0 z-20 grid bg-crm-surface text-crm-steel text-[12px] uppercase tracking-wide"
@@ -110,6 +119,10 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
                   {LEDGER_COLUMNS.map((column, columnIndex) => {
                     const isCellFocused =
                       gridState.focus.rowIndex === virtualRow.index && gridState.focus.columnIndex === columnIndex;
+                    const isCellEditing =
+                      gridState.editing?.rowIndex === virtualRow.index &&
+                      gridState.editing?.columnIndex === columnIndex;
+                    const editableColumn = column.editable;
                     return (
                       <div
                         key={column.key}
@@ -120,7 +133,24 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
                           column.sticky ? "sticky left-0 z-10 bg-inherit font-medium" : ""
                         }`}
                       >
-                        {column.render(row, partnerNamesById[row.partnerId] ?? row.partnerId)}
+                        {editableColumn === undefined ? (
+                          column.render(row, partnerNamesById[row.partnerId] ?? row.partnerId)
+                        ) : (
+                          <EditableCell
+                            column={editableColumn}
+                            row={row}
+                            isEditing={isCellEditing}
+                            onCloseEditor={() => dispatchGridAction({ kind: "cancelEdit" })}
+                            onCommit={(nextValue) => {
+                              void commitEdit({
+                                caseId: row.caseId,
+                                column: editableColumn,
+                                previousValue: readLedgerColumnValue(editableColumn, row),
+                                nextValue,
+                              });
+                            }}
+                          />
+                        )}
                       </div>
                     );
                   })}
@@ -130,6 +160,37 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
           </div>
         )}
       </div>
+
+      {pendingConflict !== undefined && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="This case changed underneath your edit"
+          className="absolute inset-0 z-40 flex items-center justify-center bg-crm-charcoal/40"
+        >
+          <div className="w-full max-w-sm rounded-crm-card border border-crm-rule-box bg-crm-canvas p-4 text-[13px] text-crm-charcoal shadow">
+            <p className="font-medium">This case changed underneath your edit.</p>
+            <p className="mt-2 text-crm-steel">{pendingConflict.serverMessage}</p>
+            <p className="mt-2">Your value: {describeLedgerEditValue(pendingConflict.edit)}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => resolveConflict("keepTheirs")}
+                className="rounded-crm-control border border-crm-rule-box px-2 py-1"
+              >
+                Keep theirs
+              </button>
+              <button
+                type="button"
+                onClick={() => resolveConflict("keepMine")}
+                className="rounded-crm-control border border-crm-primary bg-crm-lavender px-2 py-1"
+              >
+                Keep mine
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
