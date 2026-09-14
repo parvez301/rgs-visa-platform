@@ -11,6 +11,8 @@ import {
   getCase,
   listCasesByPartner,
   listCasesByStatus,
+  updateCaseDetails,
+  type UpdateCaseDetailsInput,
 } from "../domain/crm/cases";
 import { listCaseEvents } from "../domain/crm/crmEvents";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
@@ -70,6 +72,25 @@ const UpsertTravellerBody = z.object({
   passportNumber: z.string().optional(),
   dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   phone: z.string().optional(),
+});
+
+const isoDateBody = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
+
+/**
+ * The six fields `updateCaseDetails` is allowed to touch, written out by name.
+ * NOT a passthrough of the request body: `caseStatus`, per-applicant `custody`,
+ * per-applicant `outcome` and `billingStatus` each have a state machine and
+ * their own route, and a general "update any field" body is one forgotten key
+ * away from walking around all four. Typed as the domain's own interface below
+ * so a drift between the two fails to compile.
+ */
+const UpdateCaseDetailsBody = z.object({
+  visaType: z.enum(crm.VISA_TYPES).optional(),
+  entryType: z.enum(crm.ENTRY_TYPES).optional(),
+  processing: z.enum(crm.PROCESSING_SPEEDS).optional(),
+  submissionDate: isoDateBody.optional(),
+  appointmentDate: isoDateBody.optional(),
+  expectedCollectionDate: isoDateBody.optional(),
 });
 
 const CaseStatusBody = z.object({ toStatus: z.enum(crm.CASE_STATUSES) });
@@ -235,6 +256,17 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
     .add("GET", "/api/v1/admin/crm/cases/{caseId}", async (requestContext) => {
       requireAdmin(requestContext);
       return getCase(context, tenantId, requestContext.pathParams["caseId"]!);
+    })
+    .add("PUT", "/api/v1/admin/crm/cases/{caseId}", async (requestContext) => {
+      requireAdmin(requestContext);
+      const input: UpdateCaseDetailsInput = parseBody(UpdateCaseDetailsBody, requestContext.body);
+      return updateCaseDetails(
+        context,
+        tenantId,
+        requestContext.pathParams["caseId"]!,
+        input,
+        requestContext.callerEmail,
+      );
     })
     .add("GET", "/api/v1/admin/crm/cases/{caseId}/events", async (requestContext) => {
       requireAdmin(requestContext);

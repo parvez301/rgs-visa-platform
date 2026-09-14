@@ -1060,6 +1060,75 @@ describe("crm admin routes", () => {
   });
 });
 
+describe("PUT /api/v1/admin/crm/cases/{caseId}", () => {
+  it("updates an appointment date", async () => {
+    const context = buildTestContext();
+    await seedLedgerCase(context, "case_1", "NEW");
+
+    const { statusCode, payload } = await call(
+      buildRouter(context),
+      "PUT",
+      "/api/v1/admin/crm/cases/case_1",
+      { appointmentDate: "2026-04-01" },
+    );
+
+    expect(statusCode).toBe(200);
+    expect(payload.appointmentDate).toBe("2026-04-01");
+  });
+
+  it("refuses to move caseStatus through this route", async () => {
+    const context = buildTestContext();
+    await seedLedgerCase(context, "case_1", "NEW");
+
+    const { payload } = await call(buildRouter(context), "PUT", "/api/v1/admin/crm/cases/case_1", {
+      appointmentDate: "2026-04-01",
+      caseStatus: "CLOSED",
+      billingStatus: "PAID",
+    });
+
+    // Both halves: the legal field moved AND the smuggled ones did not. Zod's
+    // strip mode drops them before the handler sees them, and the domain
+    // function picks its six fields by name -- this asserts the outcome, not
+    // the mechanism, so it survives either one being changed.
+    expect(payload.appointmentDate).toBe("2026-04-01");
+    expect(payload.caseStatus).toBe("NEW");
+    expect(payload.billingStatus).toBe("UNBILLED");
+  });
+
+  it("400s a date that is not a date", async () => {
+    const context = buildTestContext();
+    await seedLedgerCase(context, "case_1", "NEW");
+
+    const { statusCode } = await call(buildRouter(context), "PUT", "/api/v1/admin/crm/cases/case_1", {
+      appointmentDate: "01/04/2026",
+    });
+
+    expect(statusCode).toBe(400);
+  });
+
+  it("404s an unknown case", async () => {
+    const { statusCode } = await call(
+      buildRouter(buildTestContext()),
+      "PUT",
+      "/api/v1/admin/crm/cases/case_nope",
+      { appointmentDate: "2026-04-01" },
+    );
+
+    expect(statusCode).toBe(404);
+  });
+
+  it("refuses an unauthenticated caller", async () => {
+    const { statusCode } = await callUnauthenticated(
+      buildRouter(buildTestContext()),
+      "PUT",
+      "/api/v1/admin/crm/cases/case_1",
+      { appointmentDate: "2026-04-01" },
+    );
+
+    expect(statusCode).toBe(403);
+  });
+});
+
 describe("GET /api/v1/admin/crm/cases/ledger", () => {
   it("is matched before the {caseId} route, not swallowed by it", async () => {
     // Router.match returns the FIRST route whose segment count and literals
