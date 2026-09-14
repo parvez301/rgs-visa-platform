@@ -12,6 +12,7 @@ import {
   listReviewItems,
   recordReviewItem,
   resolveReviewItem,
+  summariseOpenReviewItems,
 } from "../../src/domain/crm/reviewQueue";
 
 const baseInput = {
@@ -432,5 +433,104 @@ describe("crm review queue", () => {
     expect([...listed.unreadableReviewItemIds].sort()).toEqual(
       [firstCorruptId, secondCorruptId].sort(),
     );
+  });
+});
+
+describe("summariseOpenReviewItems", () => {
+  it("groups open items by caseRef, keeping merge candidates apart from field problems", async () => {
+    const context = buildTestContext();
+    const unmapped = await recordReviewItem(context, "rgs", {
+      reason: "UNMAPPED_STATUS",
+      sourceSheet: "2026",
+      sourceRow: 12,
+      caseRef: "RGS-1001",
+      fieldName: "Status",
+      rawValue: "pend.",
+    });
+    const merge = await recordReviewItem(context, "rgs", {
+      reason: "PROPOSED_GROUP",
+      sourceSheet: "2026",
+      sourceRow: 13,
+      caseRef: "RGS-1001",
+      fieldName: "REF NO",
+      rawValue: "RGS-1001",
+    });
+    await recordReviewItem(context, "rgs", {
+      reason: "UNPARSEABLE_DATE",
+      sourceSheet: "2026",
+      sourceRow: 40,
+      caseRef: "RGS-1002",
+      fieldName: "Received",
+      rawValue: "31/02/26",
+    });
+
+    const summary = await summariseOpenReviewItems(context, "rgs");
+
+    const firstEntry = summary.entries.find((entry) => entry.caseRef === "RGS-1001");
+    expect(firstEntry?.fieldItemIds).toEqual([unmapped.reviewItemId]);
+    expect(firstEntry?.mergeItemIds).toEqual([merge.reviewItemId]);
+    expect(summary.entries.map((entry) => entry.caseRef).sort()).toEqual(["RGS-1001", "RGS-1002"]);
+  });
+
+  it("forgets a resolved item, because a cleaned row must lose its marker", async () => {
+    const context = buildTestContext();
+    const item = await recordReviewItem(context, "rgs", {
+      reason: "UNMAPPED_STATUS",
+      sourceSheet: "2026",
+      sourceRow: 12,
+      caseRef: "RGS-1001",
+      fieldName: "Status",
+      rawValue: "pend.",
+    });
+    await resolveReviewItem(context, "rgs", item.reviewItemId, { reviewStatus: "DISMISSED" }, "ops@rgs.test");
+
+    const summary = await summariseOpenReviewItems(context, "rgs");
+
+    expect(summary.entries).toEqual([]);
+  });
+
+  it("names an item it could not read rather than dropping it from the count", async () => {
+    const context = buildTestContext();
+    await context.table.put({
+      PK: reviewItemPartitionKey("rgs", "rev_broken"),
+      SK: REVIEW_ITEM_SORT_KEY,
+      GSI1PK: reviewQueueGsi1Pk("rgs", "OPEN"),
+      GSI1SK: "2026-03-04T10:00:00.000Z",
+      reviewItemId: "rev_broken",
+      // No caseRef at all: the one attribute this summary is a join on.
+      reason: "UNMAPPED_STATUS",
+    });
+
+    const summary = await summariseOpenReviewItems(context, "rgs");
+
+    expect(summary.entries).toEqual([]);
+    expect(summary.unreadableReviewItemIds).toEqual(["rev_broken"]);
+  });
+
+  it("reads the partition once, projected, rather than reassembling every item", async () => {
+    const context = buildTestContext();
+    const projectionsAsked: (readonly string[] | undefined)[] = [];
+    const spyingTable = {
+      ...context.table,
+      queryGsi: async (
+        indexName: "GSI1" | "GSI2" | "GSI3",
+        partitionKey: string,
+        options?: { projection?: readonly string[] },
+      ) => {
+        projectionsAsked.push(options?.projection);
+        return context.table.queryGsi(indexName, partitionKey, options);
+      },
+      queryGsiPage: context.table.queryGsiPage.bind(context.table),
+      get: context.table.get.bind(context.table),
+      query: context.table.query.bind(context.table),
+      put: context.table.put.bind(context.table),
+      delete: context.table.delete.bind(context.table),
+    };
+
+    await summariseOpenReviewItems({ ...context, table: spyingTable }, "rgs");
+
+    expect(projectionsAsked).toHaveLength(1);
+    expect(projectionsAsked[0]).toContain("caseRef");
+    expect(projectionsAsked[0]).not.toContain("detail");
   });
 });

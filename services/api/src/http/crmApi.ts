@@ -24,6 +24,7 @@ import {
   getReviewItemOrThrow,
   listReviewItems,
   resolveReviewItem,
+  summariseOpenReviewItems,
   type ReviewItemResolution,
 } from "../domain/crm/reviewQueue";
 import {
@@ -99,7 +100,13 @@ function parseLedgerStatuses(rawStatuses: string | undefined): crm.CaseStatus[] 
   const parsedStatuses: crm.CaseStatus[] = [];
   for (const requestedStatus of requestedStatuses) {
     const matchedStatus = crm.CASE_STATUSES.find((caseStatus) => caseStatus === requestedStatus);
-    if (matchedStatus === undefined) throw badRequest(`Unknown case status ${requestedStatus}`);
+    if (matchedStatus === undefined) {
+      // `?status=,` or `?status=NEW,` yields an empty-string token here. Named
+      // explicitly rather than interpolated blank, or the 400 reads as
+      // "Unknown case status " with nothing after it -- correct but useless.
+      const describedToken = requestedStatus === "" ? "(blank)" : requestedStatus;
+      throw badRequest(`Unknown case status ${describedToken}`);
+    }
     if (!parsedStatuses.includes(matchedStatus)) parsedStatuses.push(matchedStatus);
   }
   return parsedStatuses;
@@ -213,10 +220,14 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
         // What ran, not what was asked for. In partner mode the status filter
         // is not applied server-side (domain/crm/ledger.ts, decision 3), and a
         // client that could not see that would draw a filter chip for a filter
-        // nothing is enforcing.
+        // nothing is enforcing. `statuses` is omitted entirely in partner mode
+        // rather than sent as `[]`: an empty array reads just as naturally as
+        // "filtered down to nothing" as it does "no filter is in force", and
+        // partner mode really does return a nonempty `rows` alongside it. Omitting
+        // the field forces a client to handle its absence rather than leaving the
+        // meaning in a comment.
         appliedQuery: {
-          statuses: partnerId !== undefined ? [] : statuses,
-          ...(partnerId !== undefined ? { partnerId } : {}),
+          ...(partnerId !== undefined ? { partnerId } : { statuses }),
           limit,
         },
       };
@@ -304,6 +315,13 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       // capped, so a caller that cannot see the cap cannot know it is looking
       // at 5% of the work.
       return listReviewItems(context, tenantId, parsedStatus);
+    })
+    // BEFORE "/api/v1/admin/crm/review/{reviewItemId}" -- same six-segment
+    // collision as the ledger route above, same consequence: registered after
+    // it, this answers `getReviewItemOrThrow("summary")` and 404s.
+    .add("GET", "/api/v1/admin/crm/review/summary", async (requestContext) => {
+      requireAdmin(requestContext);
+      return summariseOpenReviewItems(context, tenantId);
     })
     .add("GET", "/api/v1/admin/crm/review/{reviewItemId}", async (requestContext) => {
       requireAdmin(requestContext);

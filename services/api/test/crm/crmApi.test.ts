@@ -1118,6 +1118,21 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
     expect(payload.message).toContain("SUBMITTTED");
   });
 
+  it("names a blank status token rather than leaving the message empty", async () => {
+    const router = buildRouter(buildTestContext());
+
+    const { statusCode, payload } = await call(
+      router,
+      "GET",
+      "/api/v1/admin/crm/cases/ledger",
+      undefined,
+      { status: "NEW," },
+    );
+
+    expect(statusCode).toBe(400);
+    expect(payload.message).toContain("(blank)");
+  });
+
   it("400s a limit outside the allowed range", async () => {
     const router = buildRouter(buildTestContext());
 
@@ -1147,7 +1162,10 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
 
     expect(payload.rows).toHaveLength(1);
     expect(payload.appliedQuery.partnerId).toBe("partner_a");
-    expect(payload.appliedQuery.statuses).toEqual([]);
+    // Omitted, not sent as []: an empty array reads just as naturally as "the
+    // status filter narrowed rows to zero" as it does "no filter is in force",
+    // and partner mode returns a nonempty `rows` alongside it.
+    expect("statuses" in payload.appliedQuery).toBe(false);
   });
 
   it("refuses an unauthenticated caller", async () => {
@@ -1157,6 +1175,50 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
       "/api/v1/admin/crm/cases/ledger",
     );
 
+    expect(statusCode).toBe(403);
+  });
+});
+
+describe("GET /api/v1/admin/crm/review/summary", () => {
+  it("is matched before the {reviewItemId} route", async () => {
+    const router = buildRouter(buildTestContext());
+    const registeredPaths = router.registeredRoutes
+      .filter((route) => route.method === "GET")
+      .map((route) => route.path);
+
+    expect(registeredPaths.indexOf("/api/v1/admin/crm/review/summary")).toBeLessThan(
+      registeredPaths.indexOf("/api/v1/admin/crm/review/{reviewItemId}"),
+    );
+  });
+
+  it("answers the caseRefs with open items", async () => {
+    const context = buildTestContext();
+    await recordReviewItem(context, "rgs", {
+      reason: "UNMAPPED_STATUS",
+      sourceSheet: "2026",
+      sourceRow: 12,
+      caseRef: "RGS-1001",
+      fieldName: "Status",
+      rawValue: "pend.",
+    });
+
+    const { statusCode, payload } = await call(
+      buildRouter(context),
+      "GET",
+      "/api/v1/admin/crm/review/summary",
+    );
+
+    expect(statusCode).toBe(200);
+    expect(payload.entries).toHaveLength(1);
+    expect(payload.entries[0].caseRef).toBe("RGS-1001");
+  });
+
+  it("refuses an unauthenticated caller", async () => {
+    const { statusCode } = await callUnauthenticated(
+      buildRouter(buildTestContext()),
+      "GET",
+      "/api/v1/admin/crm/review/summary",
+    );
     expect(statusCode).toBe(403);
   });
 });

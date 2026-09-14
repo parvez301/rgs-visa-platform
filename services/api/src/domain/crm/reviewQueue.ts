@@ -216,6 +216,85 @@ async function writeReviewItem(context: AppContext, reviewItem: crm.ReviewItem):
 }
 
 /**
+ * Which cases have unresolved import problems, cheaply enough to draw on every
+ * Ledger load.
+ *
+ * `listReviewItems` cannot answer this: it caps at 200 of 3,958 OPEN items and
+ * has no cursor, so a marker built on it would appear on 5% of the dirty rows
+ * and nowhere else -- which reads as "the rest are clean". This reads the whole
+ * OPEN partition with a four-attribute projection instead, and carries the item
+ * ids so opening a marker is a `get` per item actually opened rather than a
+ * second sweep.
+ */
+export const OPEN_REVIEW_SUMMARY_ATTRIBUTES: readonly string[] = [
+  "PK",
+  "SK",
+  "reviewItemId",
+  "caseRef",
+  "reason",
+];
+
+export interface OpenReviewSummaryEntry {
+  caseRef: string;
+  /** Items about one cell: a value that could not be read or mapped. */
+  fieldItemIds: string[];
+  /** Items about two rows: PROPOSED_GROUP, DUPLICATE_REF. */
+  mergeItemIds: string[];
+}
+
+export interface OpenReviewSummary {
+  entries: OpenReviewSummaryEntry[];
+  unreadableReviewItemIds: string[];
+}
+
+export async function summariseOpenReviewItems(
+  context: AppContext,
+  tenantId: string,
+): Promise<OpenReviewSummary> {
+  const storedItems = await context.table.queryGsi("GSI1", reviewQueueGsi1Pk(tenantId, "OPEN"), {
+    scanForward: true,
+    projection: OPEN_REVIEW_SUMMARY_ATTRIBUTES,
+  });
+
+  const entriesByCaseRef = new Map<string, OpenReviewSummaryEntry>();
+  const unreadableReviewItemIds: string[] = [];
+
+  for (const storedItem of storedItems) {
+    const reviewItemId = storedItem["reviewItemId"];
+    const caseRef = storedItem["caseRef"];
+    const reason = storedItem["reason"];
+    const isUsable =
+      typeof reviewItemId === "string" &&
+      reviewItemId.length > 0 &&
+      typeof caseRef === "string" &&
+      caseRef.length > 0 &&
+      typeof reason === "string" &&
+      (crm.REVIEW_REASONS as readonly string[]).includes(reason);
+    if (!isUsable) {
+      // Named, not dropped: an item missing from this summary is a dirty row
+      // that renders as clean, which is the one thing the marker exists to
+      // prevent. The storage key is the fallback id because it is all an
+      // operator has to find the row with.
+      unreadableReviewItemIds.push(
+        typeof reviewItemId === "string" && reviewItemId.length > 0 ? reviewItemId : storedItem.PK,
+      );
+      console.warn(`CRM review item in tenant ${tenantId} could not be summarised: ${storedItem.PK}`);
+      continue;
+    }
+
+    const entry = entriesByCaseRef.get(caseRef) ?? { caseRef, fieldItemIds: [], mergeItemIds: [] };
+    if (crm.isMergeReviewReason(reason as crm.ReviewReason)) {
+      entry.mergeItemIds.push(reviewItemId);
+    } else {
+      entry.fieldItemIds.push(reviewItemId);
+    }
+    entriesByCaseRef.set(caseRef, entry);
+  }
+
+  return { entries: [...entriesByCaseRef.values()], unreadableReviewItemIds };
+}
+
+/**
  * The single place a stored item becomes a domain ReviewItem.
  *
  * Raw, a ZodError is not an ApiError and router.ts maps only ApiError

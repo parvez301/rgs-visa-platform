@@ -50,6 +50,19 @@ export const REVIEW_REASONS = [
 ] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
 
+/**
+ * The two reasons that say "this row may be the same work as another row"
+ * rather than "this cell could not be read". Spec §7 marks a case carrying one
+ * of these differently from a case with a field-level problem, because
+ * resolving them is different work: one is a judgement about two cases, the
+ * other is a correction to one value.
+ */
+export const MERGE_REVIEW_REASONS: readonly ReviewReason[] = ["PROPOSED_GROUP", "DUPLICATE_REF"];
+
+export function isMergeReviewReason(reason: ReviewReason): boolean {
+  return MERGE_REVIEW_REASONS.includes(reason);
+}
+
 export const REVIEW_STATUSES = ["OPEN", "APPLIED", "DISMISSED"] as const;
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 
