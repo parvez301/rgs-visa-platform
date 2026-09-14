@@ -62,7 +62,13 @@ export const MAX_LEDGER_PAGE_LIMIT = 1000;
 const MAX_PARTITION_QUERIES_PER_PAGE = 64;
 
 export interface LedgerQuery {
-  /** Resolved by the route; never empty. Ignored when `partnerId` is set. */
+  /**
+   * Canonicalized on entry to `listLedgerRows` -- deduped and sorted -- so a
+   * repeated status cannot read the same partition twice and the same set in
+   * a different caller order cannot collide with a cursor's `partitionIndex`
+   * (fix round 1, F1/F2). Callers need not dedupe or order this themselves.
+   * Ignored entirely when `partnerId` is set.
+   */
   statuses: crm.CaseStatus[];
   partnerId?: string;
   limit: number;
@@ -94,10 +100,16 @@ const LedgerCursorSchema = z.object({
 });
 type LedgerCursor = z.infer<typeof LedgerCursorSchema>;
 
-function scopeKeyFor(query: LedgerQuery): string {
-  return query.partnerId !== undefined
-    ? `partner:${query.partnerId}`
-    : `status:${query.statuses.join(",")}`;
+/**
+ * Takes the already-canonicalized status list, never `query.statuses` raw
+ * (fix round 1, F1/F2) -- a caller must not be able to reach this with an
+ * unsorted or duplicated array, because `partitionIndex` in the cursor is an
+ * index into a `partitionKeys` array built from exactly this same order.
+ */
+function scopeKeyFor(partnerId: string | undefined, canonicalStatuses: readonly crm.CaseStatus[]): string {
+  return partnerId !== undefined
+    ? `partner:${partnerId}`
+    : `status:${canonicalStatuses.join(",")}`;
 }
 
 function encodeLedgerCursor(cursor: LedgerCursor): string {
@@ -131,18 +143,31 @@ export async function listLedgerRows(
   tenantId: string,
   query: LedgerQuery,
 ): Promise<LedgerPage> {
-  const scopeKey = scopeKeyFor(query);
+  // Canonicalized ONCE, here, and nothing downstream reads `query.statuses`
+  // again (fix round 1, F1/F2). Deduping means a repeated status cannot read
+  // its partition twice -- the reviewer's direct repro. Sorting means the same
+  // set of statuses, sent in any caller order, canonicalizes identically, so
+  // `partitionKeys` below is always built in the same order for the same set
+  // and a cursor's `partitionIndex` -- an index INTO that array -- stays valid
+  // no matter what order the caller asked in. The alternative (canonicalize
+  // only the scopeKey) was considered and rejected: it would make the
+  // different-order 400 disappear while `partitionIndex` still pointed at the
+  // wrong partition of the wrong list, silently skipping a whole status
+  // instead of refusing the cursor.
+  const canonicalStatuses = [...new Set(query.statuses)].sort();
+
+  const scopeKey = scopeKeyFor(query.partnerId, canonicalStatuses);
   const resumeFrom =
     query.cursor === undefined ? undefined : decodeLedgerCursor(query.cursor, scopeKey);
 
   // Partner mode is one GSI2 partition ordered by receivedDate; status mode is
-  // one GSI1 partition per requested status, each ordered by updatedAt. The
-  // rest of this function does not care which it got.
+  // one GSI1 partition per canonical (deduped, sorted) status, each ordered by
+  // updatedAt. The rest of this function does not care which it got.
   const indexName = query.partnerId !== undefined ? "GSI2" : "GSI1";
   const partitionKeys =
     query.partnerId !== undefined
       ? [partnerCasesGsi2Pk(tenantId, query.partnerId)]
-      : query.statuses.map((caseStatus) => caseStatusGsi1Pk(tenantId, caseStatus));
+      : canonicalStatuses.map((caseStatus) => caseStatusGsi1Pk(tenantId, caseStatus));
 
   const collectedItems: TableItem[] = [];
   let partitionIndex = resumeFrom?.partitionIndex ?? 0;

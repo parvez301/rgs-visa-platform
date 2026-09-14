@@ -221,4 +221,71 @@ describe("listLedgerRows", () => {
 
     expect(baseTableReadCount).toBe(0);
   });
+
+  // Fix round 1 (review of e6473bd).
+
+  it("returns each row exactly once even when the caller repeats a status (F1)", async () => {
+    const context = buildTestContext();
+    await seedCases(context, [buildCase({ caseId: "case_1", caseStatus: "NEW" })]);
+
+    const page = await listLedgerRows(context, TENANT_ID, {
+      statuses: ["NEW", "NEW"],
+      limit: DEFAULT_LEDGER_PAGE_LIMIT,
+    });
+
+    // Asserted on the full id list, not just the count: a fix that dropped a
+    // different row instead of deduping the repeated partition read would
+    // still pass a bare `toHaveLength(1)`.
+    expect(page.rows.map((row) => row.caseId)).toEqual(["case_1"]);
+  });
+
+  it("resumes a cursor across the same status set sent in a different order, instead of 400ing or silently skipping a status (F2)", async () => {
+    // This is the test that proves the safe fix for concern 3 is the right
+    // one. Canonicalizing ONLY `scopeKeyFor` (so this cursor stops 400ing)
+    // would leave `partitionIndex` pointing at a partition of a
+    // differently-ordered `partitionKeys` array, silently skipping
+    // SUBMITTED instead of refusing the cursor. Do not "simplify" the
+    // canonicalization in listLedgerRows back to a raw `.join(",")`.
+    const context = buildTestContext();
+    await seedCases(context, [
+      buildCase({ caseId: "case_1", caseStatus: "NEW", updatedAt: "2026-03-04T10:00:01.000Z" }),
+      buildCase({ caseId: "case_2", caseStatus: "SUBMITTED", updatedAt: "2026-03-04T10:00:02.000Z" }),
+    ]);
+
+    const firstPage = await listLedgerRows(context, TENANT_ID, {
+      statuses: ["NEW", "SUBMITTED"],
+      limit: 1,
+    });
+    expect(firstPage.nextCursor).toBeDefined();
+
+    const secondPage = await listLedgerRows(context, TENANT_ID, {
+      statuses: ["SUBMITTED", "NEW"],
+      limit: 1,
+      cursor: firstPage.nextCursor!,
+    });
+
+    const collectedCaseIds = [...firstPage.rows, ...secondPage.rows].map((row) => row.caseId);
+    expect(collectedCaseIds.sort()).toEqual(["case_1", "case_2"]);
+    expect(new Set(collectedCaseIds).size).toBe(2);
+  });
+
+  it("reads a case whose META item predates applicantSummary as a normal, readable row (F3)", async () => {
+    const context = buildTestContext();
+    await seedCases(context, [buildCase({ caseId: "case_1" })]);
+    const metaItem = await context.table.get(casePartitionKey(TENANT_ID, "case_1"), META_SORT_KEY);
+    // Drop the attribute entirely, the way one of the 7,156 cases imported
+    // before writeCase computed a roll-up is actually stored -- not present
+    // as `undefined`, simply absent from the item.
+    const { applicantSummary: _droppedSummary, ...metaItemWithoutSummary } = metaItem!;
+    await context.table.put(metaItemWithoutSummary);
+
+    const page = await listLedgerRows(context, TENANT_ID, {
+      statuses: [...crm.CASE_STATUSES],
+      limit: DEFAULT_LEDGER_PAGE_LIMIT,
+    });
+
+    expect(page.rows).toHaveLength(1);
+    expect(page.rows[0]!.applicantSummary).toBeUndefined();
+    expect(page.unreadableCaseIds).toEqual([]);
+  });
 });
