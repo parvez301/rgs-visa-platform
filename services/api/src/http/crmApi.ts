@@ -14,6 +14,11 @@ import {
 } from "../domain/crm/cases";
 import { listCaseEvents } from "../domain/crm/crmEvents";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
+import {
+  DEFAULT_LEDGER_PAGE_LIMIT,
+  MAX_LEDGER_PAGE_LIMIT,
+  listLedgerRows,
+} from "../domain/crm/ledger";
 import { createPartner, listPartners } from "../domain/crm/partners";
 import {
   getReviewItemOrThrow,
@@ -26,7 +31,7 @@ import {
   findTravellerByPassport,
   upsertTraveller,
 } from "../domain/crm/travellers";
-import { Router, parseBody } from "./router";
+import { Router, parseBody, parseQueryParam } from "./router";
 import { requireAdmin } from "./adminApi";
 
 const CreatePartnerBody = z.object({
@@ -80,6 +85,32 @@ const ResolveReviewItemBody = z.object({
   reviewStatus: z.enum(["APPLIED", "DISMISSED"]),
   resolvedValue: z.string().min(1).optional(),
 });
+
+/**
+ * API Gateway v2 collapses a repeated query parameter into one comma-joined
+ * string, and RequestContext.queryParams is Record<string, string> -- so
+ * "repeatable status" is `?status=NEW,SUBMITTED`, split here. An unrecognised
+ * value is a 400 naming it, never a quiet fall back to "all": a typo that
+ * silently widens the filter shows an operator rows they filtered out.
+ */
+function parseLedgerStatuses(rawStatuses: string | undefined): crm.CaseStatus[] {
+  if (rawStatuses === undefined || rawStatuses.trim() === "") return [...crm.CASE_STATUSES];
+  const requestedStatuses = rawStatuses.split(",").map((statusName) => statusName.trim());
+  const parsedStatuses: crm.CaseStatus[] = [];
+  for (const requestedStatus of requestedStatuses) {
+    const matchedStatus = crm.CASE_STATUSES.find((caseStatus) => caseStatus === requestedStatus);
+    if (matchedStatus === undefined) throw badRequest(`Unknown case status ${requestedStatus}`);
+    if (!parsedStatuses.includes(matchedStatus)) parsedStatuses.push(matchedStatus);
+  }
+  return parsedStatuses;
+}
+
+const LedgerLimitSchema = z.coerce
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_LEDGER_PAGE_LIMIT)
+  .default(DEFAULT_LEDGER_PAGE_LIMIT);
 
 /**
  * Mounted onto the admin router, so these inherit the admin Cognito authorizer
@@ -153,6 +184,42 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       requireAdmin(requestContext);
       const body = parseBody(CreateCaseBody, requestContext.body);
       return createCase(context, tenantId, body, requestContext.callerEmail);
+    })
+    // BEFORE "/api/v1/admin/crm/cases/{caseId}", and it must stay that way:
+    // Router.match returns the first route whose segment count and literals
+    // match, both paths are six segments, and registered after it this route
+    // would be answered by getCase with caseId="ledger" -- a 404 that looks
+    // like a missing case. A test in crmApi.test.ts asserts the order.
+    .add("GET", "/api/v1/admin/crm/cases/ledger", async (requestContext) => {
+      requireAdmin(requestContext);
+      const partnerId = requestContext.queryParams["partnerId"];
+      const statuses = parseLedgerStatuses(requestContext.queryParams["status"]);
+      const limit = parseQueryParam(
+        LedgerLimitSchema,
+        "limit",
+        requestContext.queryParams["limit"],
+      );
+      const cursor = requestContext.queryParams["cursor"];
+
+      const ledgerPage = await listLedgerRows(context, tenantId, {
+        statuses,
+        ...(partnerId !== undefined ? { partnerId } : {}),
+        limit,
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+
+      return {
+        ...ledgerPage,
+        // What ran, not what was asked for. In partner mode the status filter
+        // is not applied server-side (domain/crm/ledger.ts, decision 3), and a
+        // client that could not see that would draw a filter chip for a filter
+        // nothing is enforcing.
+        appliedQuery: {
+          statuses: partnerId !== undefined ? [] : statuses,
+          ...(partnerId !== undefined ? { partnerId } : {}),
+          limit,
+        },
+      };
     })
     .add("GET", "/api/v1/admin/crm/cases/{caseId}", async (requestContext) => {
       requireAdmin(requestContext);

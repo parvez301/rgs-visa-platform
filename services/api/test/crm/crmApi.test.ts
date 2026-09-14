@@ -124,6 +124,35 @@ async function callWithoutEmailClaim(
   return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
 }
 
+async function seedLedgerCase(
+  context: ReturnType<typeof buildTestContext>,
+  caseId: string,
+  caseStatus: crm.CaseStatus,
+  partnerId = "partner_1",
+): Promise<void> {
+  await writeCase(
+    context,
+    crm.CrmCaseSchema.parse({
+      tenantId: "rgs",
+      caseId,
+      caseRef: `RGS-${caseId}`,
+      caseType: "VISA",
+      visaType: "TOURIST",
+      partnerId,
+      destinationCountry: "AE",
+      caseStatus,
+      billingStatus: "UNBILLED",
+      receivedDate: "2026-03-04",
+      totalInr: 12000,
+      applicants: [
+        { applicantRef: "A1", travellerId: "trav_1", custody: "WITH_RGS", outcome: "PENDING" },
+      ],
+      createdAt: "2026-03-04T10:00:00.000Z",
+      updatedAt: "2026-03-04T10:00:00.000Z",
+    }),
+  );
+}
+
 describe("crm admin routes", () => {
   it("creates a partner then a case, and reads the case back", async () => {
     const context = buildTestContext();
@@ -1028,5 +1057,106 @@ describe("crm admin routes", () => {
       { reviewStatus: "APPLIED" },
     );
     expect(patched.statusCode).toBe(404);
+  });
+});
+
+describe("GET /api/v1/admin/crm/cases/ledger", () => {
+  it("is matched before the {caseId} route, not swallowed by it", async () => {
+    // Router.match returns the FIRST route whose segment count and literals
+    // match, and both paths are six segments. Registration order is the whole
+    // defence, so it is asserted directly rather than inferred from a 200.
+    const router = buildRouter(buildTestContext());
+    const registeredPaths = router.registeredRoutes
+      .filter((route) => route.method === "GET")
+      .map((route) => route.path);
+
+    expect(registeredPaths.indexOf("/api/v1/admin/crm/cases/ledger")).toBeGreaterThanOrEqual(0);
+    expect(registeredPaths.indexOf("/api/v1/admin/crm/cases/ledger")).toBeLessThan(
+      registeredPaths.indexOf("/api/v1/admin/crm/cases/{caseId}"),
+    );
+  });
+
+  it("answers rows, not a case", async () => {
+    const context = buildTestContext();
+    await seedLedgerCase(context, "case_1", "NEW");
+    const router = buildRouter(context);
+
+    const { statusCode, payload } = await call(router, "GET", "/api/v1/admin/crm/cases/ledger");
+
+    expect(statusCode).toBe(200);
+    expect(payload.rows).toHaveLength(1);
+    expect(payload.rows[0].caseRef).toBe("RGS-case_1");
+    expect(payload.appliedQuery.statuses).toEqual([...crm.CASE_STATUSES]);
+  });
+
+  it("parses a comma-joined repeated status parameter", async () => {
+    const context = buildTestContext();
+    await seedLedgerCase(context, "case_1", "NEW");
+    await seedLedgerCase(context, "case_2", "CLOSED");
+    const router = buildRouter(context);
+
+    const { payload } = await call(router, "GET", "/api/v1/admin/crm/cases/ledger", undefined, {
+      status: "NEW,SUBMITTED",
+    });
+
+    expect(payload.rows.map((row: { caseId: string }) => row.caseId)).toEqual(["case_1"]);
+    expect(payload.appliedQuery.statuses).toEqual(["NEW", "SUBMITTED"]);
+  });
+
+  it("400s an unknown status rather than quietly returning everything", async () => {
+    const router = buildRouter(buildTestContext());
+
+    const { statusCode, payload } = await call(
+      router,
+      "GET",
+      "/api/v1/admin/crm/cases/ledger",
+      undefined,
+      { status: "NEW,SUBMITTTED" },
+    );
+
+    expect(statusCode).toBe(400);
+    expect(payload.message).toContain("SUBMITTTED");
+  });
+
+  it("400s a limit outside the allowed range", async () => {
+    const router = buildRouter(buildTestContext());
+
+    expect(
+      (await call(router, "GET", "/api/v1/admin/crm/cases/ledger", undefined, { limit: "0" }))
+        .statusCode,
+    ).toBe(400);
+    expect(
+      (await call(router, "GET", "/api/v1/admin/crm/cases/ledger", undefined, { limit: "5000" }))
+        .statusCode,
+    ).toBe(400);
+    expect(
+      (await call(router, "GET", "/api/v1/admin/crm/cases/ledger", undefined, { limit: "many" }))
+        .statusCode,
+    ).toBe(400);
+  });
+
+  it("says in appliedQuery that partner mode is not filtering by status", async () => {
+    const context = buildTestContext();
+    await seedLedgerCase(context, "case_1", "CLOSED", "partner_a");
+    const router = buildRouter(context);
+
+    const { payload } = await call(router, "GET", "/api/v1/admin/crm/cases/ledger", undefined, {
+      partnerId: "partner_a",
+      status: "NEW",
+    });
+
+    expect(payload.rows).toHaveLength(1);
+    expect(payload.appliedQuery.partnerId).toBe("partner_a");
+    expect(payload.appliedQuery.statuses).toEqual([]);
+  });
+
+  it("refuses an unauthenticated caller", async () => {
+    const { statusCode } = await callUnauthenticated(
+      buildRouter(buildTestContext()),
+      "GET",
+      "/api/v1/admin/crm/cases/ledger",
+    );
+
+    expect(statusCode).toBe(403);
   });
 });
