@@ -422,6 +422,92 @@ describe("InMemoryTableClient projection and paging", () => {
   });
 });
 
+/**
+ * DynamoDB sorts keys by UTF-8 byte order. `String.prototype.localeCompare` is
+ * an ICU linguistic collation and disagrees with byte order on four of five
+ * probed pairs, including two shapes this repo builds keys from every day:
+ * `#` against `_` -- `TENANT#rgs#CASE#a` and `TENANT#rgs#CASE_REF#a` are
+ * ordered OPPOSITE by ICU, and both infixes are real in domain/crm/keys.ts --
+ * and a sort key that is a prefix of another. ICU also treats U+0000 as
+ * completely ignorable, so it silently unjoins the fields of a composite key.
+ *
+ * These tests pin the comparator. Do not "fix" them back to localeCompare.
+ */
+describe("InMemoryTableClient orders keys the way DynamoDB does", () => {
+  const LEDGER_PARTITION = "TENANT#rgs#CASE_STATUS#NEW";
+
+  it("orders a GSI page by byte order where ICU collation disagrees", async () => {
+    const tableClient = new InMemoryTableClient();
+    // Byte order: digits before letters, then `#` (35) before `_` (95), and a
+    // sort key that is a prefix of another sorts first.
+    const sortKeysInByteOrder = ["2026-03-01", "2026-03-01T09:00:00Z", "CASE#a", "CASE_REF#a"];
+    // Written in neither the byte order nor the ICU order.
+    for (const indexSortKey of ["CASE_REF#a", "2026-03-01T09:00:00Z", "CASE#a", "2026-03-01"]) {
+      void tableClient.put({
+        PK: `TENANT#rgs#CASE#case_${indexSortKey}`,
+        SK: "META",
+        GSI1PK: LEDGER_PARTITION,
+        GSI1SK: indexSortKey,
+      });
+    }
+
+    const page = await tableClient.queryGsiPage("GSI1", LEDGER_PARTITION, { limit: 10 });
+
+    expect(page.items.map((item) => String(item["GSI1SK"]))).toEqual(sortKeysInByteOrder);
+  });
+
+  it("pages a sort-key tie once per row when the order is decided at the key boundary", async () => {
+    const tableClient = new InMemoryTableClient();
+    const tiedIndexSortKey = "2026-03-01T00:00:00.000Z";
+    // case_1 and case_12: one base partition key is a prefix of the other, so
+    // the ordering is decided exactly at the PK/SK boundary -- which is where
+    // the NUL separator has to do its job. Concatenated without a separator
+    // (which is what ICU does, treating NUL as completely ignorable) these two
+    // compare the other way round, because `TRAVELLER#...` then meets `2`
+    // rather than the separator.
+    const baseKeysInWriteOrder = [
+      { PK: "TENANT#rgs#CASE#case_12", SK: "TRAVELLER#a" },
+      { PK: "TENANT#rgs#CASE#case_1", SK: "TRAVELLER#z" },
+    ];
+    for (const baseKey of baseKeysInWriteOrder) {
+      void tableClient.put({ ...baseKey, GSI1PK: LEDGER_PARTITION, GSI1SK: tiedIndexSortKey });
+    }
+
+    const readBaseKeys: string[] = [];
+    let cursor: TableItemKey | undefined;
+    for (let pageNumber = 1; pageNumber <= 4; pageNumber += 1) {
+      const page = await tableClient.queryGsiPage("GSI1", LEDGER_PARTITION, {
+        limit: 1,
+        startKey: cursor,
+      });
+      readBaseKeys.push(...page.items.map((item) => `${item.PK}|${item.SK}`));
+      cursor = page.nextStartKey;
+      if (cursor === undefined) break;
+    }
+
+    expect(readBaseKeys).toEqual([
+      "TENANT#rgs#CASE#case_1|TRAVELLER#z",
+      "TENANT#rgs#CASE#case_12|TRAVELLER#a",
+    ]);
+    expect(new Set(readBaseKeys).size).toBe(readBaseKeys.length);
+  });
+
+  it("orders a base-table query by byte order where ICU collation disagrees", async () => {
+    const tableClient = new InMemoryTableClient();
+    // The measured disagreement, pinned: `#` is byte 35 and `_` is byte 95, so
+    // DynamoDB returns CASE#a first. ICU returns CASE_REF#a first. This is the
+    // `filterAndSort` path, which backs query and queryGsi -- i.e. nearly every
+    // read the whole test suite makes.
+    for (const sortKey of ["CASE_REF#a", "CASE#a"]) {
+      void tableClient.put({ PK: "TENANT#rgs#LOOKUP", SK: sortKey });
+    }
+
+    const items = await tableClient.query("TENANT#rgs#LOOKUP");
+
+    expect(items.map((item) => item.SK)).toEqual(["CASE#a", "CASE_REF#a"]);
+  });
+});
+
 describe("DynamoTableClient.queryGsiPage", () => {
   it("builds a ProjectionExpression with placeholder names", async () => {
     const { tableClient, capturedInputs } = buildStubbedTableClient([{ Items: [] }]);

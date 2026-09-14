@@ -380,7 +380,7 @@ export class InMemoryTableClient implements TableClient {
       { ...options, limit: undefined, projection: undefined, scanForward: true },
     );
     orderedItems.sort((leftItem, rightItem) =>
-      indexPositionOf(leftItem, skAttribute).localeCompare(indexPositionOf(rightItem, skAttribute)),
+      compareByteOrder(indexPositionOf(leftItem, skAttribute), indexPositionOf(rightItem, skAttribute)),
     );
     if (options.scanForward === false) orderedItems.reverse();
 
@@ -395,7 +395,7 @@ export class InMemoryTableClient implements TableClient {
       cursorPosition === undefined
         ? 0
         : orderedItems.findIndex((item) => {
-            const comparison = indexPositionOf(item, skAttribute).localeCompare(cursorPosition);
+            const comparison = compareByteOrder(indexPositionOf(item, skAttribute), cursorPosition);
             return options.scanForward === false ? comparison < 0 : comparison > 0;
           });
     // -1 here means every remaining row is at or before the cursor: the
@@ -434,7 +434,12 @@ export class InMemoryTableClient implements TableClient {
       const requiredPrefix = options.skPrefix;
       matches = matches.filter((item) => sortKeyOf(item).startsWith(requiredPrefix));
     }
-    matches.sort((left, right) => sortKeyOf(left).localeCompare(sortKeyOf(right)));
+    // compareByteOrder, not localeCompare: this orders every in-memory read
+    // the suite makes, and an ICU collation orders `#` before `_` the opposite
+    // way round from the byte order DynamoDB sorts by. See compareByteOrder.
+    matches.sort((leftItem, rightItem) =>
+      compareByteOrder(sortKeyOf(leftItem), sortKeyOf(rightItem)),
+    );
     if (options.scanForward === false) matches.reverse();
     if (options.limit !== undefined) matches = matches.slice(0, options.limit);
     return matches.map((item) => projectItem(structuredClone(item), options.projection));
@@ -442,12 +447,40 @@ export class InMemoryTableClient implements TableClient {
 }
 
 /**
+ * Compares two keys the way DynamoDB sorts them: by byte order.
+ *
+ * NOT `localeCompare`. That is an ICU linguistic collation and it disagrees
+ * with byte order on four of five probed pairs, including shapes this repo
+ * builds keys from every day -- most sharply `#` against `_`, where ICU orders
+ * `TENANT#rgs#CASE#a` and `TENANT#rgs#CASE_REF#a` OPPOSITE to DynamoDB (byte 35
+ * against byte 95), and both infixes are real in domain/crm/keys.ts. It also
+ * ignores U+0000 entirely, and a sort key that is a prefix of another comes out
+ * the wrong way round. A double that orders reads by a rule production does not
+ * use is the works-in-tests / fails-in-production seam this module exists to
+ * close.
+ *
+ * Relational `<`/`>` on a string compares by UTF-16 code unit, which matches
+ * UTF-8 byte order across the ASCII key space in use here. The two diverge
+ * above the BMP, which no key in this repo reaches.
+ */
+function compareByteOrder(leftKey: string, rightKey: string): number {
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+/**
  * A row's total position in a GSI partition: the index sort key first, then the
  * base-table key, which is unique. A cursor is a position in this order, so the
  * order has to be total -- two rows sharing a GSI sort key would otherwise swap
  * between two reads and be served twice, or skipped. Joined on NUL, which sorts
- * below every printable character, so a sort key that is a prefix of another
- * cannot borrow the next field's ordering.
+ * below every printable character IN BYTE ORDER, so a sort key that is a prefix
+ * of another cannot borrow the next field's ordering.
+ *
+ * That property holds under `compareByteOrder` and did NOT hold under the
+ * `localeCompare` that was here first: ICU collation treats U+0000 as
+ * completely ignorable, so it compared the three fields as if plain-
+ * concatenated and could return 0 for two distinct rows -- the exact totality
+ * the separator exists to guarantee. Compare positions only with
+ * `compareByteOrder`.
  */
 function indexPositionOf(
   itemOrKey: Record<string, unknown>,
