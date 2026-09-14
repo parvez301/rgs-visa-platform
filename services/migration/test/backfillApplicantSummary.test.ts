@@ -61,11 +61,51 @@ describe("backfillApplicantSummary", () => {
   it("leaves updatedAt alone, so a backfilled case does not jump the ledger's sort", async () => {
     const context = buildContext();
     await writeCase(context, buildCase("case_1"));
-
-    await backfillApplicantSummary(context, "rgs");
-
+    // Same stripping fixture as the first test: a case whose summary is
+    // already current takes the alreadyCurrent short-circuit and is never
+    // written at all, which would make "updatedAt unchanged" true for the
+    // wrong reason -- nothing touched the item. Dropping the summary forces
+    // an actual write, so this test proves the round trip PRESERVES
+    // updatedAt, not merely that a no-op leaves it alone.
     const metaItem = await context.table.get(casePartitionKey("rgs", "case_1"), META_SORT_KEY);
-    expect(metaItem?.["updatedAt"]).toBe("2026-03-04T10:00:00.000Z");
+    const { applicantSummary: _dropped, ...metaWithoutSummary } = metaItem!;
+    await context.table.put(metaWithoutSummary as typeof metaItem & { PK: string; SK: string });
+
+    const report = await backfillApplicantSummary(context, "rgs");
+
+    // Both assertions together are the point: either alone is what let a
+    // bugged round trip (a fresh updatedAt on write) pass this test before.
+    expect(report.written).toBe(1);
+    const backfilledMetaItem = await context.table.get(casePartitionKey("rgs", "case_1"), META_SORT_KEY);
+    expect(backfilledMetaItem?.["updatedAt"]).toBe("2026-03-04T10:00:00.000Z");
+  });
+
+  it("treats a content-equal summary in a different key order as already current", async () => {
+    const context = buildContext();
+    await writeCase(context, buildCase("case_1"));
+    // InMemoryTableClient round-trips every put/get through structuredClone,
+    // which preserves object key insertion order deterministically -- so no
+    // test relying on that adapter alone can ever produce two differently-
+    // ordered-but-equal summaries by accident. The order has to be forced by
+    // hand, which is exactly what a hand-rolled JSON.stringify comparison
+    // (rather than a structural one) is blind to: DynamoDB's own Map
+    // attribute gives no guarantee its key order across a PutItem/Query round
+    // trip matches the order `summariseApplicants` inserted them in.
+    const metaItem = await context.table.get(casePartitionKey("rgs", "case_1"), META_SORT_KEY);
+    await context.table.put({
+      ...metaItem!,
+      applicantSummary: {
+        count: 2,
+        // Same two keys, same two values as writeCase's own computed
+        // summary -- inserted in the opposite order.
+        custody: { NOT_HELD: 1, WITH_RGS: 1 },
+        outcome: { PENDING: 2 },
+      },
+    });
+
+    const report = await backfillApplicantSummary(context, "rgs");
+
+    expect(report).toMatchObject({ scanned: 1, written: 0, alreadyCurrent: 1 });
   });
 
   it("is re-runnable: a second run writes nothing", async () => {

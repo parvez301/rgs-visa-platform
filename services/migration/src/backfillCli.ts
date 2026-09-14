@@ -1,26 +1,18 @@
 #!/usr/bin/env node
 import { buildProductionContext } from "@rgs/api/src/http/handler";
-import { DEFAULT_TENANT_ID } from "@rgs/api/src/domain/crm/keys";
-import { backfillApplicantSummary } from "./backfillApplicantSummary";
+import { runBackfillCli } from "./runBackfillCli";
 
-// buildProductionContext is synchronous (services/api/src/http/handler.ts) --
-// no await here, to match its real signature rather than the brief's draft.
-const context = buildProductionContext();
-const report = await backfillApplicantSummary(context, DEFAULT_TENANT_ID, {
-  onProgress: (scanned) => {
-    if (scanned % 250 === 0) console.log(`...${scanned} cases scanned`);
-  },
+/**
+ * The bin shim, and nothing else -- see `runBackfillCli.ts` for why. Same
+ * `process.exitCode` (not `process.exit()`) as `cli.ts`, for the same reason:
+ * `exit()` truncates pending stdout, which on a run whose entire output is a
+ * summary table is how an operator ends up with half a table.
+ */
+const cliResult = await runBackfillCli({
+  buildContext: buildProductionContext,
+  logLine: (message) => console.log(message),
+  logError: (message) => console.error(message),
+  logSummary: (summary) => console.table(summary),
 });
 
-console.table({
-  scanned: report.scanned,
-  written: report.written,
-  alreadyCurrent: report.alreadyCurrent,
-  unreadable: report.unreadableCaseIds.length,
-});
-if (report.unreadableCaseIds.length > 0) {
-  console.error(`Cases that could not be reassembled: ${report.unreadableCaseIds.join(", ")}`);
-}
-// Unreadable cases are a finding, not a failure: the run did everything it
-// could and said what it could not do.
-process.exitCode = 0;
+process.exitCode = cliResult.exitCode;
