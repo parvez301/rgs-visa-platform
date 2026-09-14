@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ReviewItemSchema } from "../../src/crm/reviewItem";
+import { isMergeReviewReason, ReviewItemSchema } from "../../src/crm/reviewItem";
 
 describe("ReviewItemSchema", () => {
   const validItem = {
@@ -52,5 +52,18 @@ describe("ReviewItemSchema", () => {
   it("requires sourceSheet and sourceRow so every item traces back to the workbook", () => {
     const { sourceRow: _omitted, ...withoutRow } = validItem;
     expect(() => ReviewItemSchema.parse(withoutRow)).toThrow();
+  });
+});
+
+// F4: previously exercised only indirectly through summariseOpenReviewItems, and
+// only for PROPOSED_GROUP -- DUPLICATE_REF was never actually asserted anywhere.
+describe("isMergeReviewReason", () => {
+  it("returns true for both merge reasons", () => {
+    expect(isMergeReviewReason("PROPOSED_GROUP")).toBe(true);
+    expect(isMergeReviewReason("DUPLICATE_REF")).toBe(true);
+  });
+
+  it("returns false for a field-level reason", () => {
+    expect(isMergeReviewReason("UNMAPPED_STATUS")).toBe(false);
   });
 });

@@ -507,6 +507,29 @@ describe("summariseOpenReviewItems", () => {
     expect(summary.unreadableReviewItemIds).toEqual(["rev_broken"]);
   });
 
+  // F1: the row above always carries a present, non-empty reviewItemId, so it
+  // only ever exercises the truthy branch of the fallback. This row has no
+  // reviewItemId attribute at all -- the storage key is the only thing left
+  // that finds it, which is exactly what the fallback branch exists for.
+  it("names an item by its storage key when the reviewItemId itself is missing", async () => {
+    const context = buildTestContext();
+    const partitionKey = reviewItemPartitionKey("rgs", "rev_no_id");
+    await context.table.put({
+      PK: partitionKey,
+      SK: REVIEW_ITEM_SORT_KEY,
+      GSI1PK: reviewQueueGsi1Pk("rgs", "OPEN"),
+      GSI1SK: "2026-03-04T10:00:00.000Z",
+      caseRef: "RGS-9001",
+      reason: "UNMAPPED_STATUS",
+      // No reviewItemId attribute at all.
+    });
+
+    const summary = await summariseOpenReviewItems(context, "rgs");
+
+    expect(summary.entries).toEqual([]);
+    expect(summary.unreadableReviewItemIds).toEqual([partitionKey]);
+  });
+
   it("reads the partition once, projected, rather than reassembling every item", async () => {
     const context = buildTestContext();
     const projectionsAsked: (readonly string[] | undefined)[] = [];

@@ -222,7 +222,7 @@ async function writeReviewItem(context: AppContext, reviewItem: crm.ReviewItem):
  * `listReviewItems` cannot answer this: it caps at 200 of 3,958 OPEN items and
  * has no cursor, so a marker built on it would appear on 5% of the dirty rows
  * and nowhere else -- which reads as "the rest are clean". This reads the whole
- * OPEN partition with a four-attribute projection instead, and carries the item
+ * OPEN partition with a five-attribute projection instead, and carries the item
  * ids so opening a marker is a `get` per item actually opened rather than a
  * second sweep.
  */
@@ -247,6 +247,20 @@ export interface OpenReviewSummary {
   unreadableReviewItemIds: string[];
 }
 
+/**
+ * Derived from `ReviewItemSchema`, not hand-rolled beside it. The projection
+ * deliberately omits fields that schema requires, so the whole schema cannot be
+ * used here -- but `.pick()` takes exactly the three the projection carries, which
+ * means a new `REVIEW_REASONS` member or a tightened `caseRef` reaches this sweep
+ * with no edit here at all. Two hand-kept notions of "a usable row" in one file is
+ * how the second one goes stale.
+ */
+const OpenReviewSummaryRowSchema = crm.ReviewItemSchema.pick({
+  reviewItemId: true,
+  caseRef: true,
+  reason: true,
+});
+
 export async function summariseOpenReviewItems(
   context: AppContext,
   tenantId: string,
@@ -260,30 +274,26 @@ export async function summariseOpenReviewItems(
   const unreadableReviewItemIds: string[] = [];
 
   for (const storedItem of storedItems) {
-    const reviewItemId = storedItem["reviewItemId"];
-    const caseRef = storedItem["caseRef"];
-    const reason = storedItem["reason"];
-    const isUsable =
-      typeof reviewItemId === "string" &&
-      reviewItemId.length > 0 &&
-      typeof caseRef === "string" &&
-      caseRef.length > 0 &&
-      typeof reason === "string" &&
-      (crm.REVIEW_REASONS as readonly string[]).includes(reason);
-    if (!isUsable) {
+    const parsedRow = OpenReviewSummaryRowSchema.safeParse(storedItem);
+    if (!parsedRow.success) {
       // Named, not dropped: an item missing from this summary is a dirty row
       // that renders as clean, which is the one thing the marker exists to
       // prevent. The storage key is the fallback id because it is all an
-      // operator has to find the row with.
+      // operator has to find the row with. This reads the raw item, not the
+      // parse result -- the parse just failed, so it has nothing to offer.
+      const rawReviewItemId = storedItem["reviewItemId"];
       unreadableReviewItemIds.push(
-        typeof reviewItemId === "string" && reviewItemId.length > 0 ? reviewItemId : storedItem.PK,
+        typeof rawReviewItemId === "string" && rawReviewItemId.length > 0
+          ? rawReviewItemId
+          : storedItem.PK,
       );
       console.warn(`CRM review item in tenant ${tenantId} could not be summarised: ${storedItem.PK}`);
       continue;
     }
 
+    const { reviewItemId, caseRef, reason } = parsedRow.data;
     const entry = entriesByCaseRef.get(caseRef) ?? { caseRef, fieldItemIds: [], mergeItemIds: [] };
-    if (crm.isMergeReviewReason(reason as crm.ReviewReason)) {
+    if (crm.isMergeReviewReason(reason)) {
       entry.mergeItemIds.push(reviewItemId);
     } else {
       entry.fieldItemIds.push(reviewItemId);
