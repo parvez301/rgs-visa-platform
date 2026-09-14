@@ -215,11 +215,29 @@ describe("useLedgerEdit", () => {
     // rollback keyed off the wrong computed key restores a snapshot nobody
     // ever wrote to, leaving the second filter's tab showing the failed
     // edit's value with no error state at all.
+    //
+    // Fix round 1, F5: the version of this test without the assertion right
+    // below stayed green against exactly the regression it is named for.
+    // Under a single-computed-key `LEDGER_CACHE_KEY_PREFIX`, the optimistic
+    // write in `commitEdit` above never reaches `secondFilterQueryKey` in the
+    // first place (see the sibling "lands on a DIFFERENT filter" test) -- so
+    // its value was never "NEW, correctly rolled back", it was "NEW,
+    // untouched the whole time", and the final `waitFor` below could not
+    // tell those two apart. Asserting the optimistic write actually landed
+    // here BEFORE rejecting closes that gap: under the regression, execution
+    // never reaches the rejection at all, and the test reddens on the line
+    // below instead of passing vacuously. Verified by hand (see
+    // task-12-report.md, "Fix round 1"): reverting `LEDGER_CACHE_KEY_PREFIX`
+    // to `crmQueryKeys.ledger([], undefined)` fails this test at this exact
+    // assertion; restoring the prefix makes it pass again.
     const { queryClient, commitEdit, rejectRequest } = renderLedgerWithDeferredApi();
     const secondFilterQueryKey = crmQueryKeys.ledger(["NEW"], undefined);
     queryClient.setQueryData(secondFilterQueryKey, buildLedgerLoad([buildLedgerRow()]));
 
     await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+
+    expect(cachedRow(queryClient, "case_1", secondFilterQueryKey).caseStatus).toBe("IN_PROGRESS");
+
     await act(async () => {
       rejectRequest(new ApiRequestError(500, "INTERNAL", "boom"));
     });
@@ -331,6 +349,9 @@ describe("useLedgerEdit", () => {
   });
 
   it("tells the human when the undo itself fails, rather than silently disappearing", async () => {
+    // Fix round 1, F4's "keep it for other failures" half: a plain 500 is not
+    // a conflict, so the retry affordance below must survive unchanged. The
+    // sibling 409 case is the next test.
     const user = userEvent.setup();
     const { commitEdit, resolveRequest, rejectRequest, queryClient } = renderLedgerWithDeferredApi();
 
@@ -353,5 +374,29 @@ describe("useLedgerEdit", () => {
     expect(cachedRow(queryClient, "case_1").caseStatus).toBe("DECIDED");
     // Retryable, not a dead end.
     expect(screen.getByRole("button", { name: /retry undo/i })).toBeInTheDocument();
+  });
+
+  it("suppresses 'Retry undo' when the undo itself hits a 409, leaving the conflict prompt as the only recovery UI", async () => {
+    // Fix round 1, F4. `onErrorForEdit` is shared, unmodified, by every axis
+    // mutation including the one `performUndo` drives -- so a 409 here opens
+    // the SAME conflict dialog a normal edit's 409 would, via the same code
+    // path. Before this fix, that dialog and "Retry undo" rendered at once:
+    // two contradictory answers to one question, and retrying is exactly
+    // what rule 4 forbids.
+    const user = userEvent.setup();
+    const { commitEdit, resolveRequest, rejectRequest } = renderLedgerWithDeferredApi();
+
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "SUBMITTED", nextValue: "DECIDED" });
+    await act(async () => {
+      resolveRequest({ caseStatus: "DECIDED" });
+    });
+
+    await user.click(await screen.findByRole("button", { name: /undo/i }));
+    await act(async () => {
+      rejectRequest(new ApiRequestError(409, "CONFLICT", "Cannot move a case from DECIDED to SUBMITTED"));
+    });
+
+    await screen.findByRole("alertdialog");
+    expect(screen.queryByRole("button", { name: /retry undo/i })).not.toBeInTheDocument();
   });
 });

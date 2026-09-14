@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { ApiRequestError } from "../lib/adminApi";
 
 /**
  * One toast on screen. `undo` is optional on purpose: rule 3 (spec §8) asks
@@ -137,10 +138,25 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
       await toast.undo();
       dismissToast(toast.toastId);
     } catch (undoError) {
+      // Fix round 1, F4: a 409 here means the case moved again underneath the
+      // undo itself, and `useLedgerEdit`'s own `onErrorForEdit` (shared by
+      // every mutation, undo included) has already opened the conflict
+      // prompt for this exact failure. A live "Retry undo" beside that
+      // prompt would offer a second, contradictory answer to one question --
+      // and retrying is precisely what rule 4 forbids. Clearing `undo`
+      // (rather than only hiding the button in the render below) means a
+      // stray click can never re-invoke it either; every other failure keeps
+      // its retry affordance unchanged.
+      const isConflict = undoError instanceof ApiRequestError && undoError.statusCode === 409;
       setToasts((currentToasts) =>
         currentToasts.map((entry) =>
           entry.toastId === toast.toastId
-            ? { ...entry, status: "failed", failureMessage: describeUndoFailure(undoError) }
+            ? {
+                ...entry,
+                status: "failed",
+                failureMessage: describeUndoFailure(undoError),
+                undo: isConflict ? undefined : entry.undo,
+              }
             : entry,
         ),
       );

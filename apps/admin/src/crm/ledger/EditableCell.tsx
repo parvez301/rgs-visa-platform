@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { crm } from "@rgs/shared";
 import { AxisChip } from "../components/Chip";
 import { BILLING_LABELS, CASE_STATUS_LABELS, VISA_TYPE_LABELS } from "../labels";
@@ -26,6 +26,19 @@ interface EditableCellProps {
    * component is fully usable standalone in a test.
    */
   onCloseEditor?: () => void;
+  /**
+   * Overrides the closed-cell display that `renderStaticValue` below would
+   * otherwise produce. Needed because `LedgerColumn.render` and this
+   * component's own per-axis static rendering can legitimately disagree: the
+   * "Type" column's `render` shows `describeCaseType` (case type AND visa
+   * type together, e.g. "Visa · Tourist"), while this component's own
+   * `visaType` branch only knows the visa type alone. Wiring `visaType` onto
+   * that column (fix round 1, F1) without this prop would silently regress
+   * every row's closed "Type" cell to the bare visa label. Optional so the
+   * 11 pre-existing tests that render this component with no column of its
+   * own in mind keep using the built-in per-axis fallback unchanged.
+   */
+  renderClosedValue?: () => ReactNode;
 }
 
 /** The row's own current value for this axis, as the plain string every editor works in. */
@@ -78,7 +91,14 @@ function renderStaticValue(column: LedgerEditColumn, row: crm.LedgerRow) {
   }
 }
 
-export function EditableCell({ column, row, onCommit, isEditing, onCloseEditor }: EditableCellProps) {
+export function EditableCell({
+  column,
+  row,
+  onCommit,
+  isEditing,
+  onCloseEditor,
+  renderClosedValue,
+}: EditableCellProps) {
   const [isOpen, setIsOpen] = useState(isEditing);
   const [draftValue, setDraftValue] = useState(() => readLedgerColumnValue(column, row));
   const editorElementRef = useRef<HTMLSelectElement & HTMLInputElement>(null);
@@ -130,7 +150,7 @@ export function EditableCell({ column, row, onCommit, isEditing, onCloseEditor }
           }
         }}
       >
-        {renderStaticValue(column, row)}
+        {renderClosedValue !== undefined ? renderClosedValue() : renderStaticValue(column, row)}
       </div>
     );
   }

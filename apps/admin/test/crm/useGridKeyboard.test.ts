@@ -82,7 +82,34 @@ describe("gridReducer", () => {
 
   it("selects a contiguous range on shift-click", () => {
     const anchored = gridReducer(initialState, { kind: "toggleSelection" }, bounds);
-    const ranged = gridReducer(anchored, { kind: "clickSelect", rowIndex: 4, withShift: true }, bounds);
+    const ranged = gridReducer(
+      anchored,
+      { kind: "clickSelect", rowIndex: 4, columnIndex: 0, withShift: true },
+      bounds,
+    );
+    expect(ranged.selectedRowIndexes).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("moves column focus to the clicked cell, not just the clicked row (fix round 1, F3)", () => {
+    // The gap the reviewer found: clicking a non-REF cell moved row focus but
+    // left column focus wherever it already was, so the clicked cell never
+    // actually became the focused cell and Enter opened the wrong editor.
+    const clicked = gridReducer(
+      initialState,
+      { kind: "clickSelect", rowIndex: 3, columnIndex: 5, withShift: false },
+      bounds,
+    );
+    expect(clicked.focus).toEqual({ rowIndex: 3, columnIndex: 5 });
+  });
+
+  it("moves column focus to the clicked cell on a shift-click too", () => {
+    const anchored = { ...initialState, focus: { rowIndex: 0, columnIndex: 2 } };
+    const ranged = gridReducer(
+      anchored,
+      { kind: "clickSelect", rowIndex: 4, columnIndex: 7, withShift: true },
+      bounds,
+    );
+    expect(ranged.focus).toEqual({ rowIndex: 4, columnIndex: 7 });
     expect(ranged.selectedRowIndexes).toEqual([0, 1, 2, 3, 4]);
   });
 

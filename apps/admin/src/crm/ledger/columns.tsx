@@ -51,7 +51,17 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
   { key: "caseRef", header: "REF", width: 120, sticky: true, render: (row) => row.caseRef },
   { key: "partner", header: "Partner", width: 200, render: (_row, partnerName) => partnerName },
   { key: "destinationCountry", header: "Country", width: 80, render: (row) => row.destinationCountry },
-  { key: "caseType", header: "Type", width: 150, render: (row) => describeCaseType(row) },
+  {
+    key: "caseType",
+    header: "Type",
+    width: 150,
+    // Fix round 1, F1: this axis's edit was implemented and pinned in
+    // EditableCell.test.tsx (Task 12) but never wired to a column, so it was
+    // unreachable in the product. "Type" is the only column that already
+    // displays a visa type, so it is the natural home for editing one.
+    editable: "visaType",
+    render: (row) => describeCaseType(row),
+  },
   { key: "applicants", header: "Applicants", width: 220, render: (row) => renderApplicants(row) },
   {
     key: "caseStatus",

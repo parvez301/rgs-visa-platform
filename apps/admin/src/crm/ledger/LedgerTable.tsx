@@ -51,6 +51,16 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
   // fighting a desk agent's manual scroll -- `scrollToIndex` above already
   // owns scrolling.
   useEffect(() => {
+    // Fix round 1, F2: while a cell is open for editing, the open editor's own
+    // input/select owns DOM focus -- it is a *descendant* of the gridcell
+    // wrapper this effect focuses, not the wrapper itself. Re-running this on
+    // every render (which the no-deps-array comment above still requires) is
+    // exactly what stole focus back to the wrapper out from under an open
+    // editor on any unrelated re-render, firing `onBlur`'s commit for a value
+    // the human never confirmed. `gridState.focus` does not move while
+    // `gridState.editing` is set, so skipping the sync entirely until editing
+    // ends loses nothing: there is nothing new to focus.
+    if (gridState.editing !== undefined) return;
     const focusedRow = rows[gridState.focus.rowIndex];
     const focusedColumn = LEDGER_COLUMNS[gridState.focus.columnIndex];
     if (focusedRow === undefined || focusedColumn === undefined) return;
@@ -102,13 +112,6 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
                   data-case-id={row.caseId}
                   role="row"
                   aria-selected={isRowSelected ? "true" : "false"}
-                  onClick={(event) =>
-                    dispatchGridAction({
-                      kind: "clickSelect",
-                      rowIndex: virtualRow.index,
-                      withShift: event.shiftKey,
-                    })
-                  }
                   className="absolute left-0 grid w-full border-b border-crm-rule-row bg-crm-canvas hover:bg-crm-surface"
                   style={{
                     gridTemplateColumns,
@@ -129,6 +132,22 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
                         data-column={column.key}
                         role="gridcell"
                         tabIndex={isCellFocused ? 0 : -1}
+                        // Fix round 1, F3: the click handler lives on each cell, not
+                        // the row, and always names the column actually clicked --
+                        // the row-level click this replaced only ever moved row
+                        // focus, so a click on any non-REF cell never focused that
+                        // cell for editing. `stopPropagation` keeps a click here
+                        // from ever reaching a stray row-level handler in the future
+                        // and double-dispatching.
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          dispatchGridAction({
+                            kind: "clickSelect",
+                            rowIndex: virtualRow.index,
+                            columnIndex,
+                            withShift: event.shiftKey,
+                          });
+                        }}
                         className={`flex items-center gap-1.5 px-2 truncate ${
                           column.sticky ? "sticky left-0 z-10 bg-inherit font-medium" : ""
                         }`}
@@ -141,6 +160,9 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
                             row={row}
                             isEditing={isCellEditing}
                             onCloseEditor={() => dispatchGridAction({ kind: "cancelEdit" })}
+                            renderClosedValue={() =>
+                              column.render(row, partnerNamesById[row.partnerId] ?? row.partnerId)
+                            }
                             onCommit={(nextValue) => {
                               void commitEdit({
                                 caseId: row.caseId,

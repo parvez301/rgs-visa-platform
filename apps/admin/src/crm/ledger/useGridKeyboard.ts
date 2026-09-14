@@ -27,7 +27,7 @@ export type GridAction =
   | { kind: "commitAndStay" }
   | { kind: "toggleSelection" }
   | { kind: "extendSelection"; direction: "up" | "down" }
-  | { kind: "clickSelect"; rowIndex: number; withShift: boolean };
+  | { kind: "clickSelect"; rowIndex: number; columnIndex: number; withShift: boolean };
 
 export interface GridBounds {
   rowCount: number;
@@ -75,6 +75,14 @@ export function gridReducer(previousState: GridState, action: GridAction, bounds
       // → is overloaded: on a collapsed parent's REF cell it expands instead
       // of moving. Resolved here, not in the component, so both branches are
       // reducer-level tests rather than rendered-DOM ones.
+      //
+      // Minor, fix round 1 (F6): this costs any caller counting keypresses
+      // from the REF column one extra →. Reaching column index N from a
+      // collapsed row's REF cell (index 0) takes N+1 right-arrows, not N --
+      // the first one only expands the row. `LedgerKeyboard.test.tsx`'s own
+      // "resolves the overloaded →" test demonstrates the mechanism; nothing
+      // previously said so in words for a reader who is not stepping through
+      // this switch.
       if (action.direction === "right" && isOnRefColumn && !isFocusedRowExpanded) {
         return {
           ...previousState,
@@ -158,8 +166,16 @@ export function gridReducer(previousState: GridState, action: GridAction, bounds
       // is the row focus was on before this click (not a separately stored
       // field), so it agrees with Shift+↑↓'s own anchor -- wherever focus
       // already was.
+      //
+      // Fix round 1, F3: a click also carries the column the human actually
+      // clicked, not just the row -- otherwise clicking a non-REF cell moved
+      // row focus but left column focus wherever it was (often column 0),
+      // so the clicked cell never became focused and Enter opened the wrong
+      // cell's editor. Resolved here, in the reducer, rather than in
+      // `LedgerTable`'s click handler, per the same "overloaded-→" precedent
+      // above: a click's exact effect on focus is grid semantics.
       if (!action.withShift) {
-        return { ...previousState, focus: { ...previousState.focus, rowIndex: action.rowIndex } };
+        return { ...previousState, focus: { rowIndex: action.rowIndex, columnIndex: action.columnIndex } };
       }
       const anchorRowIndex = previousState.focus.rowIndex;
       const rangeStartRowIndex = Math.min(anchorRowIndex, action.rowIndex);
@@ -170,7 +186,7 @@ export function gridReducer(previousState: GridState, action: GridAction, bounds
       );
       return {
         ...previousState,
-        focus: { ...previousState.focus, rowIndex: action.rowIndex },
+        focus: { rowIndex: action.rowIndex, columnIndex: action.columnIndex },
         selectedRowIndexes,
       };
     }
