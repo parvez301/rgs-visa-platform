@@ -8,6 +8,7 @@ const NAV_LINKS = [
   { label: "Leads", to: "/leads" },
   { label: "Notices", to: "/notices" },
   { label: "Config", to: "/config" },
+  { label: "CRM", to: "/crm" },
 ] as const;
 
 export function AdminShell({ children }: { children: ReactNode }) {
