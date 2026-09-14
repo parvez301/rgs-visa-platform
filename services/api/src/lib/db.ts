@@ -30,6 +30,28 @@ export interface QueryOptions {
    * ignored on a GSI query (and InMemoryTableClient is always consistent).
    */
   consistentRead?: boolean;
+  /**
+   * Attribute names to return instead of the whole item. Every GSI in this
+   * stack is ProjectionType.ALL, so this reduces response bytes rather than
+   * index coverage -- which is the whole point on the Ledger read, where the
+   * difference is 1.4 MB against 7-21 MB. Always include PK and SK: callers
+   * filter on SK and recover a caseId from PK.
+   */
+  projection?: readonly string[];
+}
+
+/** A DynamoDB primary/index key, as both adapters hand it back. */
+export type TableItemKey = Record<string, unknown>;
+
+/** One page of a partition, plus where to resume if there is more. */
+export interface QueryPage {
+  items: TableItem[];
+  /** Absent when the partition is exhausted -- never an empty object. */
+  nextStartKey?: TableItemKey;
+}
+
+export interface PagedQueryOptions extends QueryOptions {
+  startKey?: TableItemKey;
 }
 
 /**
@@ -55,6 +77,17 @@ export interface TableClient {
     partitionKey: string,
     options?: QueryOptions,
   ): Promise<TableItem[]>;
+  /**
+   * One page of a GSI partition, resumable. The opposite contract to
+   * `queryGsi`, which drains: this fills up to `limit` and reports where to
+   * continue. Use it when a caller pages a partition across HTTP requests;
+   * use `queryGsi` when a truncated answer would be a wrong answer.
+   */
+  queryGsiPage(
+    indexName: "GSI1" | "GSI2" | "GSI3",
+    partitionKey: string,
+    options?: PagedQueryOptions,
+  ): Promise<QueryPage>;
 }
 
 /** Production adapter over DynamoDB. */
@@ -129,6 +162,13 @@ export class DynamoTableClient implements TableClient {
     do {
       const remainingLimit =
         options.limit === undefined ? undefined : options.limit - collectedItems.length;
+      const attributeNames: Record<string, string> = hasSkPrefix
+        ? { "#pk": pkAttribute, "#sk": skAttribute }
+        : { "#pk": pkAttribute };
+      const projectionExpression = DynamoTableClient.buildProjection(
+        options.projection,
+        attributeNames,
+      );
       const result = await this.documentClient.send(
         new QueryCommand({
           TableName: this.tableName,
@@ -136,9 +176,7 @@ export class DynamoTableClient implements TableClient {
           KeyConditionExpression: hasSkPrefix
             ? `#pk = :pk AND begins_with(#sk, :skPrefix)`
             : `#pk = :pk`,
-          ExpressionAttributeNames: hasSkPrefix
-            ? { "#pk": pkAttribute, "#sk": skAttribute }
-            : { "#pk": pkAttribute },
+          ExpressionAttributeNames: attributeNames,
           ExpressionAttributeValues: hasSkPrefix
             ? { ":pk": partitionKey, ":skPrefix": options.skPrefix }
             : { ":pk": partitionKey },
@@ -148,6 +186,9 @@ export class DynamoTableClient implements TableClient {
           // consistent read there is an error, so the flag is base-table only.
           ConsistentRead: indexName === undefined ? options.consistentRead : undefined,
           ExclusiveStartKey: exclusiveStartKey,
+          ...(projectionExpression !== undefined
+            ? { ProjectionExpression: projectionExpression }
+            : {}),
         }),
       );
       collectedItems.push(...((result.Items ?? []) as TableItem[]));
@@ -158,6 +199,88 @@ export class DynamoTableClient implements TableClient {
     );
 
     return options.limit === undefined ? collectedItems : collectedItems.slice(0, options.limit);
+  }
+
+  /**
+   * Placeholders, never raw attribute names: `status`, `name`, `size` and a
+   * hundred others are DynamoDB reserved words, and a raw name in a
+   * ProjectionExpression is a ValidationException at runtime that no unit
+   * test over the in-memory adapter would catch.
+   */
+  private static buildProjection(
+    projection: readonly string[] | undefined,
+    attributeNames: Record<string, string>,
+  ): string | undefined {
+    if (projection === undefined || projection.length === 0) return undefined;
+    return projection
+      .map((attributeName, attributeIndex) => {
+        const placeholder = `#p${attributeIndex}`;
+        attributeNames[placeholder] = attributeName;
+        return placeholder;
+      })
+      .join(", ");
+  }
+
+  /**
+   * One page of a GSI partition. The opposite contract to `queryGsi`/`query`
+   * (via `runQuery`), which drain: this stops the moment `limit` items have
+   * been collected, or the partition runs out first, and reports the key to
+   * resume from. A caller paging a partition across HTTP requests needs
+   * exactly that -- a drained answer would mean re-reading the whole
+   * partition on every request.
+   */
+  async queryGsiPage(
+    indexName: "GSI1" | "GSI2" | "GSI3",
+    partitionKey: string,
+    options: PagedQueryOptions = {},
+  ): Promise<QueryPage> {
+    const pkAttribute = `${indexName}PK`;
+    const skAttribute = `${indexName}SK`;
+    const hasSkPrefix = options.skPrefix !== undefined;
+    const collectedItems: TableItem[] = [];
+    let exclusiveStartKey: TableItemKey | undefined = options.startKey;
+
+    do {
+      const remainingLimit =
+        options.limit === undefined ? undefined : options.limit - collectedItems.length;
+      const attributeNames: Record<string, string> = { "#pk": pkAttribute };
+      if (hasSkPrefix) attributeNames["#sk"] = skAttribute;
+      const projectionExpression = DynamoTableClient.buildProjection(
+        options.projection,
+        attributeNames,
+      );
+      const result = await this.documentClient.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          IndexName: indexName,
+          KeyConditionExpression: hasSkPrefix ? `#pk = :pk AND begins_with(#sk, :skPrefix)` : `#pk = :pk`,
+          ExpressionAttributeNames: attributeNames,
+          ExpressionAttributeValues: hasSkPrefix
+            ? { ":pk": partitionKey, ":skPrefix": options.skPrefix }
+            : { ":pk": partitionKey },
+          Limit: remainingLimit,
+          ScanIndexForward: options.scanForward ?? true,
+          ExclusiveStartKey: exclusiveStartKey,
+          ...(projectionExpression !== undefined
+            ? { ProjectionExpression: projectionExpression }
+            : {}),
+        }),
+      );
+      collectedItems.push(...((result.Items ?? []) as TableItem[]));
+      exclusiveStartKey = result.LastEvaluatedKey;
+      // Unlike runQuery this does NOT keep going once the limit is met: the
+      // caller is paging, and the unread remainder is what nextStartKey is
+      // for. DynamoDB's own Limit means collectedItems can never overshoot,
+      // so nothing is ever sliced off behind its own cursor.
+    } while (
+      exclusiveStartKey !== undefined &&
+      (options.limit === undefined || collectedItems.length < options.limit)
+    );
+
+    return {
+      items: collectedItems,
+      ...(exclusiveStartKey !== undefined ? { nextStartKey: exclusiveStartKey } : {}),
+    };
   }
 }
 
@@ -213,6 +336,41 @@ export class InMemoryTableClient implements TableClient {
     );
   }
 
+  async queryGsiPage(
+    indexName: "GSI1" | "GSI2" | "GSI3",
+    partitionKey: string,
+    options: PagedQueryOptions = {},
+  ): Promise<QueryPage> {
+    const pkAttribute = `${indexName}PK` as const;
+    const skAttribute = `${indexName}SK` as const;
+    // Ordered exactly as queryGsi would, and NOT limited yet: the cursor is a
+    // position in this order, so slicing before finding it would lose it.
+    const orderedItems = this.filterAndSort(
+      (item) => item[pkAttribute] === partitionKey,
+      (item) => String(item[skAttribute] ?? ""),
+      { ...options, limit: undefined, projection: undefined },
+    );
+
+    const resumeIndex =
+      options.startKey === undefined
+        ? 0
+        : orderedItems.findIndex(
+            (item) =>
+              item.PK === options.startKey!["PK"] && item.SK === options.startKey!["SK"],
+          ) + 1;
+    const pageSize = options.limit ?? orderedItems.length;
+    const pageItems = orderedItems.slice(resumeIndex, resumeIndex + pageSize);
+    const lastItem = pageItems[pageItems.length - 1];
+    const hasMore = resumeIndex + pageItems.length < orderedItems.length;
+
+    return {
+      items: pageItems.map((item) => projectItem(item, options.projection)),
+      ...(hasMore && lastItem !== undefined
+        ? { nextStartKey: { PK: lastItem.PK, SK: lastItem.SK } }
+        : {}),
+    };
+  }
+
   private filterAndSort(
     partitionMatch: (item: TableItem) => boolean,
     sortKeyOf: (item: TableItem) => string,
@@ -226,6 +384,20 @@ export class InMemoryTableClient implements TableClient {
     matches.sort((left, right) => sortKeyOf(left).localeCompare(sortKeyOf(right)));
     if (options.scanForward === false) matches.reverse();
     if (options.limit !== undefined) matches = matches.slice(0, options.limit);
-    return matches.map((item) => structuredClone(item));
+    return matches.map((item) => projectItem(structuredClone(item), options.projection));
   }
+}
+
+/**
+ * The in-memory stand-in for ProjectionExpression. An attribute the item does
+ * not have is simply absent from the result, exactly as DynamoDB returns it --
+ * never present-and-undefined, which would read back as a null column.
+ */
+function projectItem(item: TableItem, projection: readonly string[] | undefined): TableItem {
+  if (projection === undefined || projection.length === 0) return item;
+  const projected: Record<string, unknown> = {};
+  for (const attributeName of projection) {
+    if (attributeName in item) projected[attributeName] = item[attributeName];
+  }
+  return projected as TableItem;
 }

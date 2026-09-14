@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CorruptRecordError } from "../../src/lib/errors";
-import type { TableItem } from "../../src/lib/db";
+import type { PagedQueryOptions, QueryPage, TableItem } from "../../src/lib/db";
 import {
   REVIEW_ITEM_SORT_KEY,
   reviewItemPartitionKey,
@@ -325,6 +325,11 @@ describe("crm review queue", () => {
           context.table.delete(partitionKey, sortKey),
         query: (partitionKey: string) => context.table.query(partitionKey),
         queryGsi: async () => [explodingItem as unknown as TableItem],
+        queryGsiPage: (
+          indexName: "GSI1" | "GSI2" | "GSI3",
+          partitionKey: string,
+          options?: PagedQueryOptions,
+        ): Promise<QueryPage> => context.table.queryGsiPage(indexName, partitionKey, options),
       },
     };
 

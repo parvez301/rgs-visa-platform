@@ -59,6 +59,8 @@ function refuseWrites(context: TestContext, toolNameForMessage: string): AppCont
       query: (partitionKey, options) => context.table.query(partitionKey, options),
       queryGsi: (indexName, partitionKey, options) =>
         context.table.queryGsi(indexName, partitionKey, options),
+      queryGsiPage: (indexName, partitionKey, options) =>
+        context.table.queryGsiPage(indexName, partitionKey, options),
       put: () => {
         throw new Error(`read tool "${toolNameForMessage}"'s execute reached put()`);
       },

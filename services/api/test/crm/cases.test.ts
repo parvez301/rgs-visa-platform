@@ -10,7 +10,7 @@ import {
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
-import type { QueryOptions, TableItem } from "../../src/lib/db";
+import type { PagedQueryOptions, QueryOptions, QueryPage, TableItem } from "../../src/lib/db";
 import {
   changeApplicantCustody,
   changeApplicantOutcome,
@@ -893,6 +893,11 @@ describe("listCaseRefsByStatus", () => {
         delete: (partitionKey: string, sortKey: string) => context.table.delete(partitionKey, sortKey),
         queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) =>
           context.table.queryGsi(indexName, partitionKey, options),
+        queryGsiPage: (
+          indexName: "GSI1" | "GSI2" | "GSI3",
+          partitionKey: string,
+          options?: PagedQueryOptions,
+        ): Promise<QueryPage> => context.table.queryGsiPage(indexName, partitionKey, options),
       },
     };
 
@@ -1007,6 +1012,11 @@ describe("countCasesByField", () => {
         delete: (partitionKey: string, sortKey: string) => context.table.delete(partitionKey, sortKey),
         queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) =>
           context.table.queryGsi(indexName, partitionKey, options),
+        queryGsiPage: (
+          indexName: "GSI1" | "GSI2" | "GSI3",
+          partitionKey: string,
+          options?: PagedQueryOptions,
+        ): Promise<QueryPage> => context.table.queryGsiPage(indexName, partitionKey, options),
       },
     };
 

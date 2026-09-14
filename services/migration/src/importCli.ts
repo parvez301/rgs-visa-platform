@@ -101,6 +101,7 @@ function tableRecordingWrites(table: TableClient, observation: WriteObservation)
     get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
     query: (partitionKey, options) => table.query(partitionKey, options),
     queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
     put: (item: TableItem) => {
       observation.anyWriteAttempted = true;
       return table.put(item);

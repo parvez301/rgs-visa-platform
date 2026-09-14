@@ -57,6 +57,8 @@ function refuseWrites(context: TestContext & { llm: FakeLlmProvider }): AppConte
       query: (partitionKey, options) => context.table.query(partitionKey, options),
       queryGsi: (indexName, partitionKey, options) =>
         context.table.queryGsi(indexName, partitionKey, options),
+      queryGsiPage: (indexName, partitionKey, options) =>
+        context.table.queryGsiPage(indexName, partitionKey, options),
       put: () => {
         throw new Error("extractIntake reached table.put() -- intake must never write");
       },

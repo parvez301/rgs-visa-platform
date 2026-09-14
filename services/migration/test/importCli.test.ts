@@ -95,6 +95,7 @@ function tableThatMustNotBeWrittenTo(table: TableClient): TableClient {
     get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
     query: (partitionKey, options) => table.query(partitionKey, options),
     queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
     put: (item: TableItem) => {
       throw new Error(`a dry run wrote to the table: put ${item.PK} / ${item.SK}`);
     },
@@ -111,6 +112,7 @@ function tableFailingAfterWrites(table: TableClient, allowedWriteCount: number):
     get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
     query: (partitionKey, options) => table.query(partitionKey, options),
     queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
     put: async (item: TableItem) => {
       writesSoFar += 1;
       if (writesSoFar > allowedWriteCount) throw new Error("simulated write timeout");
@@ -141,6 +143,7 @@ function tableThrottlingAfterWrites(table: TableClient, allowedWriteCount: numbe
     get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
     query: (partitionKey, options) => table.query(partitionKey, options),
     queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
     put: async (item: TableItem) => {
       writesSoFar += 1;
       if (writesSoFar > allowedWriteCount) throw buildThrottlingError();
@@ -160,6 +163,7 @@ function tableThrottlingFirstWrites(
     get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
     query: (partitionKey, options) => table.query(partitionKey, options),
     queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
     put: async (item: TableItem) => {
       attemptLog.putAttempts += 1;
       if (attemptLog.putAttempts <= failureCount) throw buildThrottlingError();

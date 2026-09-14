@@ -213,6 +213,13 @@ export function withWriteRetries(
     query: (partitionKey, queryOptions) => table.query(partitionKey, queryOptions),
     queryGsi: (indexName, partitionKey, queryOptions) =>
       table.queryGsi(indexName, partitionKey, queryOptions),
+    // Reads are not retried (see this file's header). Delegated all the same:
+    // handler.ts wraps the production table in this object, so a method that
+    // is missing here is a method that does not exist in production while
+    // every unit test -- which builds an InMemoryTableClient directly --
+    // passes.
+    queryGsiPage: (indexName, partitionKey, queryOptions) =>
+      table.queryGsiPage(indexName, partitionKey, queryOptions),
     put: (item: TableItem) => withRetries(() => table.put(item)),
     delete: (partitionKey: string, sortKey: string) =>
       withRetries(() => table.delete(partitionKey, sortKey)),

@@ -51,6 +51,8 @@ describe("caseRefIndex", () => {
       query: (partitionKey, options) => context.table.query(partitionKey, options),
       queryGsi: (indexName, partitionKey, options) =>
         context.table.queryGsi(indexName, partitionKey, options),
+      queryGsiPage: (indexName, partitionKey, options) =>
+        context.table.queryGsiPage(indexName, partitionKey, options),
     };
     const watchingContext = { ...context, table: watchingTable };
     await reserveCaseRef(context, "rgs", "31376", "case_1");

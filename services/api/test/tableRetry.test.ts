@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { DynamoTableClient, InMemoryTableClient, type TableClient, type TableItem } from "../src/lib/db";
+import {
+  DynamoTableClient,
+  InMemoryTableClient,
+  type PagedQueryOptions,
+  type TableClient,
+  type TableItem,
+} from "../src/lib/db";
 import {
   DEFAULT_WRITE_RETRY_OPTIONS,
   WRITE_RETRY_INITIAL_DELAY_VARIABLE,
@@ -49,6 +55,7 @@ function tableFailingFirstWrites(
     },
     query: (partitionKey, options) => table.query(partitionKey, options),
     queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
     put: async (item: TableItem) => {
       attemptLog.putAttempts += 1;
       if (attemptLog.putAttempts <= failureCount) throw error;
@@ -152,6 +159,7 @@ describe("withWriteRetries", () => {
       },
       query: async () => [],
       queryGsi: async () => [],
+      queryGsiPage: async () => ({ items: [] }),
       put: async () => undefined,
       delete: async () => undefined,
     };
@@ -167,6 +175,30 @@ describe("withWriteRetries", () => {
     // separate change with a separate argument behind it.
     await expect(retryingTable.get("TENANT#rgs#THING#1", "META")).rejects.toBe(throttlingError);
     expect(attemptLog.getAttempts).toBe(1);
+  });
+
+  it("forwards queryGsiPage to the wrapped table, because reads are not retried but must still work", async () => {
+    const pagedReads: { indexName: string; partitionKey: string; startKey: unknown }[] = [];
+    const retryingTable = withWriteRetries({
+      ...new InMemoryTableClient(),
+      queryGsiPage: async (
+        indexName: "GSI1" | "GSI2" | "GSI3",
+        partitionKey: string,
+        options?: PagedQueryOptions,
+      ) => {
+        pagedReads.push({ indexName, partitionKey, startKey: options?.startKey });
+        return { items: [{ PK: "a", SK: "META" }], nextStartKey: { PK: "a", SK: "META" } };
+      },
+    } as unknown as TableClient);
+
+    const page = await retryingTable.queryGsiPage("GSI1", "TENANT#rgs#CASE_STATUS#NEW", {
+      startKey: { PK: "z", SK: "META" },
+    });
+
+    expect(pagedReads).toEqual([
+      { indexName: "GSI1", partitionKey: "TENANT#rgs#CASE_STATUS#NEW", startKey: { PK: "z", SK: "META" } },
+    ]);
+    expect(page.nextStartKey).toEqual({ PK: "a", SK: "META" });
   });
 
   it("reports what it is doing, so a slow import is explicable", async () => {

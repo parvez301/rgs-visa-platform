@@ -536,6 +536,8 @@ describe("runImport", () => {
         if (indexName === "GSI1" && partitionKey === partnerListPartitionKey) partnerListQueryCount += 1;
         return context.table.queryGsi(indexName, partitionKey, options);
       },
+      queryGsiPage: (indexName, partitionKey, options) =>
+        context.table.queryGsiPage(indexName, partitionKey, options),
     };
     const countingContext = { ...context, table: countingTable };
 
@@ -575,6 +577,8 @@ describe("runImport", () => {
         }
         return context.table.queryGsi(indexName, partitionKey, options);
       },
+      queryGsiPage: (indexName, partitionKey, options) =>
+        context.table.queryGsiPage(indexName, partitionKey, options),
     };
     const countingContext = { ...context, table: countingTable };
 
@@ -1101,6 +1105,8 @@ describe("runImport", () => {
       delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
       query: (partitionKey, options) => table.query(partitionKey, options),
       queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+      queryGsiPage: (indexName, partitionKey, options) =>
+        table.queryGsiPage(indexName, partitionKey, options),
     };
   }
 
@@ -1115,6 +1121,10 @@ describe("runImport", () => {
         indexName === "GSI1" && partitionKey.includes("#CASE_STATUS#")
           ? []
           : table.queryGsi(indexName, partitionKey, options),
+      queryGsiPage: async (indexName, partitionKey, options) =>
+        indexName === "GSI1" && partitionKey.includes("#CASE_STATUS#")
+          ? { items: [] }
+          : table.queryGsiPage(indexName, partitionKey, options),
     };
   }
 
@@ -1143,6 +1153,8 @@ describe("runImport", () => {
       put: (item) => table.put(item),
       delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
       queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
+      queryGsiPage: (indexName, partitionKey, options) =>
+        table.queryGsiPage(indexName, partitionKey, options),
     };
   }
 

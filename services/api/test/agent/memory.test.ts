@@ -913,6 +913,8 @@ describe("the single-row memory reads are strongly consistent", () => {
         query: (partitionKey, options) => context.table.query(partitionKey, options),
         queryGsi: (indexName, partitionKey, options) =>
           context.table.queryGsi(indexName, partitionKey, options),
+        queryGsiPage: (indexName, partitionKey, options) =>
+          context.table.queryGsiPage(indexName, partitionKey, options),
       },
     };
     return { watchingContext, lastGetOptions: () => capturedGetOptions };
