@@ -2,10 +2,11 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { crm } from "@rgs/shared";
+import type { OpenReviewSummaryEntry } from "../api/crmClient";
 import { describeLedgerEditValue, useLedgerEdit } from "../api/mutations";
 import { ConflictPrompt } from "../components/ConflictPrompt";
 import { ApplicantSubRows, APPLICANT_SUBROW_LINE_HEIGHT } from "./ApplicantSubRows";
-import { LEDGER_COLUMNS, LEDGER_ROW_HEIGHT } from "./columns";
+import { LEDGER_COLUMNS, LEDGER_ROW_HEIGHT, type LedgerCellContext } from "./columns";
 import { EditableCell, readLedgerColumnValue } from "./EditableCell";
 import { useGridKeyboard } from "./useGridKeyboard";
 
@@ -19,6 +20,18 @@ interface LedgerTableProps {
    * cases only makes sense beside the `rows` those indexes address.
    */
   onSelectionChange?(selectedCaseIds: string[]): void;
+  /**
+   * The open review summary, indexed by `caseRef` (R66). Read ONCE by
+   * `LedgerPage` and handed down as a map rather than re-derived per row: the
+   * summary is one projected read covering every case, and joining it inside
+   * the row would turn one lookup into a scan of ~4,000 entries per mounted
+   * row on every scroll.
+   *
+   * Optional, so a `LedgerTable` rendered without a summary (any of the
+   * existing tests, or a future screen that has no use for review markers)
+   * simply shows none.
+   */
+  reviewEntriesByCaseRef?: ReadonlyMap<string, OpenReviewSummaryEntry>;
 }
 
 /**
@@ -57,7 +70,12 @@ function estimateExpandedRowHeight(row: crm.LedgerRow, reportedLineCount: number
   return LEDGER_ROW_HEIGHT + applicantLineCount * APPLICANT_SUBROW_LINE_HEIGHT;
 }
 
-export function LedgerTable({ rows, partnerNamesById, onSelectionChange }: LedgerTableProps) {
+export function LedgerTable({
+  rows,
+  partnerNamesById,
+  onSelectionChange,
+  reviewEntriesByCaseRef,
+}: LedgerTableProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Grid semantics (focus, selection, expand/collapse) live in the reducer
@@ -348,6 +366,12 @@ export function LedgerTable({ rows, partnerNamesById, onSelectionChange }: Ledge
               const row = rows[virtualRow.index]!;
               const isRowSelected = gridState.selectedRowIndexes.includes(virtualRow.index);
               const isRowExpanded = gridState.expandedRowIndexes.includes(virtualRow.index);
+              // Built once per row rather than once per cell: ten columns
+              // would otherwise each do the same map lookup, and nine of them
+              // ignore the answer.
+              const cellContext: LedgerCellContext = {
+                reviewEntry: reviewEntriesByCaseRef?.get(row.caseRef),
+              };
               return (
                 // The positioned wrapper carries NO role (fix round 1, F5):
                 // it owns the virtualizer's transform and the expanded
@@ -409,7 +433,7 @@ export function LedgerTable({ rows, partnerNamesById, onSelectionChange }: Ledge
                           }`}
                         >
                           {editableColumn === undefined ? (
-                            column.render(row, partnerNamesById[row.partnerId] ?? row.partnerId)
+                            column.render(row, partnerNamesById[row.partnerId] ?? row.partnerId, cellContext)
                           ) : (
                             <EditableCell
                               column={editableColumn}
@@ -417,7 +441,7 @@ export function LedgerTable({ rows, partnerNamesById, onSelectionChange }: Ledge
                               isEditing={isCellEditing}
                               onCloseEditor={() => dispatchGridAction({ kind: "cancelEdit" })}
                               renderClosedValue={() =>
-                                column.render(row, partnerNamesById[row.partnerId] ?? row.partnerId)
+                                column.render(row, partnerNamesById[row.partnerId] ?? row.partnerId, cellContext)
                               }
                               onCommit={(nextValue) => {
                                 void commitEdit({

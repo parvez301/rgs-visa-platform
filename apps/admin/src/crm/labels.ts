@@ -166,6 +166,37 @@ function describeRollUp<StateType extends string>(
     .join(" · ");
 }
 
+/**
+ * Why the workbook import could not apply a row deterministically, in the words
+ * a desk agent cleaning their own data would use. `crm.REVIEW_REASONS` is a
+ * thirteen-member union (packages/shared/src/crm/reviewItem.ts), and this is a
+ * TOTAL Record over it for the same reason every map above is: a fourteenth
+ * reason added to the shared package must stop this file compiling rather than
+ * ship `COLUMN_SHIFT_JUNK` to somebody's screen.
+ *
+ * Each label names WHAT IS WRONG, never what to do about it: the two merge
+ * reasons state a suspicion about two rows ("May belong with another case"),
+ * the UNMAPPED_* family states that one cell could not be understood, and
+ * UNCONFIRMED_PAYMENT states a value that WAS understood and was deliberately
+ * not applied. Those are three different kinds of work and the wording is what
+ * tells them apart in a list.
+ */
+export const REVIEW_REASON_LABELS: Record<crm.ReviewReason, string> = {
+  UNMAPPED_STATUS: "Status not recognised",
+  UNMAPPED_ENTRIES: "Number of entries not recognised",
+  UNMAPPED_VISA_TYPE: "Visa type not recognised",
+  UNMAPPED_COUNTRY: "Country not recognised",
+  UNMAPPED_PARTNER: "Partner not recognised",
+  UNPARSEABLE_DATE: "Date could not be read",
+  COLUMN_SHIFT_JUNK: "Columns look shifted",
+  SUSPECT_PHONE: "Phone number looks wrong",
+  PROPOSED_GROUP: "May belong with another case",
+  DUPLICATE_REF: "Same REF as another case",
+  MISSING_REQUIRED_FIELD: "Required value missing from the sheet",
+  UNREADABLE_STORED_CASE: "Stored case could not be read",
+  UNCONFIRMED_PAYMENT: "Payment not confirmed",
+};
+
 export const LINE_ITEM_KIND_LABELS: Record<crm.LineItemKind, string> = {
   SERVICE: "Service",
   GOVT_FEE: "Government fee",

@@ -7,6 +7,7 @@ import {
   COURIER_LABELS,
   CUSTODY_LABELS,
   OUTCOME_LABELS,
+  REVIEW_REASON_LABELS,
   VISA_TYPE_LABELS,
   describeCustodyRollUp,
   describeOutcomeRollUp,
@@ -21,6 +22,9 @@ describe("display labels", () => {
     for (const caseType of crm.CASE_TYPES) expect(CASE_TYPE_LABELS[caseType]).toBeTruthy();
     for (const visaType of crm.VISA_TYPES) expect(VISA_TYPE_LABELS[visaType]).toBeTruthy();
     for (const courierMode of crm.COURIER_MODES) expect(COURIER_LABELS[courierMode]).toBeTruthy();
+    // A total Record is satisfied by an empty string, which the compiler
+    // accepts and a desk agent reads as a blank line in the review popover.
+    for (const reviewReason of crm.REVIEW_REASONS) expect(REVIEW_REASON_LABELS[reviewReason]).toBeTruthy();
   });
 
   it("uses RGS's own words, reviewable in one place", () => {

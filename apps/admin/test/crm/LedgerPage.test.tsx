@@ -1,13 +1,13 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider, type UseQueryResult } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
 import { LedgerPage } from "../../src/crm/ledger/LedgerPage";
 import { useLedgerRows, usePartners } from "../../src/crm/api/hooks";
-import type { LedgerLoad } from "../../src/crm/api/crmClient";
+import type { LedgerLoad, OpenReviewSummaryEntry } from "../../src/crm/api/crmClient";
 import { UndoToastProvider } from "../../src/crm/UndoToast";
 import { AgentPanelProvider } from "../../src/crm/agent/AgentPanelProvider";
 
@@ -53,11 +53,32 @@ vi.mock("../../src/crm/api/hooks", async (importOriginal) => {
     // asserts anything about the panel.
     useProposals: () => STILL_LOADING_QUERY,
     useMemories: () => STILL_LOADING_QUERY,
+    // Task 16: `LedgerPage` reads the open-review summary once for the whole
+    // screen. Served from a variable rather than a `vi.fn` so the default
+    // survives `test/setup.ts`'s `vi.restoreAllMocks()` -- every test that
+    // says nothing about review markers gets "still loading" and therefore no
+    // markers, exactly as it did before this hook existed.
+    useReviewSummary: () => currentReviewSummaryQuery,
   };
 });
 
-/** Shared by the two agent hooks the mock above pins; see its comment. */
+/** Shared by the agent hooks the mock above pins; see its comment. */
 const STILL_LOADING_QUERY = { data: undefined, isLoading: true, isError: false, error: null };
+
+let currentReviewSummaryQuery: unknown = STILL_LOADING_QUERY;
+
+function stubReviewSummary(entries: OpenReviewSummaryEntry[]): void {
+  currentReviewSummaryQuery = {
+    data: { entries, unreadableReviewItemIds: [] },
+    isLoading: false,
+    isError: false,
+    error: null,
+  };
+}
+
+afterEach(() => {
+  currentReviewSummaryQuery = STILL_LOADING_QUERY;
+});
 
 /**
  * `AdminShell` (rendered inside `CrmLayout`) reads `useAuth` for the header's
@@ -286,5 +307,38 @@ describe("LedgerPage — the status/partner filter exclusion", () => {
       "true",
     );
     expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["IN_PROGRESS"], undefined);
+  });
+});
+
+describe("LedgerPage — review markers on the row (spec §7)", () => {
+  it("marks only the rows whose case has open review items, from one summary read", () => {
+    stubLedgerLoad({
+      rows: [
+        buildLedgerRow({ caseId: "case_0001", caseRef: "RGS-1001" }),
+        buildLedgerRow({ caseId: "case_0002", caseRef: "RGS-1002" }),
+      ],
+    });
+    stubPartners();
+    // Joined on `caseRef` (R66): the summary is built from review items, which
+    // name a workbook ref and never a caseId.
+    stubReviewSummary([{ caseRef: "RGS-1002", fieldItemIds: ["rev_1"], mergeItemIds: ["rev_9"] }]);
+
+    const { container } = renderLedgerPage();
+
+    const markedRefCell = container.querySelector<HTMLElement>(
+      "[data-case-id='case_0002'] [data-column='caseRef']",
+    )!;
+    // Both kinds, because this case carries both kinds of work -- and they are
+    // separate marks, because they are resolved by separate judgements.
+    expect(within(markedRefCell).getByRole("button", { name: /1 import problem/i })).toBeInTheDocument();
+    expect(within(markedRefCell).getByRole("button", { name: /may be a duplicate/i })).toBeInTheDocument();
+
+    // The row the summary said nothing about carries no mark at all. Without
+    // this the assertions above would also pass for a table that marked every
+    // row it rendered.
+    const cleanRefCell = container.querySelector<HTMLElement>(
+      "[data-case-id='case_0001'] [data-column='caseRef']",
+    )!;
+    expect(within(cleanRefCell).queryByRole("button")).not.toBeInTheDocument();
   });
 });

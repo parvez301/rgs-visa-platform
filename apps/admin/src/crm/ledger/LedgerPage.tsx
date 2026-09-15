@@ -3,7 +3,8 @@ import { crm } from "@rgs/shared";
 import { useAuth } from "../../lib/auth";
 import { CrmLayout } from "../CrmLayout";
 import { AgentPanel } from "../agent/AgentPanel";
-import { useLedgerRows, usePartners } from "../api/hooks";
+import type { OpenReviewSummaryEntry } from "../api/crmClient";
+import { useLedgerRows, usePartners, useReviewSummary } from "../api/hooks";
 import { CASE_STATUS_LABELS } from "../labels";
 import { applyFilters, applySort, type LedgerFilters, type LedgerSort } from "./filters";
 import { LedgerTable } from "./LedgerTable";
@@ -53,6 +54,30 @@ export function LedgerPage() {
 
   const ledgerRowsQuery = useLedgerRows(selectedCaseStatuses, selectedPartnerId);
   const partnersQuery = usePartners();
+  /**
+   * Spec §7's review markers, read ONCE for the whole screen.
+   *
+   * The import left 3,958 open review items behind, and the summary route
+   * exists precisely so that marking the rows carrying them costs one
+   * projected read rather than one request per case. Indexed by `caseRef`
+   * here, because that is the only identifier the summary carries -- it is
+   * built from the review items themselves, which name a workbook ref and
+   * never a `caseId`.
+   *
+   * A failed or still-loading summary yields an empty map and therefore no
+   * markers, which is the honest degradation: a Ledger with no marks reads as
+   * "nothing flagged", and the alternative (a banner about a review summary on
+   * a screen whose job is cases) would put import plumbing in front of every
+   * desk agent every time this one read is slow.
+   */
+  const reviewSummaryQuery = useReviewSummary();
+  const reviewEntriesByCaseRef = useMemo(() => {
+    const entriesByCaseRef = new Map<string, OpenReviewSummaryEntry>();
+    for (const reviewEntry of reviewSummaryQuery.data?.entries ?? []) {
+      entriesByCaseRef.set(reviewEntry.caseRef, reviewEntry);
+    }
+    return entriesByCaseRef;
+  }, [reviewSummaryQuery.data]);
 
   const partnerNamesById = useMemo(() => {
     const namesById: Record<string, string> = {};
@@ -203,6 +228,7 @@ export function LedgerPage() {
               rows={visibleLedgerRows}
               partnerNamesById={partnerNamesById}
               onSelectionChange={reportSelectedCaseIds}
+              reviewEntriesByCaseRef={reviewEntriesByCaseRef}
             />
           )}
         </div>

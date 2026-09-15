@@ -1,11 +1,30 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { crm } from "@rgs/shared";
+import type { OpenReviewSummaryEntry } from "../api/crmClient";
 import { AxisChip } from "../components/Chip";
 import { describeCaseType, describeCustodyRollUp, formatInr } from "../labels";
+import { ReviewMarker } from "./ReviewMarker";
 
 /** Exactly 32px. Spec §3: a desk agent must see ~30 cases without scrolling. */
 export const LEDGER_ROW_HEIGHT = 32;
+
+/**
+ * Per-row data that is not part of the row itself, handed to `render` as a
+ * third argument (R66).
+ *
+ * A third argument rather than a React context, because the alternative is
+ * worse in a specific way: `LEDGER_COLUMNS` is a module-level array of plain
+ * objects, so a context would have to be read by a component INSIDE each
+ * render function -- turning every column cell into a context consumer that
+ * re-renders whenever the review summary refetches, including the nine columns
+ * that have nothing to do with review. The cost of this shape is one prop
+ * threaded through one component; other columns simply ignore the argument.
+ */
+export interface LedgerCellContext {
+  /** This case's open review items, joined on `caseRef`. Absent for a clean case. */
+  reviewEntry?: OpenReviewSummaryEntry;
+}
 
 export interface LedgerColumn {
   key: string;
@@ -22,7 +41,7 @@ export interface LedgerColumn {
    * value that silently never saves.
    */
   editable?: "caseStatus" | "billingStatus" | "appointmentDate" | "visaType";
-  render(row: crm.LedgerRow, partnerName: string): ReactNode;
+  render(row: crm.LedgerRow, partnerName: string, cellContext: LedgerCellContext): ReactNode;
 }
 
 function renderApplicants(row: crm.LedgerRow): ReactNode {
@@ -45,14 +64,22 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
     // (`useGridKeyboard`'s closing comment) and this must not change what Tab
     // does. A click still navigates; the anchor's own onClick has already run
     // by the time the cell's `stopPropagation` fires.
-    render: (row) => (
-      <Link
-        to={`/crm/cases/${row.caseId}`}
-        tabIndex={-1}
-        className="text-crm-link hover:underline"
-      >
-        {row.caseRef}
-      </Link>
+    // Spec §7: a case with unresolved review items carries a marker on its
+    // row, joined on `caseRef`. It rides in the REF cell because `caseRef` is
+    // the only thing the summary knows about a case -- the projection carries
+    // no caseId -- and because the REF cell is sticky, so the mark stays
+    // visible however far right the desk agent has scrolled.
+    render: (row, _partnerName, cellContext) => (
+      <>
+        <Link
+          to={`/crm/cases/${row.caseId}`}
+          tabIndex={-1}
+          className="text-crm-link hover:underline"
+        >
+          {row.caseRef}
+        </Link>
+        <ReviewMarker caseRef={row.caseRef} entry={cellContext.reviewEntry} />
+      </>
     ),
   },
   { key: "partner", header: "Partner", width: 200, render: (_row, partnerName) => partnerName },
