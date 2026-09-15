@@ -1,9 +1,25 @@
 import { useMemo, useState } from "react";
 import { crm } from "@rgs/shared";
+import { useAuth } from "../../lib/auth";
 import { CrmLayout } from "../CrmLayout";
 import { useLedgerRows, usePartners } from "../api/hooks";
 import { CASE_STATUS_LABELS } from "../labels";
+import { applyFilters, applySort, type LedgerFilters, type LedgerSort } from "./filters";
 import { LedgerTable } from "./LedgerTable";
+import { ViewChips } from "./ViewChips";
+
+const DEFAULT_LEDGER_SORT: LedgerSort = { column: "receivedDate", direction: "desc" };
+
+/**
+ * The client-only slice of `LedgerFilters` -- everything except `statuses`
+ * and `partnerId`, which `LedgerPage` already tracks separately as the
+ * server-side filter state (`selectedCaseStatuses`/`selectedPartnerId`
+ * below, unchanged since Task 10). Keeping these apart is what let Task 13
+ * land without touching that existing state or the tests pinned to it.
+ */
+type ClientOnlyLedgerFilters = Omit<LedgerFilters, "statuses" | "partnerId">;
+
+const NO_CLIENT_FILTERS: ClientOnlyLedgerFilters = {};
 
 /**
  * Exactly one of these two filters is ever in force server-side (spec §2.1,
@@ -13,8 +29,11 @@ import { LedgerTable } from "./LedgerTable";
  * silently ignoring underneath a partner filter.
  */
 export function LedgerPage() {
+  const { email: signedInUserEmail } = useAuth();
   const [selectedCaseStatuses, setSelectedCaseStatuses] = useState<crm.CaseStatus[]>([]);
   const [selectedPartnerId, setSelectedPartnerId] = useState<string | undefined>(undefined);
+  const [clientLedgerFilters, setClientLedgerFilters] = useState<ClientOnlyLedgerFilters>(NO_CLIENT_FILTERS);
+  const [ledgerSort, setLedgerSort] = useState<LedgerSort>(DEFAULT_LEDGER_SORT);
 
   const ledgerRowsQuery = useLedgerRows(selectedCaseStatuses, selectedPartnerId);
   const partnersQuery = usePartners();
@@ -41,9 +60,37 @@ export function LedgerPage() {
     setSelectedPartnerId(partnerId);
   }
 
+  /** A saved (or built-in) view's full `LedgerFilters` split back into the
+   * server-side state this page already owns and the client-only state
+   * introduced in Task 13. */
+  function applyLedgerView(viewFilters: LedgerFilters, viewSort: LedgerSort) {
+    setSelectedCaseStatuses(viewFilters.statuses);
+    setSelectedPartnerId(viewFilters.partnerId);
+    setClientLedgerFilters({
+      destinationCountry: viewFilters.destinationCountry,
+      caseType: viewFilters.caseType,
+      search: viewFilters.search,
+      billingStatuses: viewFilters.billingStatuses,
+    });
+    setLedgerSort(viewSort);
+  }
+
+  const activeLedgerFilters: LedgerFilters = {
+    statuses: selectedCaseStatuses,
+    partnerId: selectedPartnerId,
+    ...clientLedgerFilters,
+  };
+
   const ledgerLoad = ledgerRowsQuery.data;
   const unreadableCaseCount = ledgerLoad?.unreadableCaseIds.length ?? 0;
   const isLedgerPartial = Boolean(ledgerLoad?.truncated) || unreadableCaseCount > 0;
+
+  const visibleLedgerRows = useMemo(() => {
+    const loadedRows = ledgerLoad?.rows ?? [];
+    const filteredRows = applyFilters(loadedRows, activeLedgerFilters, partnerNamesById);
+    return applySort(filteredRows, ledgerSort);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ledgerLoad?.rows, clientLedgerFilters, ledgerSort, partnerNamesById]);
 
   return (
     <CrmLayout>
@@ -88,7 +135,32 @@ export function LedgerPage() {
               ))}
             </select>
           </label>
+
+          <label className="ml-4 flex items-center gap-2 text-[13px] font-medium text-crm-charcoal">
+            Search
+            <input
+              type="search"
+              value={clientLedgerFilters.search ?? ""}
+              onChange={(changeEvent) =>
+                setClientLedgerFilters((currentFilters) => ({
+                  ...currentFilters,
+                  search: changeEvent.target.value || undefined,
+                }))
+              }
+              placeholder="Search REF or partner"
+              className="rounded-crm-control border border-crm-rule-box px-2 py-1 text-[12px] font-normal"
+            />
+          </label>
         </div>
+
+        {signedInUserEmail !== null && (
+          <ViewChips
+            userEmail={signedInUserEmail}
+            activeFilters={activeLedgerFilters}
+            activeSort={ledgerSort}
+            onApplyView={applyLedgerView}
+          />
+        )}
 
         {isLedgerPartial && (
           <div
@@ -111,7 +183,7 @@ export function LedgerPage() {
               The ledger could not be loaded: {String(ledgerRowsQuery.error)}
             </p>
           ) : (
-            <LedgerTable rows={ledgerLoad?.rows ?? []} partnerNamesById={partnerNamesById} />
+            <LedgerTable rows={visibleLedgerRows} partnerNamesById={partnerNamesById} />
           )}
         </div>
       </div>

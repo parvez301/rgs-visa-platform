@@ -235,7 +235,7 @@ describe("LedgerTable: clicking a non-REF cell focuses it for editing (fix round
     // silently regress the path that already worked.
     const user = userEvent.setup();
     const row = buildRow({ caseStatus: "SUBMITTED" });
-    const { container, rejectRequest } = renderLedgerForEditing([row]);
+    const { container, rejectRequest, resolveRequest } = renderLedgerForEditing([row]);
 
     await user.click(mountedCell(container, "case_0000", "caseRef"));
     // caseRef(0) -> partner(1) -> destinationCountry(2) -> caseType(3) ->
@@ -243,6 +243,15 @@ describe("LedgerTable: clicking a non-REF cell focuses it for editing (fix round
     // except the REF column's first → expands the row instead of moving
     // (see useGridKeyboard.ts's "overloaded →"), so six are needed here.
     await user.keyboard("{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}");
+
+    // Task 13: that first → also expanded the row, which mounts
+    // `<ApplicantSubRows>` and fires its own GET for the case -- settle it
+    // now, before it can sit ahead of the PUT below in `pendingDeferreds`'s
+    // FIFO queue and steal the `rejectRequest` call meant for that PUT.
+    await act(async () => {
+      resolveRequest({ ...row, applicants: [{ applicantRef: "A1", travellerId: "T1" }] });
+    });
+
     await user.keyboard("{Enter}");
 
     const select = screen.getByRole("combobox");

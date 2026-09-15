@@ -1,15 +1,40 @@
 import { act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
 import { LedgerTable } from "../../src/crm/ledger/LedgerTable";
-import { installVirtualScrolling, mountedCell, renderLedger } from "./virtual";
+import { installVirtualScrolling, mountedCaseIds, mountedCell, renderLedger } from "./virtual";
 
 // This test drives the virtualizer's own scrollToIndex (keyboard nav past
 // the mounted window) rather than only the scrollTop+dispatchEvent that
 // scrollLedgerTo already covers, so it needs the two-part jsdom shim -- see
 // installVirtualScrolling's doc comment in ./virtual.ts for both causes.
 installVirtualScrolling();
+
+/**
+ * Task 13: the grid's default focus starts on row 0's REF cell, and the
+ * REF column's → is overloaded to expand rather than move on a collapsed
+ * row (useGridKeyboard.ts) -- several tests below send a bare → (some
+ * deliberately, one only because it iterates every consumed key) and so
+ * expand row 0 as a side effect. Expanding mounts `<ApplicantSubRows>`,
+ * which calls `useCase` and therefore `fetch`. None of the tests in this
+ * file assert anything about sub-row content, so a `fetch` that never
+ * resolves is the simplest correct stub -- it leaves that query loading
+ * forever, which nothing here observes -- and (the actual reason this
+ * exists) it is what keeps this file from making a REAL network call to
+ * apps/admin/.env.local's `VITE_API_URL` every time one of those tests
+ * runs.
+ */
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise(() => {})),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function buildRows(rowCount: number): crm.LedgerRow[] {
   return Array.from({ length: rowCount }, (_unused, rowIndex) => ({
@@ -144,6 +169,51 @@ describe("LedgerTable keyboard and selection", () => {
     // over), but the row is expanded and the next ← from the REF cell must
     // collapse rather than try (and fail) to move further left.
     expect(mountedCell(container, "case_0000", "caseRef")).toHaveFocus();
+  });
+
+  it("keeps rows from overlapping when one is expanded", async () => {
+    const user = userEvent.setup();
+    const { container } = renderLedger(<LedgerTable rows={buildRows(50)} partnerNamesById={{}} />);
+    await user.click(mountedCell(container, "case_0000", "caseRef"));
+
+    // The REF column's overloaded → expands row 0. An expanded row is taller
+    // than the flat 32px every other row gets, so the virtualizer has to
+    // re-derive every LATER row's offset -- `estimateSize` reading the
+    // expanded state is not enough on its own, because virtual-core caches
+    // measurements and does not treat `estimateSize` as an input that
+    // invalidates them. `rowVirtualizer.measure()` is what clears that cache.
+    await user.keyboard("{ArrowRight}");
+
+    const rowTops = mountedCaseIds(container).map((caseId) => {
+      const rowElement = container.querySelector<HTMLElement>(
+        `[data-testid='ledger-row'][data-case-id='${caseId}']`,
+      );
+      if (rowElement === null) throw new Error(`Row ${caseId} vanished between listing and measuring`);
+      const translateYMatch = /translateY\((\d+)px\)/.exec(rowElement.style.transform);
+      if (translateYMatch === null) {
+        throw new Error(
+          `Row ${caseId} has no translateY in its transform ("${rowElement.style.transform}") -- ` +
+            "this test can only see the overlap bug if rows are positioned by transform.",
+        );
+      }
+      return Number(translateYMatch[1]);
+    });
+
+    // Two independent assertions, because each catches a different shape of
+    // the same bug. Sorted-ascending catches rows placed out of order; the
+    // Set size catches two rows placed AT THE SAME OFFSET -- which is the
+    // overlap itself, and which a sortedness check alone passes over happily
+    // (a list with a repeated value is still sorted).
+    expect(rowTops).toEqual([...rowTops].sort((leftTop, rightTop) => leftTop - rightTop));
+    expect(new Set(rowTops).size).toBe(rowTops.length);
+
+    // Without this the two assertions above are both satisfied by a table
+    // that never re-measured at all: 32px apart everywhere is sorted and has
+    // no duplicates. The gap after the EXPANDED row must be bigger than the
+    // gap after a collapsed one, or nothing here is about expansion.
+    const gapAfterExpandedRow = rowTops[1]! - rowTops[0]!;
+    const gapAfterCollapsedRow = rowTops[2]! - rowTops[1]!;
+    expect(gapAfterExpandedRow).toBeGreaterThan(gapAfterCollapsedRow);
   });
 
   it("scrolls a distant row into the mounted window before focusing it", async () => {
