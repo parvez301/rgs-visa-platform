@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import { crm } from "@rgs/shared";
 import { AxisChip } from "../components/Chip";
-import { CASE_TYPE_LABELS, VISA_TYPE_LABELS, describeCustodyRollUp } from "../labels";
+import { describeCaseType, describeCustodyRollUp, formatInr } from "../labels";
 
 /** Exactly 32px. Spec §3: a desk agent must see ~30 cases without scrolling. */
 export const LEDGER_ROW_HEIGHT = 32;
@@ -24,12 +25,6 @@ export interface LedgerColumn {
   render(row: crm.LedgerRow, partnerName: string): ReactNode;
 }
 
-function describeCaseType(row: crm.LedgerRow): string {
-  const caseTypeLabel = CASE_TYPE_LABELS[row.caseType];
-  if (row.visaType === undefined) return caseTypeLabel;
-  return `${caseTypeLabel} · ${VISA_TYPE_LABELS[row.visaType]}`;
-}
-
 function renderApplicants(row: crm.LedgerRow): ReactNode {
   if (row.applicantSummary === undefined) {
     return describeCustodyRollUp(row.applicantSummary);
@@ -37,18 +32,29 @@ function renderApplicants(row: crm.LedgerRow): ReactNode {
   return `${row.applicantSummary.count} · ${describeCustodyRollUp(row.applicantSummary)}`;
 }
 
-const inrFormatter = new Intl.NumberFormat("en-IN", {
-  style: "currency",
-  currency: "INR",
-  maximumFractionDigits: 0,
-});
-
-function formatInr(totalInr: number): string {
-  return inrFormatter.format(totalInr);
-}
-
 export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
-  { key: "caseRef", header: "REF", width: 120, sticky: true, render: (row) => row.caseRef },
+  {
+    key: "caseRef",
+    header: "REF",
+    width: 120,
+    sticky: true,
+    // Spec §5: the Case screen is "reached by clicking a REF". `tabIndex={-1}`
+    // on purpose (Task 14): the grid owns its own roving tabindex on the
+    // gridcell wrapper, and an anchor that kept the default tab stop would add
+    // one Tab stop per mounted row -- the grid deliberately leaves Tab alone
+    // (`useGridKeyboard`'s closing comment) and this must not change what Tab
+    // does. A click still navigates; the anchor's own onClick has already run
+    // by the time the cell's `stopPropagation` fires.
+    render: (row) => (
+      <Link
+        to={`/crm/cases/${row.caseId}`}
+        tabIndex={-1}
+        className="text-crm-link hover:underline"
+      >
+        {row.caseRef}
+      </Link>
+    ),
+  },
   { key: "partner", header: "Partner", width: 200, render: (_row, partnerName) => partnerName },
   { key: "destinationCountry", header: "Country", width: 80, render: (row) => row.destinationCountry },
   {

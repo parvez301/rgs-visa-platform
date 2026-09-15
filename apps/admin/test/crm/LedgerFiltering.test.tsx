@@ -1,7 +1,6 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
 import { LedgerPage } from "../../src/crm/ledger/LedgerPage";
@@ -195,11 +194,10 @@ describe("LedgerPage's search box over the real grid (fix round 2, F7)", () => {
     );
     mockedUsePartners.mockReturnValue(fakeQueryResult<crm.Partner[]>({ data: [] }));
 
-    const { container } = renderLedger(
-      <MemoryRouter>
-        <LedgerPage />
-      </MemoryRouter>,
-    );
+    // No `<MemoryRouter>` of its own any more: `renderLedger` supplies one for
+    // every caller from Task 14 on (the REF cell is a `<Link>`), and react-router
+    // refuses a Router nested inside another Router.
+    const { container } = renderLedger(<LedgerPage />);
 
     // The grid owns focus first. That is the case `LedgerTable`'s no-deps
     // focus-sync effect exists for, and it must keep working -- the guard

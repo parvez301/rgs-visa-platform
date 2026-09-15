@@ -8,6 +8,7 @@ import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
 import { AuthPage } from "./pages/AuthPage";
 import { ConfigPage } from "./pages/ConfigPage";
 import { LeadsPage } from "./pages/LeadsPage";
+import { CasePage } from "./crm/case/CasePage";
 import { LedgerPage } from "./crm/ledger/LedgerPage";
 import { NoticesPage } from "./pages/NoticesPage";
 import { QueuePage } from "./pages/QueuePage";
@@ -102,14 +103,14 @@ createRoot(document.getElementById("root")!).render(
                 </RequireAuth>
               }
             />
-            {/*
-              Deliberately NOT mounted here: /crm/cases/:caseId. Its element,
-              CasePage, does not exist yet -- it is Task 14's deliverable,
-              alongside the route that serves it. A placeholder component
-              would compile and route cleanly while doing nothing, which is
-              worse than the route being absent: nothing would then force
-              Task 14 to replace it.
-            */}
+            <Route
+              path="/crm/cases/:caseId"
+              element={
+                <RequireAuth>
+                  <CasePage />
+                </RequireAuth>
+              }
+            />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

@@ -128,3 +128,96 @@ function describeRollUp<StateType extends string>(
     .map(([stateName, stateCount]) => `${stateCount} ${labels[stateName].toLowerCase()}`)
     .join(" · ");
 }
+
+export const LINE_ITEM_KIND_LABELS: Record<crm.LineItemKind, string> = {
+  SERVICE: "Service",
+  GOVT_FEE: "Government fee",
+  ADDON: "Add-on",
+};
+
+/**
+ * The three scopes `crmClient.listMemories` names. Deliberately NOT a total
+ * Record over a shared union: `CrmMemorySchema.scope` is a free
+ * `z.string().min(1)` (schemas.ts:156), so an unrecognised scope is reachable
+ * in a way an unrecognised case status is not -- `describeEnumValue` below is
+ * what names it rather than rendering a blank.
+ */
+export const MEMORY_SCOPE_LABELS: Record<"ORG" | "PARTNER" | "USER", string> = {
+  ORG: "the whole organisation",
+  PARTNER: "this partner",
+  USER: "one person",
+};
+
+/**
+ * `CrmMemorySchema.createdBy` -- "what kind of author", not who. The same
+ * human-vs-machine distinction `autoApplied` draws on PROPOSAL_APPROVED, which
+ * is why it is rendered rather than dropped.
+ */
+export const MEMORY_AUTHOR_LABELS: Record<"agent" | "human", string> = {
+  agent: "the agent",
+  human: "a person",
+};
+
+/**
+ * The six field names `updateCaseDetails` can put in a `CASE_UPDATED` event's
+ * comma-joined `changedFields` (services/api/src/domain/crm/cases.ts:152-174),
+ * as the words a sentence about them uses. Lower case: these are read mid
+ * sentence ("Changed appointment date and visa type"), never as a heading.
+ */
+export const CASE_FIELD_LABELS: Record<string, string> = {
+  visaType: "visa type",
+  entryType: "entry type",
+  processing: "processing speed",
+  submissionDate: "submission date",
+  appointmentDate: "appointment date",
+  expectedCollectionDate: "expected collection date",
+};
+
+/**
+ * One money format for the whole desk. Rupees, no paise: every stored amount
+ * is `z.number().int()` (schemas.ts), so a decimal place would be two digits
+ * of precision the data does not have.
+ */
+const inrFormatter = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+  maximumFractionDigits: 0,
+});
+
+export function formatInr(amountInr: number): string {
+  return inrFormatter.format(amountInr);
+}
+
+/**
+ * The combined "Type" reading the Ledger's own Type column shows, shared with
+ * the Case screen so the two never drift apart. Structurally typed rather than
+ * taking a `LedgerRow`: a `CrmCase` carries the same two fields and has as much
+ * right to this sentence.
+ */
+export function describeCaseType(caseFields: {
+  caseType: crm.CaseType;
+  visaType?: crm.VisaType;
+}): string {
+  const caseTypeLabel = CASE_TYPE_LABELS[caseFields.caseType];
+  if (caseFields.visaType === undefined) return caseTypeLabel;
+  return `${caseTypeLabel} · ${VISA_TYPE_LABELS[caseFields.visaType]}`;
+}
+
+/**
+ * A label for a value that arrived over the wire as a plain string.
+ *
+ * The label maps above are total Records over their unions, which is what
+ * makes a missing label a compile error rather than a blank on screen -- but a
+ * value read out of an event's `meta` is a `string`, not a union member, and
+ * nothing stops a backend plan from writing one this build has never heard of.
+ * Naming it (rather than rendering the bare value as though it were a label,
+ * or rendering nothing at all) is the same bargain the timeline strikes with
+ * an unrecognised event type: an operator can report what they saw.
+ */
+export function describeEnumValue(
+  rawValue: string | undefined,
+  labels: Readonly<Record<string, string>>,
+): string {
+  if (rawValue === undefined) return "not recorded";
+  return labels[rawValue] ?? `an unrecognised value (${rawValue})`;
+}

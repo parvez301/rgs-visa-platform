@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
 import { ApiRequestError } from "../../src/lib/adminApi";
@@ -114,7 +115,18 @@ function renderLedgerForEditing(rows: crm.LedgerRow[]) {
       createElement(
         QueryClientProvider,
         { client: queryClient },
-        createElement(UndoToastProvider, null, createElement(LedgerTable, { rows: tableRows, partnerNamesById: {} })),
+        // `MemoryRouter`: the REF cell is a `<Link>` from Task 14 on -- see
+      // `virtual.ts`'s `wrapInProviders` for why this is the harness catching
+      // up with production, not a relaxation.
+      createElement(
+        UndoToastProvider,
+        null,
+        createElement(
+          MemoryRouter,
+          null,
+          createElement(LedgerTable, { rows: tableRows, partnerNamesById: {} }),
+        ),
+      ),
       ),
     );
   }

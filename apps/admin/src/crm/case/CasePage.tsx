@@ -1,0 +1,553 @@
+import type { ReactNode } from "react";
+import { useParams } from "react-router";
+import { crm } from "@rgs/shared";
+import { CrmLayout } from "../CrmLayout";
+import { AxisChip } from "../components/Chip";
+import { ConflictPrompt } from "../components/ConflictPrompt";
+import {
+  describeApplicantEditValue,
+  useApplicantEdit,
+  type ApplicantEdit,
+  type ApplicantEditAxis,
+} from "../api/applicantMutations";
+import { useCase, useCaseEvents, usePartners } from "../api/hooks";
+import { describeLedgerEditValue, useLedgerEdit, type LedgerEditColumn } from "../api/mutations";
+import {
+  BILLING_LABELS,
+  CASE_STATUS_LABELS,
+  COURIER_LABELS,
+  CUSTODY_LABELS,
+  LINE_ITEM_KIND_LABELS,
+  OUTCOME_LABELS,
+  VISA_TYPE_LABELS,
+  describeCaseType,
+  formatInr,
+} from "../labels";
+import {
+  allowedBillingStatusOptions,
+  allowedCaseStatusOptions,
+  allowedCustodyOptions,
+  allowedOutcomeOptions,
+  hasNoLegalMove,
+} from "../transitions";
+import { Timeline } from "./Timeline";
+
+const NOT_RECORDED = "—";
+
+const CONTROL_CLASS =
+  "rounded-crm-control border border-crm-rule-box bg-crm-canvas px-2 py-1 text-[13px] disabled:text-crm-steel";
+
+/**
+ * The Case screen (spec §5): the shared case fields ONCE at the top, the
+ * applicants below as a small table, then line items, notes and the audit
+ * timeline.
+ *
+ * "Once at the top" is the whole shape. The spreadsheet this replaces carries
+ * one row per applicant with every shared field copied down it, which is how a
+ * REF ends up disagreeing with itself.
+ *
+ * The route param is read here and the screen itself is a separate component,
+ * so a missing `:caseId` is answered before any query is started rather than
+ * by firing a request for `/cases/`.
+ */
+export function CasePage() {
+  const { caseId } = useParams();
+  if (caseId === undefined || caseId === "") {
+    return (
+      <CrmLayout>
+        <div className="crm-root h-full overflow-y-auto p-4">
+          <p role="alert" className="text-[14px] text-crm-charcoal">
+            This link has no case reference in it, so there is no case to load.
+          </p>
+        </div>
+      </CrmLayout>
+    );
+  }
+  return <CaseScreen caseId={caseId} />;
+}
+
+function CaseScreen({ caseId }: { caseId: string }) {
+  const caseQuery = useCase(caseId);
+  const caseEventsQuery = useCaseEvents(caseId);
+  const partnersQuery = usePartners();
+
+  // R50/R49: one call each, per screen. Both hooks keep their own
+  // `pendingConflict` in local state, and a second call site of either would
+  // silently disagree with the first about whether a prompt is open.
+  const {
+    commitEdit: commitCaseEdit,
+    pendingConflict: caseConflict,
+    resolveConflict: resolveCaseConflict,
+  } = useLedgerEdit();
+  const {
+    commitEdit: commitApplicantEdit,
+    pendingConflict: applicantConflict,
+    resolveConflict: resolveApplicantConflict,
+  } = useApplicantEdit();
+
+  const caseRecord = caseQuery.data;
+
+  return (
+    <CrmLayout>
+      <div className="crm-root relative h-full overflow-y-auto p-4 text-[14px] leading-[1.45]">
+        {caseQuery.isLoading ? (
+          <p className="text-crm-steel">Loading this case…</p>
+        ) : caseQuery.isError || caseRecord === undefined ? (
+          // Never an empty shell. A heading over blank fields and an empty
+          // applicant table reads as a case with nothing on it, which is a
+          // different -- and false -- claim from "this case could not be
+          // read". The server's own words follow, not a paraphrase.
+          <p
+            role="alert"
+            className="rounded-crm-control border border-dashed border-crm-steel bg-crm-yellow px-3 py-2 text-crm-charcoal"
+          >
+            This case could not be loaded.{" "}
+            {caseQuery.error === null || caseQuery.error === undefined
+              ? "The server gave no reason."
+              : String(caseQuery.error.message)}
+          </p>
+        ) : (
+          <div className="flex flex-col gap-5">
+            <CaseHeader
+              caseRecord={caseRecord}
+              partnerName={
+                partnersQuery.data?.find((partner) => partner.partnerId === caseRecord.partnerId)
+                  ?.canonicalName ?? caseRecord.partnerId
+              }
+              onCommitCaseEdit={(column, nextValue) =>
+                void commitCaseEdit({
+                  caseId: caseRecord.caseId,
+                  column,
+                  previousValue: readCaseColumnValue(caseRecord, column),
+                  nextValue,
+                })
+              }
+            />
+
+            <ApplicantsTable
+              caseRecord={caseRecord}
+              onCommitApplicantEdit={(edit) => void commitApplicantEdit(edit)}
+            />
+
+            <LineItemsTable caseRecord={caseRecord} />
+
+            {/*
+              Measured, and it contradicts the controller notes (which say
+              `CrmCase.notes` is optional): `CrmCaseSchema` has NO notes field
+              at all -- `notes` exists on `PartnerSchema` and
+              `CountryProfileSchema`, not on a case. So there is nothing to
+              read and, under R51, nothing this screen could write either.
+
+              The section still renders, saying exactly that, rather than
+              vanishing or showing "No notes on this case." -- the second
+              sentence would claim a case CAN carry notes and simply has none,
+              which is the one reading of this gap that is false, and would
+              leave a desk agent hunting for notes that were never stored.
+            */}
+            <CaseSection title="Notes">
+              <p className="text-crm-steel">
+                A case record carries no notes of its own today, so there is nothing to show here.
+              </p>
+            </CaseSection>
+
+            <CaseSection title="Timeline">
+              {caseEventsQuery.isLoading ? (
+                <p className="text-crm-steel">Loading the timeline…</p>
+              ) : caseEventsQuery.isError ? (
+                <p
+                  role="alert"
+                  className="rounded-crm-control border border-dashed border-crm-steel bg-crm-yellow px-3 py-2 text-crm-charcoal"
+                >
+                  The timeline could not be loaded, so this case's history is not shown. The case
+                  itself is unaffected.
+                </p>
+              ) : (
+                <Timeline events={caseEventsQuery.data ?? []} />
+              )}
+            </CaseSection>
+          </div>
+        )}
+
+        {caseConflict !== undefined && (
+          <ConflictPrompt
+            serverMessage={caseConflict.serverMessage}
+            yourValue={describeLedgerEditValue(caseConflict.edit)}
+            onKeepTheirs={() => resolveCaseConflict("keepTheirs")}
+            onKeepMine={() => resolveCaseConflict("keepMine")}
+          />
+        )}
+        {applicantConflict !== undefined && (
+          <ConflictPrompt
+            serverMessage={applicantConflict.serverMessage}
+            yourValue={describeApplicantEditValue(applicantConflict.edit)}
+            onKeepTheirs={() => resolveApplicantConflict("keepTheirs")}
+            onKeepMine={() => resolveApplicantConflict("keepMine")}
+          />
+        )}
+      </div>
+    </CrmLayout>
+  );
+}
+
+/** The stored value one `LedgerEdit` column is about to move away from -- what its undo writes back. */
+function readCaseColumnValue(caseRecord: crm.CrmCase, column: LedgerEditColumn): string | undefined {
+  switch (column) {
+    case "caseStatus":
+      return caseRecord.caseStatus;
+    case "billingStatus":
+      return caseRecord.billingStatus;
+    case "appointmentDate":
+      return caseRecord.appointmentDate;
+    case "visaType":
+      return caseRecord.visaType;
+  }
+}
+
+function CaseSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="text-[12px] uppercase tracking-wide text-crm-steel">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+function CaseField({ fieldKey, label, children }: { fieldKey: string; label: string; children: ReactNode }) {
+  return (
+    <div data-testid={`case-field-${fieldKey}`} className="flex flex-col gap-1">
+      <span className="text-[12px] uppercase tracking-wide text-crm-steel">{label}</span>
+      <span className="flex flex-wrap items-center gap-2 text-crm-charcoal">{children}</span>
+    </div>
+  );
+}
+
+/**
+ * Every shared case field, once.
+ *
+ * R52: all the dates are rendered; exactly the four axes `LedgerEdit` already
+ * supports are editable (`caseStatus`, `billingStatus`, `appointmentDate`,
+ * `visaType`). `submissionDate` and `expectedCollectionDate` are accepted by
+ * `PUT /cases/{caseId}` but have no `LedgerEdit` column, and widening that
+ * union is a Task 12 surface with its own tests -- so they are read-only here
+ * rather than wired to a control that would need a second, parallel write path.
+ */
+function CaseHeader({
+  caseRecord,
+  partnerName,
+  onCommitCaseEdit,
+}: {
+  caseRecord: crm.CrmCase;
+  partnerName: string;
+  onCommitCaseEdit: (column: LedgerEditColumn, nextValue: string) => void;
+}) {
+  const caseStatusOptions = allowedCaseStatusOptions(caseRecord.caseStatus);
+  const billingStatusOptions = allowedBillingStatusOptions(caseRecord.billingStatus);
+  const isVisaCase = caseRecord.caseType === "VISA";
+
+  return (
+    <header className="flex flex-col gap-4 rounded-crm-card border border-crm-rule-box bg-crm-canvas p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-[18px] font-medium text-crm-charcoal">{caseRecord.caseRef}</h1>
+        <AxisChip axis="caseStatus" value={caseRecord.caseStatus} />
+        <AxisChip axis="billing" value={caseRecord.billingStatus} />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <CaseField fieldKey="partner" label="Partner">
+          {partnerName}
+        </CaseField>
+        <CaseField fieldKey="destinationCountry" label="Country">
+          {caseRecord.destinationCountry}
+        </CaseField>
+        <CaseField fieldKey="caseType" label="Type">
+          {describeCaseType(caseRecord)}
+        </CaseField>
+
+        <CaseField fieldKey="caseStatus" label="Case status">
+          <select
+            aria-label="Case status"
+            value={caseRecord.caseStatus}
+            disabled={hasNoLegalMove(caseStatusOptions)}
+            title={
+              hasNoLegalMove(caseStatusOptions)
+                ? `A ${CASE_STATUS_LABELS[caseRecord.caseStatus].toLowerCase()} case cannot move to another status`
+                : undefined
+            }
+            onChange={(changeEvent) => onCommitCaseEdit("caseStatus", changeEvent.target.value)}
+            className={CONTROL_CLASS}
+          >
+            {caseStatusOptions.map((caseStatusOption) => (
+              <option key={caseStatusOption} value={caseStatusOption}>
+                {CASE_STATUS_LABELS[caseStatusOption]}
+              </option>
+            ))}
+          </select>
+        </CaseField>
+        <CaseField fieldKey="billingStatus" label="Billing status">
+          <select
+            aria-label="Billing status"
+            value={caseRecord.billingStatus}
+            disabled={hasNoLegalMove(billingStatusOptions)}
+            title={
+              hasNoLegalMove(billingStatusOptions)
+                ? `Billing is ${BILLING_LABELS[caseRecord.billingStatus].toLowerCase()} and cannot move again`
+                : undefined
+            }
+            onChange={(changeEvent) => onCommitCaseEdit("billingStatus", changeEvent.target.value)}
+            className={CONTROL_CLASS}
+          >
+            {billingStatusOptions.map((billingStatusOption) => (
+              <option key={billingStatusOption} value={billingStatusOption}>
+                {BILLING_LABELS[billingStatusOption]}
+              </option>
+            ))}
+          </select>
+        </CaseField>
+        <CaseField fieldKey="visaType" label="Visa type">
+          <select
+            aria-label="Visa type"
+            value={caseRecord.visaType ?? ""}
+            disabled={!isVisaCase}
+            title={isVisaCase ? undefined : "Only a VISA case can carry a visa type"}
+            onChange={(changeEvent) => onCommitCaseEdit("visaType", changeEvent.target.value)}
+            className={CONTROL_CLASS}
+          >
+            <option value="">No visa type</option>
+            {crm.VISA_TYPES.map((visaType) => (
+              <option key={visaType} value={visaType}>
+                {VISA_TYPE_LABELS[visaType]}
+              </option>
+            ))}
+          </select>
+        </CaseField>
+
+        <CaseField fieldKey="receivedDate" label="Received">
+          {caseRecord.receivedDate}
+        </CaseField>
+        <CaseField fieldKey="submissionDate" label="Submitted">
+          {caseRecord.submissionDate ?? NOT_RECORDED}
+        </CaseField>
+        <CaseField fieldKey="appointmentDate" label="Appointment">
+          <input
+            type="date"
+            aria-label="Appointment date"
+            value={caseRecord.appointmentDate ?? ""}
+            onChange={(changeEvent) => onCommitCaseEdit("appointmentDate", changeEvent.target.value)}
+            className={CONTROL_CLASS}
+          />
+        </CaseField>
+        <CaseField fieldKey="expectedCollectionDate" label="Expected collection">
+          {caseRecord.expectedCollectionDate ?? NOT_RECORDED}
+        </CaseField>
+        <CaseField fieldKey="courierDate" label="Couriered">
+          {caseRecord.courierDate ?? NOT_RECORDED}
+        </CaseField>
+      </div>
+    </header>
+  );
+}
+
+/**
+ * R45 again (Task 13's ruling, unchanged here): a `CaseApplicant` carries no
+ * name. The name lives on a separate `CrmTraveller` record this app has no
+ * route to read by `travellerId`, so this renders what exists --
+ * `applicantRef`, passport, custody, outcome, courier -- and invents nothing.
+ */
+function ApplicantsTable({
+  caseRecord,
+  onCommitApplicantEdit,
+}: {
+  caseRecord: crm.CrmCase;
+  onCommitApplicantEdit: (edit: ApplicantEdit) => void;
+}) {
+  return (
+    <CaseSection title={`Applicants (${caseRecord.applicants.length})`}>
+      <div className="overflow-x-auto rounded-crm-card border border-crm-rule-box">
+        <table className="w-full border-collapse text-left">
+          <thead>
+            <tr className="bg-crm-surface text-[12px] uppercase tracking-wide text-crm-steel">
+              <th className="px-3 py-2 font-normal">Applicant</th>
+              <th className="px-3 py-2 font-normal">Passport</th>
+              <th className="px-3 py-2 font-normal">Custody</th>
+              <th className="px-3 py-2 font-normal">Outcome</th>
+              <th className="px-3 py-2 font-normal">Courier</th>
+            </tr>
+          </thead>
+          <tbody>
+            {caseRecord.applicants.map((applicant) => (
+              <tr
+                key={applicant.applicantRef}
+                data-testid="case-applicant-row"
+                className="border-t border-crm-rule-row"
+              >
+                <td className="px-3 py-2 font-medium text-crm-charcoal">{applicant.applicantRef}</td>
+                <td className="px-3 py-2 text-crm-steel">
+                  {applicant.passportNumber ?? "No passport on file"}
+                </td>
+                <td className="px-3 py-2">
+                  <ApplicantAxisControl
+                    axis="custody"
+                    applicantRef={applicant.applicantRef}
+                    currentValue={applicant.custody}
+                    allowedValues={allowedCustodyOptions(applicant.custody)}
+                    optionLabels={CUSTODY_LABELS}
+                    noLegalMoveReason={`This passport is ${CUSTODY_LABELS[applicant.custody].toLowerCase()}; custody cannot move from here`}
+                    onCommit={(toValue) =>
+                      onCommitApplicantEdit({
+                        caseId: caseRecord.caseId,
+                        applicantRef: applicant.applicantRef,
+                        axis: "custody",
+                        fromValue: applicant.custody,
+                        toValue,
+                      })
+                    }
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  <ApplicantAxisControl
+                    axis="outcome"
+                    applicantRef={applicant.applicantRef}
+                    currentValue={applicant.outcome}
+                    allowedValues={allowedOutcomeOptions(applicant.outcome)}
+                    optionLabels={OUTCOME_LABELS}
+                    noLegalMoveReason={`This applicant is ${OUTCOME_LABELS[applicant.outcome].toLowerCase()}; the outcome cannot move from here`}
+                    onCommit={(toValue) =>
+                      onCommitApplicantEdit({
+                        caseId: caseRecord.caseId,
+                        applicantRef: applicant.applicantRef,
+                        axis: "outcome",
+                        fromValue: applicant.outcome,
+                        toValue,
+                      })
+                    }
+                  />
+                </td>
+                <td className="px-3 py-2 text-crm-charcoal">{describeCourier(applicant)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </CaseSection>
+  );
+}
+
+const APPLICANT_AXIS_CONTROL_LABELS: Record<ApplicantEditAxis, string> = {
+  custody: "Custody",
+  outcome: "Outcome",
+};
+
+/**
+ * One applicant's one axis. The accessible name carries the `applicantRef`
+ * ("Custody for applicant A2") because a case has several of these controls
+ * and they are otherwise indistinguishable to anyone not looking at the row
+ * they sit in -- which includes a screen-reader user and a test asserting that
+ * the right applicant's route was called.
+ */
+function ApplicantAxisControl({
+  axis,
+  applicantRef,
+  currentValue,
+  allowedValues,
+  optionLabels,
+  noLegalMoveReason,
+  onCommit,
+}: {
+  axis: ApplicantEditAxis;
+  applicantRef: string;
+  currentValue: string;
+  allowedValues: readonly string[];
+  optionLabels: Readonly<Record<string, string>>;
+  noLegalMoveReason: string;
+  onCommit: (toValue: string) => void;
+}) {
+  const isFrozen = hasNoLegalMove(allowedValues);
+  return (
+    <select
+      aria-label={`${APPLICANT_AXIS_CONTROL_LABELS[axis]} for applicant ${applicantRef}`}
+      value={currentValue}
+      disabled={isFrozen}
+      title={isFrozen ? noLegalMoveReason : undefined}
+      onChange={(changeEvent) => onCommit(changeEvent.target.value)}
+      className={CONTROL_CLASS}
+    >
+      {allowedValues.map((allowedValue) => (
+        <option key={allowedValue} value={allowedValue}>
+          {optionLabels[allowedValue] ?? allowedValue}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function describeCourier(applicant: crm.CaseApplicant): string {
+  if (applicant.courierMode === undefined) return "Not couriered";
+  const courierLabel = COURIER_LABELS[applicant.courierMode];
+  return applicant.trackingNumber === undefined
+    ? courierLabel
+    : `${courierLabel} · ${applicant.trackingNumber}`;
+}
+
+/**
+ * R51: read-only. The admin client has no line-item method at all, so nothing
+ * on this screen could write one even if it offered a control.
+ *
+ * `amountInr` is the UNIT price and `totalInr` is the case sum of
+ * `amountInr × quantity` across items (`LineItemSchema`'s own comment). Both
+ * the unit price and the line total are shown, because showing only the first
+ * tells a desk agent a two-quantity line cost half what it did.
+ */
+function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
+  return (
+    <CaseSection title="Line items">
+      <div className="overflow-x-auto rounded-crm-card border border-crm-rule-box">
+        <table className="w-full border-collapse text-left">
+          <thead>
+            <tr className="bg-crm-surface text-[12px] uppercase tracking-wide text-crm-steel">
+              <th className="px-3 py-2 font-normal">Item</th>
+              <th className="px-3 py-2 font-normal">Kind</th>
+              <th className="px-3 py-2 font-normal">Quantity</th>
+              <th className="px-3 py-2 font-normal">Unit price</th>
+              <th className="px-3 py-2 font-normal">Line total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {caseRecord.lineItems.length === 0 ? (
+              <tr className="border-t border-crm-rule-row">
+                <td colSpan={5} className="px-3 py-2 text-crm-steel">
+                  No line items on this case.
+                </td>
+              </tr>
+            ) : (
+              caseRecord.lineItems.map((lineItem) => (
+                <tr
+                  key={lineItem.code}
+                  data-testid="case-line-item-row"
+                  className="border-t border-crm-rule-row"
+                >
+                  <td className="px-3 py-2 text-crm-charcoal">{lineItem.label}</td>
+                  <td className="px-3 py-2 text-crm-steel">{LINE_ITEM_KIND_LABELS[lineItem.kind]}</td>
+                  <td className="px-3 py-2 text-crm-charcoal">{lineItem.quantity}</td>
+                  <td className="px-3 py-2 text-crm-charcoal">{formatInr(lineItem.amountInr)}</td>
+                  <td className="px-3 py-2 text-crm-charcoal">
+                    {formatInr(lineItem.amountInr * lineItem.quantity)}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-crm-rule-box bg-crm-surface">
+              <td colSpan={4} className="px-3 py-2 text-[12px] uppercase tracking-wide text-crm-steel">
+                Case total
+              </td>
+              <td data-testid="case-total" className="px-3 py-2 font-medium text-crm-charcoal">
+                {formatInr(caseRecord.totalInr)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </CaseSection>
+  );
+}

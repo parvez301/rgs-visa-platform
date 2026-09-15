@@ -2,6 +2,10 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { crm } from "@rgs/shared";
 import { AxisChip } from "../components/Chip";
 import { BILLING_LABELS, CASE_STATUS_LABELS, VISA_TYPE_LABELS } from "../labels";
+// Moved to `../transitions` in Task 14: the Case screen builds the same two
+// dropdowns (plus the per-applicant custody/outcome pair) and must offer the
+// same options this cell does.
+import { allowedBillingStatusOptions, allowedCaseStatusOptions } from "../transitions";
 import type { LedgerEditColumn } from "../api/mutations";
 
 interface EditableCellProps {
@@ -53,29 +57,6 @@ export function readLedgerColumnValue(column: LedgerEditColumn, row: crm.LedgerR
     case "visaType":
       return row.visaType ?? "";
   }
-}
-
-/**
- * A dropdown listing every `CaseStatus`/`BillingStatus` invites a click that
- * 409s. `crm.canTransitionCaseStatus`/`canTransitionBilling` are the same
- * rules the server enforces, so the offered list and the server agree by
- * construction. The current value always stays in the list -- a `<select>`
- * whose `value` names an absent `<option>` renders blank.
- */
-function allowedCaseStatusOptions(currentCaseStatus: crm.CaseStatus): crm.CaseStatus[] {
-  return crm.CASE_STATUSES.filter(
-    (candidateCaseStatus) =>
-      candidateCaseStatus === currentCaseStatus ||
-      crm.canTransitionCaseStatus(currentCaseStatus, candidateCaseStatus),
-  );
-}
-
-function allowedBillingStatusOptions(currentBillingStatus: crm.BillingStatus): crm.BillingStatus[] {
-  return crm.BILLING_STATUSES.filter(
-    (candidateBillingStatus) =>
-      candidateBillingStatus === currentBillingStatus ||
-      crm.canTransitionBilling(currentBillingStatus, candidateBillingStatus),
-  );
 }
 
 function renderStaticValue(column: LedgerEditColumn, row: crm.LedgerRow) {

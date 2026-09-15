@@ -58,6 +58,22 @@ describe("LedgerTable", () => {
     ]);
   });
 
+  it("links the REF to that case's own screen, without adding a tab stop per row", () => {
+    // Spec §5: the Case screen is "reached by clicking a REF". The `tabIndex`
+    // half is not decoration -- the grid deliberately leaves Tab alone
+    // (`useGridKeyboard`), and an anchor at the browser default would put one
+    // tab stop in every mounted row, which is what Tab would then do instead.
+    const { container } = renderLedger(
+      <LedgerTable rows={buildRows(5)} partnerNamesById={partnerNames} />,
+    );
+
+    const refLink = mountedCell(container, "case_0003", "caseRef").querySelector("a");
+    expect(refLink).not.toBeNull();
+    expect(refLink!.textContent).toBe("RGS-1003");
+    expect(refLink!.getAttribute("href")).toBe("/crm/cases/case_0003");
+    expect(refLink!.getAttribute("tabindex")).toBe("-1");
+  });
+
   it("shows the partner's canonical name, not the partner id", () => {
     const { container } = renderLedger(
       <LedgerTable rows={buildRows(5)} partnerNamesById={partnerNames} />,

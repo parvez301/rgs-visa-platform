@@ -21,7 +21,7 @@ import { crmQueryKeys } from "./hooks";
  * write and, on failure, the same rollback. `mutations.test.tsx`'s
  * "R34" test is the one that fails if this ever regresses to a single key.
  */
-const LEDGER_CACHE_KEY_PREFIX: QueryKey = ["crm", "ledger"];
+export const LEDGER_CACHE_KEY_PREFIX: QueryKey = ["crm", "ledger"];
 
 export type LedgerEditColumn = "caseStatus" | "billingStatus" | "appointmentDate" | "visaType";
 
@@ -142,34 +142,56 @@ function applyEditToCase(caseRecord: crm.CrmCase, edit: LedgerEdit): crm.CrmCase
  * the whole `LedgerLoad` -- rows array included, not a single row -- so a
  * rollback can never resurrect a case that a concurrent refetch had already
  * dropped from the list (rule 2).
+ *
+ * Exported alongside the three functions below because Task 14's
+ * `useApplicantEdit` (R49) writes to the same two caches for the same reasons
+ * -- a second, verbatim copy of this triple is what the ruling forbids.
  */
-interface LedgerEditRollbackContext {
+export interface OptimisticCaseWriteContext {
   ledgerSnapshots: [QueryKey, LedgerLoad | undefined][];
   caseSnapshot: crm.CrmCase | undefined;
 }
 
-async function applyOptimisticEditAndSnapshot(
+/**
+ * How one write shows up optimistically in each cache that holds the case.
+ *
+ * `patchLedgerRow` is optional, and its absence is a claim, not an omission: a
+ * per-applicant custody change moves the Ledger's `applicantSummary` roll-up,
+ * which is computed SERVER-side (`packages/shared/src/crm/ledger.ts`) from the
+ * whole applicant list. Guessing at the new roll-up client-side would put a
+ * number on screen that the next refetch contradicts, so that write patches
+ * the case cache only and lets `onSettled`'s ledger invalidation fetch the
+ * real roll-up.
+ */
+export interface OptimisticCaseWritePatches {
+  patchCase(caseRecord: crm.CrmCase): crm.CrmCase;
+  patchLedgerRow?(ledgerRow: crm.LedgerRow): crm.LedgerRow;
+}
+
+export async function applyOptimisticCaseWriteAndSnapshot(
   queryClient: QueryClient,
-  edit: LedgerEdit,
+  caseId: string,
+  patches: OptimisticCaseWritePatches,
   signalOptimisticWriteApplied: () => void,
-): Promise<LedgerEditRollbackContext> {
+): Promise<OptimisticCaseWriteContext> {
   await queryClient.cancelQueries({ queryKey: LEDGER_CACHE_KEY_PREFIX });
-  await queryClient.cancelQueries({ queryKey: crmQueryKeys.case(edit.caseId) });
+  await queryClient.cancelQueries({ queryKey: crmQueryKeys.case(caseId) });
 
   const ledgerSnapshots = queryClient.getQueriesData<LedgerLoad>({ queryKey: LEDGER_CACHE_KEY_PREFIX });
-  const caseSnapshot = queryClient.getQueryData<crm.CrmCase>(crmQueryKeys.case(edit.caseId));
+  const caseSnapshot = queryClient.getQueryData<crm.CrmCase>(crmQueryKeys.case(caseId));
 
-  queryClient.setQueriesData<LedgerLoad>({ queryKey: LEDGER_CACHE_KEY_PREFIX }, (previousLedgerLoad) => {
-    if (previousLedgerLoad === undefined) return previousLedgerLoad;
-    return {
-      ...previousLedgerLoad,
-      rows: previousLedgerLoad.rows.map((row) =>
-        row.caseId === edit.caseId ? applyEditToLedgerRow(row, edit) : row,
-      ),
-    };
-  });
-  queryClient.setQueryData<crm.CrmCase>(crmQueryKeys.case(edit.caseId), (previousCase) =>
-    previousCase === undefined ? previousCase : applyEditToCase(previousCase, edit),
+  const { patchLedgerRow } = patches;
+  if (patchLedgerRow !== undefined) {
+    queryClient.setQueriesData<LedgerLoad>({ queryKey: LEDGER_CACHE_KEY_PREFIX }, (previousLedgerLoad) => {
+      if (previousLedgerLoad === undefined) return previousLedgerLoad;
+      return {
+        ...previousLedgerLoad,
+        rows: previousLedgerLoad.rows.map((row) => (row.caseId === caseId ? patchLedgerRow(row) : row)),
+      };
+    });
+  }
+  queryClient.setQueryData<crm.CrmCase>(crmQueryKeys.case(caseId), (previousCase) =>
+    previousCase === undefined ? previousCase : patches.patchCase(previousCase),
   );
 
   // Signalled AFTER the cache write above, never before: `commitEdit`'s
@@ -181,24 +203,61 @@ async function applyOptimisticEditAndSnapshot(
   return { ledgerSnapshots, caseSnapshot };
 }
 
-function rollbackOptimisticEdit(
+export function rollbackOptimisticCaseWrite(
   queryClient: QueryClient,
-  edit: LedgerEdit,
-  context: LedgerEditRollbackContext | undefined,
+  caseId: string,
+  context: OptimisticCaseWriteContext | undefined,
 ): void {
   if (context === undefined) return;
   for (const [ledgerQueryKey, snapshotLedgerLoad] of context.ledgerSnapshots) {
     queryClient.setQueryData(ledgerQueryKey, snapshotLedgerLoad);
   }
-  queryClient.setQueryData(crmQueryKeys.case(edit.caseId), context.caseSnapshot);
+  queryClient.setQueryData(crmQueryKeys.case(caseId), context.caseSnapshot);
 }
 
-function invalidateAfterSettle(queryClient: QueryClient, edit: LedgerEdit): void {
+export function invalidateAfterCaseWriteSettles(queryClient: QueryClient, caseId: string): void {
   void queryClient.invalidateQueries({ queryKey: LEDGER_CACHE_KEY_PREFIX });
-  void queryClient.invalidateQueries({ queryKey: crmQueryKeys.case(edit.caseId) });
+  void queryClient.invalidateQueries({ queryKey: crmQueryKeys.case(caseId) });
 }
 
-type LedgerAxisMutation = UseMutationResult<crm.CrmCase, Error, LedgerEdit, LedgerEditRollbackContext>;
+/**
+ * Rule 4's one trigger: a 409 shows both values and asks, and every other
+ * failure rolls back silently (rule 2). Shared with `useApplicantEdit` so the
+ * two hooks can never disagree about which failures earn a prompt.
+ */
+export function readConflictMessage(error: Error): string | undefined {
+  return error instanceof ApiRequestError && error.statusCode === 409 ? error.message : undefined;
+}
+
+/**
+ * The handshake that makes `commitEdit` resolve when the OPTIMISTIC write
+ * lands rather than when the request round-trips.
+ *
+ * Keyed by the exact edit object `commitEdit` receives (reference identity,
+ * set and read within the same call) so concurrent edits on different cells
+ * never share -- or clobber -- each other's signal. A `WeakMap` rather than a
+ * `Map` because nothing ever removes an entry: the edit object is the only
+ * thing keeping it alive.
+ */
+export function useOptimisticWriteSignal<EditType extends object>(): {
+  /** Registers, then returns, the promise `commitEdit` awaits. Call before starting the mutation. */
+  waitForWriteApplied(edit: EditType): Promise<void>;
+  signalWriteApplied(edit: EditType): void;
+} {
+  const writeAppliedResolvers = useRef(new WeakMap<EditType, () => void>());
+  return {
+    waitForWriteApplied(edit: EditType): Promise<void> {
+      return new Promise<void>((resolveWriteApplied) => {
+        writeAppliedResolvers.current.set(edit, resolveWriteApplied);
+      });
+    },
+    signalWriteApplied(edit: EditType): void {
+      writeAppliedResolvers.current.get(edit)?.();
+    },
+  };
+}
+
+type LedgerAxisMutation = UseMutationResult<crm.CrmCase, Error, LedgerEdit, OptimisticCaseWriteContext>;
 
 export interface UseLedgerEditResult {
   /**
@@ -223,51 +282,54 @@ export function useLedgerEdit(): UseLedgerEditResult {
   const queryClient = useQueryClient();
   const { showUndo } = useUndoToast();
   const [pendingConflict, setPendingConflict] = useState<LedgerConflict | undefined>(undefined);
+  const optimisticWriteSignal = useOptimisticWriteSignal<LedgerEdit>();
 
-  // Keyed by the exact `LedgerEdit` object `commitEdit` receives (reference
-  // identity, set and read within the same call) so concurrent edits on
-  // different cells never share -- or clobber -- each other's signal.
-  const optimisticWriteAppliedResolvers = useRef(new WeakMap<LedgerEdit, () => void>());
-
-  function onMutateForEdit(edit: LedgerEdit): Promise<LedgerEditRollbackContext> {
-    return applyOptimisticEditAndSnapshot(queryClient, edit, () => {
-      optimisticWriteAppliedResolvers.current.get(edit)?.();
-    });
+  function onMutateForEdit(edit: LedgerEdit): Promise<OptimisticCaseWriteContext> {
+    return applyOptimisticCaseWriteAndSnapshot(
+      queryClient,
+      edit.caseId,
+      {
+        patchCase: (caseRecord) => applyEditToCase(caseRecord, edit),
+        patchLedgerRow: (ledgerRow) => applyEditToLedgerRow(ledgerRow, edit),
+      },
+      () => optimisticWriteSignal.signalWriteApplied(edit),
+    );
   }
 
-  function onErrorForEdit(error: Error, edit: LedgerEdit, context: LedgerEditRollbackContext | undefined): void {
-    rollbackOptimisticEdit(queryClient, edit, context);
+  function onErrorForEdit(error: Error, edit: LedgerEdit, context: OptimisticCaseWriteContext | undefined): void {
+    rollbackOptimisticCaseWrite(queryClient, edit.caseId, context);
     // Rule 4: a 409 shows both values and asks -- it never picks. Every
     // other failure just rolls back silently (rule 2); only a genuine
     // conflict earns the prompt.
-    if (error instanceof ApiRequestError && error.statusCode === 409) {
-      setPendingConflict({ edit, serverMessage: error.message });
+    const conflictMessage = readConflictMessage(error);
+    if (conflictMessage !== undefined) {
+      setPendingConflict({ edit, serverMessage: conflictMessage });
     }
   }
 
   function onSettledForEdit(_data: crm.CrmCase | undefined, _error: Error | null, edit: LedgerEdit): void {
-    invalidateAfterSettle(queryClient, edit);
+    invalidateAfterCaseWriteSettles(queryClient, edit.caseId);
   }
 
-  const caseStatusMutation = useMutation<crm.CrmCase, Error, LedgerEdit, LedgerEditRollbackContext>({
+  const caseStatusMutation = useMutation<crm.CrmCase, Error, LedgerEdit, OptimisticCaseWriteContext>({
     mutationFn: (edit) => crmClient.setCaseStatus(idToken!, edit.caseId, edit.nextValue as crm.CaseStatus),
     onMutate: onMutateForEdit,
     onError: onErrorForEdit,
     onSettled: onSettledForEdit,
   });
-  const billingStatusMutation = useMutation<crm.CrmCase, Error, LedgerEdit, LedgerEditRollbackContext>({
+  const billingStatusMutation = useMutation<crm.CrmCase, Error, LedgerEdit, OptimisticCaseWriteContext>({
     mutationFn: (edit) => crmClient.setBillingStatus(idToken!, edit.caseId, edit.nextValue as crm.BillingStatus),
     onMutate: onMutateForEdit,
     onError: onErrorForEdit,
     onSettled: onSettledForEdit,
   });
-  const appointmentDateMutation = useMutation<crm.CrmCase, Error, LedgerEdit, LedgerEditRollbackContext>({
+  const appointmentDateMutation = useMutation<crm.CrmCase, Error, LedgerEdit, OptimisticCaseWriteContext>({
     mutationFn: (edit) => crmClient.updateCaseDetails(idToken!, edit.caseId, { appointmentDate: edit.nextValue }),
     onMutate: onMutateForEdit,
     onError: onErrorForEdit,
     onSettled: onSettledForEdit,
   });
-  const visaTypeMutation = useMutation<crm.CrmCase, Error, LedgerEdit, LedgerEditRollbackContext>({
+  const visaTypeMutation = useMutation<crm.CrmCase, Error, LedgerEdit, OptimisticCaseWriteContext>({
     mutationFn: (edit) =>
       crmClient.updateCaseDetails(idToken!, edit.caseId, { visaType: edit.nextValue as crm.VisaType }),
     onMutate: onMutateForEdit,
@@ -311,9 +373,7 @@ export function useLedgerEdit(): UseLedgerEditResult {
   }
 
   async function commitEdit(edit: LedgerEdit): Promise<void> {
-    const optimisticWriteApplied = new Promise<void>((resolve) => {
-      optimisticWriteAppliedResolvers.current.set(edit, resolve);
-    });
+    const optimisticWriteApplied = optimisticWriteSignal.waitForWriteApplied(edit);
     mutationForColumn(edit.column).mutate(edit, {
       onSuccess: () => {
         if (isUndoPossible(edit)) {
@@ -342,7 +402,7 @@ export function useLedgerEdit(): UseLedgerEditResult {
     // already restored the stored value. Invalidating explicitly (rather
     // than relying only on `onSettled`, which already ran) is a cheap
     // insurance that both caches reflect the real, current record.
-    invalidateAfterSettle(queryClient, conflict.edit);
+    invalidateAfterCaseWriteSettles(queryClient, conflict.edit.caseId);
   }
 
   return { commitEdit, pendingConflict, resolveConflict };

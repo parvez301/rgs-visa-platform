@@ -2,6 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { crm } from "@rgs/shared";
 import { describeLedgerEditValue, useLedgerEdit } from "../api/mutations";
+import { ConflictPrompt } from "../components/ConflictPrompt";
 import { ApplicantSubRows, APPLICANT_SUBROW_LINE_HEIGHT } from "./ApplicantSubRows";
 import { LEDGER_COLUMNS, LEDGER_ROW_HEIGHT } from "./columns";
 import { EditableCell, readLedgerColumnValue } from "./EditableCell";
@@ -372,34 +373,12 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
       </div>
 
       {pendingConflict !== undefined && (
-        <div
-          role="alertdialog"
-          aria-modal="true"
-          aria-label="This case changed underneath your edit"
-          className="absolute inset-0 z-40 flex items-center justify-center bg-crm-charcoal/40"
-        >
-          <div className="w-full max-w-sm rounded-crm-card border border-crm-rule-box bg-crm-canvas p-4 text-[13px] text-crm-charcoal shadow">
-            <p className="font-medium">This case changed underneath your edit.</p>
-            <p className="mt-2 text-crm-steel">{pendingConflict.serverMessage}</p>
-            <p className="mt-2">Your value: {describeLedgerEditValue(pendingConflict.edit)}</p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => resolveConflict("keepTheirs")}
-                className="rounded-crm-control border border-crm-rule-box px-2 py-1"
-              >
-                Keep theirs
-              </button>
-              <button
-                type="button"
-                onClick={() => resolveConflict("keepMine")}
-                className="rounded-crm-control border border-crm-primary bg-crm-lavender px-2 py-1"
-              >
-                Keep mine
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConflictPrompt
+          serverMessage={pendingConflict.serverMessage}
+          yourValue={describeLedgerEditValue(pendingConflict.edit)}
+          onKeepTheirs={() => resolveConflict("keepTheirs")}
+          onKeepMine={() => resolveConflict("keepMine")}
+        />
       )}
     </div>
   );

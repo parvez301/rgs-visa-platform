@@ -2,6 +2,7 @@ import { render, type RenderResult } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { expect } from "vitest";
 import { createElement, type ReactElement } from "react";
+import { MemoryRouter } from "react-router";
 import { AuthContext, type AuthState } from "../../src/lib/auth";
 import { UndoToastProvider } from "../../src/crm/UndoToast";
 
@@ -117,6 +118,13 @@ export function renderLedger(element: ReactElement): RenderResult & {
   // (see the brief's own note that it stays `virtual.ts`), and TypeScript
   // refuses JSX syntax outside a `.tsx` file regardless of the `jsx` compiler
   // option.
+  // `MemoryRouter` from Task 14 on: the Ledger's REF cell is a `<Link>` to
+  // `/crm/cases/:caseId` (spec §5, "reached by clicking a REF"), and
+  // react-router's `useHref` throws outside a router. In production
+  // `LedgerTable` is always inside `BrowserRouter` -- `AdminShell`'s own header
+  // links have required one since long before this task -- so this restores
+  // the harness to what the component already assumes, rather than relaxing
+  // anything the component needs.
   function wrapInProviders(elementToWrap: ReactElement) {
     return createElement(
       AuthContext.Provider,
@@ -124,7 +132,11 @@ export function renderLedger(element: ReactElement): RenderResult & {
       createElement(
         QueryClientProvider,
         { client: queryClient },
-        createElement(UndoToastProvider, null, elementToWrap),
+        createElement(
+          UndoToastProvider,
+          null,
+          createElement(MemoryRouter, null, elementToWrap),
+        ),
       ),
     );
   }
