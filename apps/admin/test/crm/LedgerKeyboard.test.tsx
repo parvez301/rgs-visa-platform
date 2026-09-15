@@ -1,5 +1,6 @@
-import { act, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
 import { LedgerTable } from "../../src/crm/ledger/LedgerTable";
@@ -105,7 +106,60 @@ function readMountedRowTops(container: HTMLElement): number[] {
   });
 }
 
+/**
+ * Reads back the router location `renderLedger`'s own `MemoryRouter` is
+ * holding. Rendered as a sibling of the table rather than as a `<Routes>`
+ * probe, so this asserts where the grid NAVIGATED TO without also asserting
+ * anything about what `/crm/cases/:caseId` renders -- that is `CasePage`'s own
+ * test file's job.
+ */
+function RouterLocationProbe() {
+  const routerLocation = useLocation();
+  return <span data-testid="router-location">{routerLocation.pathname}</span>;
+}
+
 describe("LedgerTable keyboard and selection", () => {
+  it("opens the focused REF cell's case on Enter (R65)", async () => {
+    // A keyboard-only desk agent had no way to reach a case at all: the REF
+    // `<Link>` carries `tabIndex={-1}` (it must -- an anchor per mounted row
+    // would put ~180 tab stops in the grid and change what Tab does), and the
+    // REF column is not editable, so Enter was bound to `beginEdit` on a cell
+    // with no editor and did nothing visible.
+    const user = userEvent.setup();
+    const { container } = renderLedger(
+      <>
+        <LedgerTable rows={buildRows(50)} partnerNamesById={{}} />
+        <RouterLocationProbe />
+      </>,
+    );
+    await user.click(mountedCell(container, "case_0001", "caseRef"));
+
+    expect(screen.getByTestId("router-location").textContent).toBe("/");
+
+    dispatchGridKeyDown(getGridElement(container), "Enter");
+
+    expect(screen.getByTestId("router-location").textContent).toBe("/crm/cases/case_0001");
+  });
+
+  it("leaves Enter on every OTHER column alone -- it still opens that cell's editor", async () => {
+    // The other half of R65: the ruling forbids a keymap entry that changes
+    // what Enter does anywhere but the REF column. Without this, binding Enter
+    // to navigation at the grid level would silently take editing with it.
+    const user = userEvent.setup();
+    const { container } = renderLedger(
+      <>
+        <LedgerTable rows={buildRows(50)} partnerNamesById={{}} />
+        <RouterLocationProbe />
+      </>,
+    );
+    await user.click(mountedCell(container, "case_0001", "caseStatus"));
+
+    dispatchGridKeyDown(getGridElement(container), "Enter");
+
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
+    expect(screen.getByTestId("router-location").textContent).toBe("/");
+  });
+
   it("moves the focused cell with the arrow keys", async () => {
     const user = userEvent.setup();
     const { container } = renderLedger(<LedgerTable rows={buildRows(50)} partnerNamesById={{}} />);

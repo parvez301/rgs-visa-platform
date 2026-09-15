@@ -6,9 +6,9 @@ import {
   CASE_TYPE_LABELS,
   CUSTODY_LABELS,
   MEMORY_AUTHOR_LABELS,
-  MEMORY_SCOPE_LABELS,
   OUTCOME_LABELS,
   describeEnumValue,
+  describeMemoryScope,
   formatInr,
 } from "../labels";
 
@@ -155,7 +155,9 @@ function describeProposalApproved(event: CrmEventView, isAutoApplied: boolean): 
 
 function describeMemoryRemembered(meta: EventMeta): string {
   const memoryKey = readMetaString(meta, "memoryKey") ?? "an unnamed memory";
-  const scopeLabel = describeEnumValue(readMetaString(meta, "scope"), MEMORY_SCOPE_LABELS);
+  // The stored value is a composite ("PARTNER#<partnerId>"), not one of the
+  // three kinds -- `describeMemoryScope` is what splits it (fix round 1, F1).
+  const scopeLabel = describeMemoryScope(readMetaString(meta, "scope"));
   const authorLabel = describeEnumValue(readMetaString(meta, "createdBy"), MEMORY_AUTHOR_LABELS);
   return `${memoryKey} · remembered for ${scopeLabel} · taught by ${authorLabel}`;
 }

@@ -1,5 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { crm } from "@rgs/shared";
 import { describeLedgerEditValue, useLedgerEdit } from "../api/mutations";
 import { ConflictPrompt } from "../components/ConflictPrompt";
@@ -60,6 +61,41 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
     rowCount: rows.length,
     columnCount: LEDGER_COLUMNS.length,
   });
+  const navigate = useNavigate();
+
+  /**
+   * R65 (fix round 1, F6): Enter on the focused REF cell opens that case.
+   *
+   * Handled HERE rather than in `useGridKeyboard`, and by intercepting one
+   * key on one column rather than by adding a keymap entry, for two reasons
+   * the ruling is explicit about. First, `gridReducer` is a pure reducer given
+   * only `{ rowCount, columnCount }` -- it cannot see a `caseId`, and handing
+   * it one would make every other keymap test depend on row data. Second,
+   * Enter must keep meaning "open this cell's editor" on every OTHER column;
+   * a `navigate` branch inside the reducer's Enter case would be one edit away
+   * from taking editing with it.
+   *
+   * Why this is needed at all: the REF cell renders a `<Link>` carrying
+   * `tabIndex={-1}` -- it has to, or every mounted row would add a tab stop
+   * and Tab would stop leaving the grid -- and REF is not an editable column,
+   * so Enter there dispatched `beginEdit` on a cell with no editor and a
+   * keyboard-only desk agent had no way to reach a case at all.
+   */
+  function handleGridKeyDown(keyboardEvent: KeyboardEvent): void {
+    const focusedRow = rows[gridState.focus.rowIndex];
+    const isOnRefCell = LEDGER_COLUMNS[gridState.focus.columnIndex]?.key === "caseRef";
+    const isPlainEnter =
+      keyboardEvent.key === "Enter" && !keyboardEvent.metaKey && !keyboardEvent.ctrlKey;
+    // `editing` is checked because an open editor's own handler stops
+    // propagation, but a cell whose editor is open while focus sits on REF is
+    // not a state this should ever guess at.
+    if (isPlainEnter && isOnRefCell && gridState.editing === undefined && focusedRow !== undefined) {
+      keyboardEvent.preventDefault();
+      void navigate(`/crm/cases/${focusedRow.caseId}`);
+      return;
+    }
+    onGridKeyDown(keyboardEvent);
+  }
 
   // What each mounted `<ApplicantSubRows>` reports it is really drawing, keyed
   // by case id rather than row index: `rows` is re-filtered client-side on
@@ -267,7 +303,7 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
         className="flex-1 overflow-auto"
         role="grid"
         tabIndex={0}
-        onKeyDown={(event) => onGridKeyDown(event.nativeEvent)}
+        onKeyDown={(event) => handleGridKeyDown(event.nativeEvent)}
       >
         {rows.length === 0 ? (
           <p className="p-6 text-crm-steel">No cases match these filters.</p>

@@ -133,6 +133,52 @@ describe("describeCrmEvent", () => {
     );
   });
 
+  /**
+   * Fix round 1, F1. `memory.ts:180` records `scope: memory.scope`, and that
+   * field is the stored COMPOSITE -- "ORG", "PARTNER#<partnerId>",
+   * "USER#<email>" (`domain/crm/keys.ts:154-156`), "never a (kind, key) pair".
+   * Looking the whole composite up in a map keyed by the three query-parameter
+   * KINDS rendered two of the three scopes as "an unrecognised value
+   * (PARTNER#partner_1)". One case per shape, because a fix that handled only
+   * the prefix it was debugged against would pass a single-shape test.
+   */
+  function describeMemoryScopeDetail(scope: string): string {
+    return describeCrmEvent({
+      eventId: "e1",
+      eventType: "MEMORY_REMEMBERED",
+      caseId: "case_1",
+      actorEmail: "ops@rgs.test",
+      meta: { scope, memoryKey: "pricing_rule", createdBy: "agent" },
+      createdAt: "2026-03-04T10:00:00.000Z",
+    }).detail;
+  }
+
+  it("names an ORG-scoped memory's scope", () => {
+    expect(describeMemoryScopeDetail("ORG")).toBe(
+      "pricing_rule · remembered for the whole organisation · taught by the agent",
+    );
+  });
+
+  it("splits a PARTNER-scoped memory's composite scope and names the partner", () => {
+    expect(describeMemoryScopeDetail("PARTNER#partner_1")).toBe(
+      "pricing_rule · remembered for one partner (partner_1) · taught by the agent",
+    );
+  });
+
+  it("splits a USER-scoped memory's composite scope and names the desk", () => {
+    // The email carries a "#"-free local part, but the split must take the
+    // FIRST separator regardless -- a key containing one must not truncate.
+    expect(describeMemoryScopeDetail("USER#ops@rgs.test")).toBe(
+      "pricing_rule · remembered for one desk (ops@rgs.test) · taught by the agent",
+    );
+  });
+
+  it("names a scope kind it does not recognise instead of labelling it", () => {
+    expect(describeMemoryScopeDetail("TEAM#desk_a")).toBe(
+      "pricing_rule · remembered for an unrecognised value (TEAM#desk_a) · taught by the agent",
+    );
+  });
+
   it("reports a line item with its unit price, quantity and what it added to the total", () => {
     // `amountInr` in this event's meta is the UNIT price (lineItems.ts) and
     // `lineTotalInr` is what the line moved the case total by. Reading the

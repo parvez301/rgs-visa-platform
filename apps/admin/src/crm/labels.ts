@@ -136,17 +136,61 @@ export const LINE_ITEM_KIND_LABELS: Record<crm.LineItemKind, string> = {
 };
 
 /**
- * The three scopes `crmClient.listMemories` names. Deliberately NOT a total
- * Record over a shared union: `CrmMemorySchema.scope` is a free
- * `z.string().min(1)` (schemas.ts:156), so an unrecognised scope is reachable
- * in a way an unrecognised case status is not -- `describeEnumValue` below is
- * what names it rather than rendering a blank.
+ * The three memory scope KINDS, as words. Deliberately NOT a total Record over
+ * a shared union: `CrmMemorySchema.scope` is a free `z.string().min(1)`
+ * (schemas.ts:156), so an unrecognised kind is reachable in a way an
+ * unrecognised case status is not -- `describeEnumValue` below is what names
+ * it rather than rendering a blank.
+ *
+ * These are the KIND half of a stored scope, never the whole stored value:
+ * see `describeMemoryScope` below, which is the only thing that should read
+ * this map.
  */
 export const MEMORY_SCOPE_LABELS: Record<"ORG" | "PARTNER" | "USER", string> = {
   ORG: "the whole organisation",
-  PARTNER: "this partner",
-  USER: "one person",
+  PARTNER: "one partner",
+  USER: "one desk",
 };
+
+const MEMORY_SCOPE_SEPARATOR = "#";
+
+/**
+ * Names the scope a memory was remembered for, from the value actually stored
+ * on it.
+ *
+ * Fix round 1, F1. A memory's `scope` is a COMPOSITE string -- `"ORG"`,
+ * `"PARTNER#<partnerId>"` or `"USER#<email>"` (services/api/src/domain/crm/
+ * keys.ts:154-156, "never a (kind, key) pair") -- and
+ * `recordCrmEvent`/`MEMORY_REMEMBERED` carries that composite through verbatim
+ * (domain/crm/memory.ts:180). Looking the whole composite up in
+ * `MEMORY_SCOPE_LABELS`, which is keyed on the three KINDS the caller-facing
+ * `?scope=` query parameter uses, therefore matched only `"ORG"`: the other
+ * two thirds of the vocabulary rendered as "an unrecognised value
+ * (PARTNER#partner_1)".
+ *
+ * The key is named as well as the kind, because "one partner" without saying
+ * WHICH partner is barely more use on an audit surface than the raw string
+ * was. The split takes the FIRST separator only: an email local part may
+ * legally contain one, and truncating a scope at the second `#` would rename
+ * the desk it belongs to.
+ */
+export function describeMemoryScope(storedScope: string | undefined): string {
+  if (storedScope === undefined) return "not recorded";
+  const separatorIndex = storedScope.indexOf(MEMORY_SCOPE_SEPARATOR);
+  const scopeKind = separatorIndex === -1 ? storedScope : storedScope.slice(0, separatorIndex);
+  const scopeKey = separatorIndex === -1 ? undefined : storedScope.slice(separatorIndex + 1);
+  // Widened before indexing: `MEMORY_SCOPE_LABELS` is keyed on a three-member
+  // union, and `scopeKind` is whatever the backend stored, so under
+  // `noUncheckedIndexedAccess` the narrow type would reject the lookup rather
+  // than admit the `undefined` that is the whole point of the branch below.
+  const scopeKindLabels: Readonly<Record<string, string>> = MEMORY_SCOPE_LABELS;
+  const scopeKindLabel = scopeKindLabels[scopeKind];
+  // A kind this build has never heard of is named whole, separator included:
+  // splitting a scope we cannot interpret would hide half of what an operator
+  // needs to report.
+  if (scopeKindLabel === undefined) return describeEnumValue(storedScope, scopeKindLabels);
+  return scopeKey === undefined ? scopeKindLabel : `${scopeKindLabel} (${scopeKey})`;
+}
 
 /**
  * `CrmMemorySchema.createdBy` -- "what kind of author", not who. The same

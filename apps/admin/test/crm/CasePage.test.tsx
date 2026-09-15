@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -225,6 +225,74 @@ describe("CasePage", () => {
     expect(custodyWrite!.url).toContain("/cases/case_1/applicants/A2/custody");
     expect(custodyWrite!.url).not.toContain("/applicants/A1/");
     expect(custodyWrite!.body).toEqual({ toCustody: "AT_EMBASSY" });
+  });
+
+  it("offers no way to clear the visa type, because the PUT body cannot unset one", async () => {
+    // Fix round 1, F3. An `<option value="">` here sent `{ visaType: "" }`,
+    // which `cases.ts:152` counts as a change and `CrmCaseSchema.parse` then
+    // rejects on `z.enum(VISA_TYPES)` -- so the field cleared optimistically
+    // and snapped back with no explanation (a non-409 rolls back silently by
+    // design). The Ledger's own editor never offered one either
+    // (`EditableCell.tsx`'s visaType branch lists only `crm.VISA_TYPES`).
+    const user = userEvent.setup();
+    const { requestLog } = renderCasePage({ caseRecord: buildCase({ visaType: "TOURIST" }) });
+
+    const visaTypeControl = await screen.findByLabelText("Visa type");
+    const emptyOptionValues = within(visaTypeControl)
+      .getAllByRole("option")
+      .map((optionElement) => (optionElement as HTMLOptionElement).value)
+      .filter((optionValue) => optionValue === "");
+    expect(emptyOptionValues).toHaveLength(0);
+
+    // And the control still works for a real value, so this is not passing
+    // because the whole select went missing.
+    await user.selectOptions(visaTypeControl, "WORK");
+    await waitFor(() => {
+      expect(requestLog.filter((entry) => entry.method === "PUT")).toHaveLength(1);
+    });
+    expect(requestLog.filter((entry) => entry.method === "PUT")[0]!.body).toEqual({ visaType: "WORK" });
+  });
+
+  it("commits the appointment date once, when the human confirms it, not on every keystroke", async () => {
+    // Fix round 1, F4. React's `onChange` on a date input is the native
+    // `input` event: typing a year digit by digit walks the value through
+    // 0002-03-20, 0020-03-20, 0202-03-20 before reaching 2026-03-20, and each
+    // of those is a COMPLETE, schema-valid date. Committing on change wrote
+    // all four to the server. `fireEvent.change` rather than `user.type`
+    // because that is exactly the sequence of values a date input hands React,
+    // and it is the sequence -- not the typing -- this test is about.
+    const { requestLog } = renderCasePage({ caseRecord: buildCase({ appointmentDate: "2026-03-09" }) });
+
+    const appointmentDateControl = await screen.findByLabelText("Appointment date");
+    for (const partiallyTypedDate of ["0002-03-20", "0020-03-20", "0202-03-20", "2026-03-20"]) {
+      fireEvent.change(appointmentDateControl, { target: { value: partiallyTypedDate } });
+    }
+    expect(requestLog.filter((entry) => entry.method === "PUT")).toHaveLength(0);
+
+    fireEvent.blur(appointmentDateControl);
+
+    await waitFor(() => {
+      expect(requestLog.filter((entry) => entry.method === "PUT")).toHaveLength(1);
+    });
+    expect(requestLog.filter((entry) => entry.method === "PUT")[0]!.body).toEqual({
+      appointmentDate: "2026-03-20",
+    });
+  });
+
+  it("writes nothing when the appointment date is cleared, because the PUT body cannot unset it", async () => {
+    // Fix round 1, F3's other half: `appointmentDate: ""` fails the schema's
+    // `isoDate` regex, so an empty value is a no-op rather than a rejected
+    // write that rolls back without saying why.
+    const { requestLog } = renderCasePage({ caseRecord: buildCase({ appointmentDate: "2026-03-09" }) });
+
+    const appointmentDateControl = await screen.findByLabelText("Appointment date");
+    fireEvent.change(appointmentDateControl, { target: { value: "" } });
+    fireEvent.blur(appointmentDateControl);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Appointment date")).toHaveValue("");
+    });
+    expect(requestLog.filter((entry) => entry.method === "PUT")).toHaveLength(0);
   });
 
   it("shows a case that could not be loaded as an error, not as an empty case", async () => {

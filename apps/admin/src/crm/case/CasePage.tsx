@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useParams } from "react-router";
 import { crm } from "@rgs/shared";
 import { CrmLayout } from "../CrmLayout";
@@ -130,25 +130,6 @@ function CaseScreen({ caseId }: { caseId: string }) {
             />
 
             <LineItemsTable caseRecord={caseRecord} />
-
-            {/*
-              Measured, and it contradicts the controller notes (which say
-              `CrmCase.notes` is optional): `CrmCaseSchema` has NO notes field
-              at all -- `notes` exists on `PartnerSchema` and
-              `CountryProfileSchema`, not on a case. So there is nothing to
-              read and, under R51, nothing this screen could write either.
-
-              The section still renders, saying exactly that, rather than
-              vanishing or showing "No notes on this case." -- the second
-              sentence would claim a case CAN carry notes and simply has none,
-              which is the one reading of this gap that is false, and would
-              leave a desk agent hunting for notes that were never stored.
-            */}
-            <CaseSection title="Notes">
-              <p className="text-crm-steel">
-                A case record carries no notes of its own today, so there is nothing to show here.
-              </p>
-            </CaseSection>
 
             <CaseSection title="Timeline">
               {caseEventsQuery.isLoading ? (
@@ -312,7 +293,16 @@ function CaseHeader({
             onChange={(changeEvent) => onCommitCaseEdit("visaType", changeEvent.target.value)}
             className={CONTROL_CLASS}
           >
-            <option value="">No visa type</option>
+            {/*
+              No empty option, deliberately (fix round 1, F3): `PUT /cases/
+              {caseId}` has no way to UNSET a visa type -- `updateCaseDetails`
+              counts `visaType: ""` as a change and `CrmCaseSchema.parse` then
+              rejects it against `z.enum(VISA_TYPES)`, so choosing it cleared
+              the field optimistically and snapped back with no explanation (a
+              non-409 rolls back silently, by design). A case with no visa type
+              yet still selects nothing -- `value=""` matches no option, so the
+              control renders blank -- and picking a real one commits it.
+            */}
             {crm.VISA_TYPES.map((visaType) => (
               <option key={visaType} value={visaType}>
                 {VISA_TYPE_LABELS[visaType]}
@@ -328,12 +318,9 @@ function CaseHeader({
           {caseRecord.submissionDate ?? NOT_RECORDED}
         </CaseField>
         <CaseField fieldKey="appointmentDate" label="Appointment">
-          <input
-            type="date"
-            aria-label="Appointment date"
-            value={caseRecord.appointmentDate ?? ""}
-            onChange={(changeEvent) => onCommitCaseEdit("appointmentDate", changeEvent.target.value)}
-            className={CONTROL_CLASS}
+          <AppointmentDateControl
+            storedDate={caseRecord.appointmentDate}
+            onCommitDate={(confirmedDate) => onCommitCaseEdit("appointmentDate", confirmedDate)}
           />
         </CaseField>
         <CaseField fieldKey="expectedCollectionDate" label="Expected collection">
@@ -344,6 +331,78 @@ function CaseHeader({
         </CaseField>
       </div>
     </header>
+  );
+}
+
+/**
+ * The appointment date, committed when the human confirms it.
+ *
+ * Fix round 1, F4. A `<input type="date">` fires React's `onChange` on every
+ * native `input` event, and a keyboard-typed year walks the value through
+ * `0002-03-20`, `0020-03-20` and `0202-03-20` before reaching `2026-03-20`.
+ * Each of those is a COMPLETE, schema-valid date, so committing on change did
+ * not send one write and three rejections -- it sent four accepted writes, the
+ * first three of them to years nobody typed on purpose, each with its own
+ * optimistic patch, its own event on the audit timeline and its own undo
+ * toast.
+ *
+ * The contract is `EditableCell`'s, so the two surfaces agree about what
+ * "confirm" means: commit on blur or on Enter, never before. A draft that
+ * equals the stored value is not a write, and an EMPTY draft is not a write
+ * either -- clearing the field would send `appointmentDate: ""`, which fails
+ * the schema's `isoDate` regex exactly as the empty visa type did. The input
+ * still shows the cleared value: the draft is what a desk agent typed, and
+ * lying about that is worse than letting them tab away and see it come back.
+ */
+function AppointmentDateControl({
+  storedDate,
+  onCommitDate,
+}: {
+  storedDate: string | undefined;
+  onCommitDate: (confirmedDate: string) => void;
+}) {
+  const [draftDate, setDraftDate] = useState(storedDate ?? "");
+  // The stored value this draft was last seeded from. Compared during render
+  // (React's "adjusting state when a prop changes" pattern) rather than in an
+  // effect, so a rollback or a refetch that moves the date never paints the
+  // stale draft for a frame first.
+  const [lastSeenStoredDate, setLastSeenStoredDate] = useState(storedDate);
+  const alreadyCommittedDateRef = useRef<string | undefined>(undefined);
+  if (storedDate !== lastSeenStoredDate) {
+    setLastSeenStoredDate(storedDate);
+    setDraftDate(storedDate ?? "");
+    alreadyCommittedDateRef.current = undefined;
+  }
+
+  function commitDraftDate() {
+    if (draftDate === "" || draftDate === (storedDate ?? "")) return;
+    // Enter commits and then the input is usually blurred (by the human, or by
+    // the browser). Without this the second event would send the same date a
+    // second time, because the optimistic patch that makes `storedDate` agree
+    // is a microtask behind.
+    if (alreadyCommittedDateRef.current === draftDate) return;
+    alreadyCommittedDateRef.current = draftDate;
+    onCommitDate(draftDate);
+  }
+
+  return (
+    <input
+      type="date"
+      aria-label="Appointment date"
+      value={draftDate}
+      onChange={(changeEvent) => setDraftDate(changeEvent.target.value)}
+      onBlur={commitDraftDate}
+      onKeyDown={(keyboardEvent) => {
+        if (keyboardEvent.key === "Enter") {
+          keyboardEvent.preventDefault();
+          commitDraftDate();
+        } else if (keyboardEvent.key === "Escape") {
+          keyboardEvent.preventDefault();
+          setDraftDate(storedDate ?? "");
+        }
+      }}
+      className={CONTROL_CLASS}
+    />
   );
 }
 
