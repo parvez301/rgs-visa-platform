@@ -103,8 +103,43 @@ const EDITABLE_ENUM_INPUTS: Record<
 };
 
 /**
- * Whether the change this proposal applied can be walked back through a route
- * the admin client already has.
+ * A change that has actually been written, and the input that wrote it.
+ *
+ * `effectiveInput` is the whole tool input as it went to the server -- the
+ * staged input when nobody edited it, the merged input when somebody did, and
+ * (for an auto-applied change) the proposal's own input. Everything downstream
+ * of the write reads THIS and never `summary[].to`, because a summary row is a
+ * snapshot of what the model staged and an edited approval writes something
+ * else.
+ */
+export interface AppliedChange {
+  proposalId: string;
+  toolName: string;
+  caseId: string | undefined;
+  effectiveInput: Record<string, unknown>;
+  summary: ProposalView["summary"];
+  /** True when the trust ladder applied it without anybody clicking Approve. */
+  autoApplied: boolean;
+}
+
+export function appliedChangeFrom(
+  proposal: ProposalView,
+  effectiveInput: Record<string, unknown>,
+  autoApplied: boolean,
+): AppliedChange {
+  return {
+    proposalId: proposal.proposalId,
+    toolName: proposal.toolName,
+    caseId: proposal.caseId,
+    effectiveInput,
+    summary: proposal.summary,
+    autoApplied,
+  };
+}
+
+/**
+ * Whether an applied change can be walked back through a route the admin
+ * client already has.
  *
  * There is NO un-approve endpoint: `applyApprovedChange` is one-way and the
  * PROPOSAL_APPROVED event stands whatever happens next. What can sometimes be
@@ -113,44 +148,53 @@ const EDITABLE_ENUM_INPUTS: Record<
  * that edge. Anything else says so instead of showing a button that cannot
  * work.
  */
-export function canReverseApproval(proposal: ProposalView): boolean {
-  const reversal = readSingleAxisReversal(proposal);
+export function canReverseApproval(appliedChange: AppliedChange): boolean {
+  const reversal = readSingleAxisReversal(appliedChange);
   return reversal !== undefined;
 }
 
 /**
- * The one axis move that would put an applied approval back, already narrowed
- * to the enum the matching client method takes -- so no caller has to cast a
+ * The one axis move that would put an applied change back, already narrowed to
+ * the enum the matching client method takes -- so no caller has to cast a
  * string back into a `CustodyStatus` and be wrong about it.
+ *
+ * The axis the case is at NOW comes from `effectiveInput`, not from the staged
+ * `summary[0].to`: for both `set_custody` and `set_billing` the tool's own
+ * input field is named exactly like the summary row's last segment
+ * (`{ caseId, applicantRef, custody }` and `{ caseId, billingStatus }`,
+ * writeTools.ts), which is why one lookup serves both. `from` still comes from
+ * the summary, because it is the only record of where the case was before the
+ * write and an edit never changes it.
  */
 export type ApprovalReversal =
   | { axis: "custody"; caseId: string; applicantRef: string; toCustody: crm.CustodyStatus }
   | { axis: "billingStatus"; caseId: string; toBillingStatus: crm.BillingStatus };
 
-export function readSingleAxisReversal(proposal: ProposalView): ApprovalReversal | undefined {
-  if (proposal.caseId === undefined) return undefined;
-  if (proposal.summary.length !== 1) return undefined;
-  const summaryRow = proposal.summary[0];
+export function readSingleAxisReversal(appliedChange: AppliedChange): ApprovalReversal | undefined {
+  if (appliedChange.caseId === undefined) return undefined;
+  if (appliedChange.summary.length !== 1) return undefined;
+  const summaryRow = appliedChange.summary[0];
   if (summaryRow === undefined) return undefined;
-  const { from, to } = summaryRow;
   const axisSegment = lastFieldSegment(summaryRow.field);
+  const writtenValue = appliedChange.effectiveInput[axisSegment];
+  if (typeof writtenValue !== "string") return undefined;
 
-  if (proposal.toolName === "set_custody" && axisSegment === "custody") {
-    const fromCustody = asMember(from, crm.CUSTODY_STATUSES);
-    const toCustody = asMember(to, crm.CUSTODY_STATUSES);
-    if (fromCustody === undefined || toCustody === undefined) return undefined;
-    if (!crm.canTransitionCustody(toCustody, fromCustody)) return undefined;
-    const applicantRef = proposal.input["applicantRef"];
+  if (appliedChange.toolName === "set_custody" && axisSegment === "custody") {
+    const fromCustody = asMember(summaryRow.from, crm.CUSTODY_STATUSES);
+    const writtenCustody = asMember(writtenValue, crm.CUSTODY_STATUSES);
+    if (fromCustody === undefined || writtenCustody === undefined) return undefined;
+    if (!crm.canTransitionCustody(writtenCustody, fromCustody)) return undefined;
+    const applicantRef = appliedChange.effectiveInput["applicantRef"];
     if (typeof applicantRef !== "string" || applicantRef === "") return undefined;
-    return { axis: "custody", caseId: proposal.caseId, applicantRef, toCustody: fromCustody };
+    return { axis: "custody", caseId: appliedChange.caseId, applicantRef, toCustody: fromCustody };
   }
 
-  if (proposal.toolName === "set_billing" && axisSegment === "billingStatus") {
-    const fromBilling = asMember(from, crm.BILLING_STATUSES);
-    const toBilling = asMember(to, crm.BILLING_STATUSES);
-    if (fromBilling === undefined || toBilling === undefined) return undefined;
-    if (!crm.canTransitionBilling(toBilling, fromBilling)) return undefined;
-    return { axis: "billingStatus", caseId: proposal.caseId, toBillingStatus: fromBilling };
+  if (appliedChange.toolName === "set_billing" && axisSegment === "billingStatus") {
+    const fromBilling = asMember(summaryRow.from, crm.BILLING_STATUSES);
+    const writtenBilling = asMember(writtenValue, crm.BILLING_STATUSES);
+    if (fromBilling === undefined || writtenBilling === undefined) return undefined;
+    if (!crm.canTransitionBilling(writtenBilling, fromBilling)) return undefined;
+    return { axis: "billingStatus", caseId: appliedChange.caseId, toBillingStatus: fromBilling };
   }
 
   return undefined;
@@ -163,9 +207,9 @@ function asMember<MemberType extends string>(
   return (members as readonly string[]).includes(candidate) ? (candidate as MemberType) : undefined;
 }
 
-function describeApprovalFailure(approvalError: unknown): string {
-  if (approvalError instanceof Error && approvalError.message.length > 0) return approvalError.message;
-  return "The change could not be applied.";
+function describeWriteFailure(writeError: unknown, fallbackMessage: string): string {
+  if (writeError instanceof Error && writeError.message.length > 0) return writeError.message;
+  return fallbackMessage;
 }
 
 interface ApprovalOutcome {
@@ -175,10 +219,17 @@ interface ApprovalOutcome {
 
 export interface ProposalCardProps {
   proposals: ProposalView[];
+  /**
+   * Changes the turn applied on its own (R72). They were never pending here,
+   * so the card cannot know their effective input by watching an approval --
+   * the panel hands them over already applied, and they get the same
+   * undo-or-say-so treatment as an approval.
+   */
+  autoAppliedChanges?: AppliedChange[];
   onApprove?(proposalId: string, editedInput?: Record<string, unknown>): Promise<unknown>;
   onDiscard?(proposalId: string, reason: string): Promise<unknown>;
-  /** Supplied by the panel; the card decides per proposal whether it is offered at all. */
-  onUndoApproval?(proposal: ProposalView): Promise<unknown>;
+  /** Supplied by the panel; the card decides per change whether it is offered at all. */
+  onUndoApproval?(appliedChange: AppliedChange): Promise<unknown>;
 }
 
 const CARD_CONTROL_CLASS =
@@ -196,8 +247,14 @@ const CARD_CONTROL_CLASS =
  * `--crm-primary` appears exactly once in this file, on Approve. It is the
  * only purple control in the product.
  */
-export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }: ProposalCardProps) {
-  const [appliedProposals, setAppliedProposals] = useState<ProposalView[]>([]);
+export function ProposalCard({
+  proposals,
+  autoAppliedChanges = [],
+  onApprove,
+  onDiscard,
+  onUndoApproval,
+}: ProposalCardProps) {
+  const [approvedChanges, setApprovedChanges] = useState<AppliedChange[]>([]);
   const [discardedProposalIds, setDiscardedProposalIds] = useState<string[]>([]);
   const [editingProposalIds, setEditingProposalIds] = useState<string[]>([]);
   const [editedValuesByProposalId, setEditedValuesByProposalId] = useState<
@@ -205,18 +262,21 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
   >({});
   const [discardReasonsByProposalId, setDiscardReasonsByProposalId] = useState<Record<string, string>>({});
   const [discardingProposalIds, setDiscardingProposalIds] = useState<string[]>([]);
+  const [discardFailuresByProposalId, setDiscardFailuresByProposalId] = useState<Record<string, string>>({});
   const [approvalOutcome, setApprovalOutcome] = useState<ApprovalOutcome | undefined>(undefined);
   const [isApproving, setIsApproving] = useState(false);
   const [undoneProposalIds, setUndoneProposalIds] = useState<string[]>([]);
   const [undoFailuresByProposalId, setUndoFailuresByProposalId] = useState<Record<string, string>>({});
 
   const settledProposalIds = new Set([
-    ...appliedProposals.map((proposal) => proposal.proposalId),
+    ...approvedChanges.map((appliedChange) => appliedChange.proposalId),
     ...discardedProposalIds,
   ]);
   const pendingProposals = proposals.filter(
     (proposal) => !settledProposalIds.has(proposal.proposalId),
   );
+  // Auto-applied first: they were written before anybody looked at this card.
+  const appliedChanges = [...autoAppliedChanges, ...approvedChanges];
 
   /**
    * `undefined` whenever the human changed nothing, even if they opened the
@@ -235,11 +295,27 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
     return { ...proposal.input, ...Object.fromEntries(changedEntries) };
   }
 
+  /** What the server will actually be given -- an edit if there is one, the staged input otherwise. */
+  function effectiveInputFor(proposal: ProposalView): Record<string, unknown> {
+    return editedInputFor(proposal) ?? proposal.input;
+  }
+
+  /**
+   * The `to` this row plays back: the human's edit while it stands, the staged
+   * value otherwise. Without this the card shows one change and Approve writes
+   * another (spec §6's Intent Handshake is a promise about the write, not
+   * about the proposal).
+   */
+  function playedBackTo(proposal: ProposalView, summaryRow: ProposalView["summary"][number]): string {
+    const editedValue = editedValuesByProposalId[proposal.proposalId]?.[lastFieldSegment(summaryRow.field)];
+    return editedValue ?? summaryRow.to;
+  }
+
   async function approveEveryPendingProposal() {
     if (onApprove === undefined || pendingProposals.length === 0) return;
     setIsApproving(true);
     const proposalsToApprove = [...pendingProposals];
-    const newlyApplied: ProposalView[] = [];
+    const newlyApplied: AppliedChange[] = [];
     const failuresByProposalId: Record<string, string> = {};
 
     // Sequential, not `Promise.all`: each approval is a real write against a
@@ -248,13 +324,20 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
     for (const proposal of proposalsToApprove) {
       try {
         await onApprove(proposal.proposalId, editedInputFor(proposal));
-        newlyApplied.push(proposal);
+        // The EFFECTIVE input, not the proposal: an edited approval moves the
+        // case somewhere the staged summary never mentions, and every later
+        // question about this change ("can it be undone, and to what?") has to
+        // be asked of what was written.
+        newlyApplied.push(appliedChangeFrom(proposal, effectiveInputFor(proposal), false));
       } catch (approvalError) {
-        failuresByProposalId[proposal.proposalId] = describeApprovalFailure(approvalError);
+        failuresByProposalId[proposal.proposalId] = describeWriteFailure(
+          approvalError,
+          "The change could not be applied.",
+        );
       }
     }
 
-    setAppliedProposals((currentApplied) => [...currentApplied, ...newlyApplied]);
+    setApprovedChanges((currentApplied) => [...currentApplied, ...newlyApplied]);
     setApprovalOutcome({ appliedCount: newlyApplied.length, failuresByProposalId });
     setIsApproving(false);
   }
@@ -263,9 +346,22 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
     if (onDiscard === undefined) return;
     const typedReason = (discardReasonsByProposalId[proposal.proposalId] ?? "").trim();
     setDiscardingProposalIds((current) => [...current, proposal.proposalId]);
+    setDiscardFailuresByProposalId((current) => {
+      const { [proposal.proposalId]: _clearedFailure, ...remaining } = current;
+      return remaining;
+    });
     try {
       await onDiscard(proposal.proposalId, typedReason === "" ? DEFAULT_DISCARD_REASON : typedReason);
       setDiscardedProposalIds((current) => [...current, proposal.proposalId]);
+    } catch (discardError) {
+      // The proposal is still staged on the server, so it stays on screen with
+      // the server's own words -- exactly as a failed approval does. Without
+      // this the click did nothing visible AND left an unhandled rejection
+      // behind (`void discardProposal(...)`).
+      setDiscardFailuresByProposalId((current) => ({
+        ...current,
+        [proposal.proposalId]: describeWriteFailure(discardError, "The proposal could not be discarded."),
+      }));
     } finally {
       setDiscardingProposalIds((current) =>
         current.filter((proposalId) => proposalId !== proposal.proposalId),
@@ -273,20 +369,20 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
     }
   }
 
-  async function undoApproval(proposal: ProposalView) {
+  async function undoApproval(appliedChange: AppliedChange) {
     if (onUndoApproval === undefined) return;
     try {
-      await onUndoApproval(proposal);
-      setUndoneProposalIds((current) => [...current, proposal.proposalId]);
+      await onUndoApproval(appliedChange);
+      setUndoneProposalIds((current) => [...current, appliedChange.proposalId]);
     } catch (undoError) {
       setUndoFailuresByProposalId((current) => ({
         ...current,
-        [proposal.proposalId]: describeApprovalFailure(undoError),
+        [appliedChange.proposalId]: describeWriteFailure(undoError, "The change could not be undone."),
       }));
     }
   }
 
-  if (pendingProposals.length === 0 && appliedProposals.length === 0 && discardedProposalIds.length === 0) {
+  if (pendingProposals.length === 0 && appliedChanges.length === 0 && discardedProposalIds.length === 0) {
     return null;
   }
 
@@ -296,12 +392,18 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
       className="rounded-crm-card border border-crm-rule-box bg-crm-canvas p-3 text-[14px] leading-[1.45] text-crm-charcoal"
     >
       <h3 className="text-[13px] font-medium">
-        {pendingProposals.length === 1
-          ? "The agent proposes one change"
-          : `The agent proposes ${pendingProposals.length} changes`}
+        {pendingProposals.length > 0
+          ? pendingProposals.length === 1
+            ? "The agent proposes one change"
+            : `The agent proposes ${pendingProposals.length} changes`
+          : describeSettledHeading(appliedChanges.length, discardedProposalIds.length)}
       </h3>
       <p className="mt-1 text-[13px] text-crm-steel">
-        Nothing below has been written yet. Approve applies it; Discard throws it away.
+        {pendingProposals.length > 0
+          ? "Nothing below has been written yet. Approve applies it; Discard throws it away."
+          : appliedChanges.length > 0
+            ? "Nothing is left waiting for you on this turn."
+            : "Nothing was written."}
       </p>
 
       <ul className="mt-3 flex flex-col gap-3">
@@ -309,6 +411,7 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
           const isEditing = editingProposalIds.includes(proposal.proposalId);
           const failureMessage = approvalOutcome?.failuresByProposalId[proposal.proposalId];
           const isDiscarding = discardingProposalIds.includes(proposal.proposalId);
+          const discardFailureMessage = discardFailuresByProposalId[proposal.proposalId];
           const hasOpenedDiscard = discardReasonsByProposalId[proposal.proposalId] !== undefined;
 
           return (
@@ -321,7 +424,10 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
                 {describeEnumValue(proposal.toolName, PROPOSAL_TOOL_LABELS)}
               </p>
 
-              <ul className="mt-1 flex flex-col gap-0.5 text-[13px]">
+              <ul
+                data-testid={`proposal-diff-${proposal.proposalId}`}
+                className="mt-1 flex flex-col gap-0.5 text-[13px]"
+              >
                 {proposal.summary.map((summaryRow, summaryRowIndex) => (
                   <li key={`${summaryRow.field}-${summaryRowIndex}`} className="flex flex-wrap items-center gap-1.5">
                     <span className="text-crm-steel">{describeProposalField(summaryRow.field)}</span>
@@ -329,7 +435,9 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
                     <span aria-hidden="true" className="text-crm-steel">
                       →
                     </span>
-                    <span>{describeProposalValue(summaryRow.field, summaryRow.to)}</span>
+                    <span>
+                      {describeProposalValue(summaryRow.field, playedBackTo(proposal, summaryRow))}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -372,6 +480,12 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
               {failureMessage !== undefined && (
                 <p role="alert" className="mt-2 text-[13px] text-crm-charcoal">
                   {failureMessage}
+                </p>
+              )}
+
+              {discardFailureMessage !== undefined && (
+                <p role="alert" className="mt-2 text-[13px] text-crm-charcoal">
+                  {discardFailureMessage}
                 </p>
               )}
 
@@ -440,21 +554,26 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
         </p>
       )}
 
-      {appliedProposals.length > 0 && (
+      {appliedChanges.length > 0 && (
         <ul className="mt-2 flex flex-col gap-1 text-[13px]">
-          {appliedProposals.map((proposal) => {
-            const isUndone = undoneProposalIds.includes(proposal.proposalId);
-            const undoFailure = undoFailuresByProposalId[proposal.proposalId];
-            const isReversible = onUndoApproval !== undefined && canReverseApproval(proposal);
+          {appliedChanges.map((appliedChange) => {
+            const isUndone = undoneProposalIds.includes(appliedChange.proposalId);
+            const undoFailure = undoFailuresByProposalId[appliedChange.proposalId];
+            const isReversible = onUndoApproval !== undefined && canReverseApproval(appliedChange);
             return (
-              <li key={proposal.proposalId} className="flex flex-wrap items-center gap-2">
-                <span>{describeEnumValue(proposal.toolName, PROPOSAL_TOOL_LABELS)} — applied.</span>
+              <li key={appliedChange.proposalId} className="flex flex-wrap items-center gap-2">
+                <span>
+                  {describeEnumValue(appliedChange.toolName, PROPOSAL_TOOL_LABELS)}
+                  {appliedChange.autoApplied
+                    ? " — applied automatically, without waiting for you."
+                    : " — applied."}
+                </span>
                 {isUndone ? (
                   <span className="text-crm-steel">Undone.</span>
                 ) : isReversible ? (
                   <button
                     type="button"
-                    onClick={() => void undoApproval(proposal)}
+                    onClick={() => void undoApproval(appliedChange)}
                     className={CARD_CONTROL_CLASS}
                   >
                     Undo
@@ -492,6 +611,21 @@ export function ProposalCard({ proposals, onApprove, onDiscard, onUndoApproval }
       )}
     </section>
   );
+}
+
+/**
+ * What the card calls itself once nothing is pending. It must never keep
+ * counting proposals ("proposes 0 changes") over work it has already written,
+ * and it must never say nothing was written when something was.
+ */
+function describeSettledHeading(appliedCount: number, discardedCount: number): string {
+  if (appliedCount > 0 && discardedCount > 0) {
+    return `${appliedCount} applied, ${discardedCount} discarded`;
+  }
+  if (appliedCount > 0) {
+    return appliedCount === 1 ? "1 change applied" : `${appliedCount} changes applied`;
+  }
+  return discardedCount === 1 ? "1 change discarded" : `${discardedCount} changes discarded`;
 }
 
 function describeApprovalOutcome(outcome: ApprovalOutcome): string {

@@ -6,7 +6,12 @@ import { crmClient, type AgentTurnResponse, type ProposalView } from "../api/crm
 import { crmQueryKeys, useMemories, useProposals } from "../api/hooks";
 import { LEDGER_CACHE_KEY_PREFIX } from "../api/mutations";
 import { MemoryCitations } from "./MemoryCitations";
-import { ProposalCard, readSingleAxisReversal } from "./ProposalCard";
+import {
+  ProposalCard,
+  appliedChangeFrom,
+  readSingleAxisReversal,
+  type AppliedChange,
+} from "./ProposalCard";
 import { useAgentPanelSession } from "./AgentPanelProvider";
 import { describeIterationCap } from "./transcript";
 
@@ -101,16 +106,29 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
     void queryClient.invalidateQueries({ queryKey: crmQueryKeys.memories("USER", undefined) });
   }
 
-  function invalidateAfterApproval(proposal: ProposalView): void {
+  function invalidateAfterApproval(caseId: string | undefined): void {
     void queryClient.invalidateQueries({ queryKey: crmQueryKeys.proposals() });
     // An approved write mutates a case, so the two caches holding cases have
     // to be refetched exactly as a direct human edit would refetch them.
     void queryClient.invalidateQueries({ queryKey: LEDGER_CACHE_KEY_PREFIX });
-    if (proposal.caseId !== undefined) {
-      void queryClient.invalidateQueries({ queryKey: crmQueryKeys.case(proposal.caseId) });
-      void queryClient.invalidateQueries({ queryKey: crmQueryKeys.caseEvents(proposal.caseId) });
+    if (caseId !== undefined) {
+      void queryClient.invalidateQueries({ queryKey: crmQueryKeys.case(caseId) });
+      void queryClient.invalidateQueries({ queryKey: crmQueryKeys.caseEvents(caseId) });
     }
   }
+
+  /**
+   * R72: what the turn applied on its own, in the order the turns happened.
+   * At trust level 2 the loop writes without staging anything, so these never
+   * pass through the pending list -- but spec §6 promises an undo on every
+   * applied change, and the panel used to read this field only to decide
+   * whether to invalidate a cache.
+   */
+  const autoAppliedChanges: AppliedChange[] = session.turns.flatMap((turn) =>
+    (turn.result?.appliedChanges ?? []).map((appliedProposal) =>
+      appliedChangeFrom(appliedProposal, appliedProposal.input, true),
+    ),
+  );
 
   async function runTurn(): Promise<void> {
     const userMessage = draftMessage.trim();
@@ -143,7 +161,7 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
     if (idToken === null) throw new Error("You are signed out, so this cannot be approved.");
     const approvalResult = await crmClient.approveProposal(idToken, proposalId, editedInput);
     const approvedProposal = pendingProposals.find((proposal) => proposal.proposalId === proposalId);
-    if (approvedProposal !== undefined) invalidateAfterApproval(approvedProposal);
+    if (approvedProposal !== undefined) invalidateAfterApproval(approvedProposal.caseId);
     return approvalResult;
   }
 
@@ -161,9 +179,9 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
    * `readSingleAxisReversal` returns `undefined` otherwise, and the card then
    * says the change cannot be undone from here instead of offering a button.
    */
-  async function undoApproval(proposal: ProposalView): Promise<unknown> {
+  async function undoApproval(appliedChange: AppliedChange): Promise<unknown> {
     if (idToken === null) throw new Error("You are signed out, so this cannot be undone.");
-    const reversal = readSingleAxisReversal(proposal);
+    const reversal = readSingleAxisReversal(appliedChange);
     if (reversal === undefined) {
       throw new Error("This change has no reverse move, so it cannot be undone from here.");
     }
@@ -171,7 +189,7 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
       reversal.axis === "custody"
         ? await crmClient.setCustody(idToken, reversal.caseId, reversal.applicantRef, reversal.toCustody)
         : await crmClient.setBillingStatus(idToken, reversal.caseId, reversal.toBillingStatus);
-    invalidateAfterApproval(proposal);
+    invalidateAfterApproval(appliedChange.caseId);
     return reversalResult;
   }
 
@@ -275,6 +293,7 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
 
       <ProposalCard
         proposals={pendingProposals}
+        autoAppliedChanges={autoAppliedChanges}
         onApprove={approveProposal}
         onDiscard={discardProposal}
         onUndoApproval={undoApproval}

@@ -360,6 +360,85 @@ describe("the panel's proposal wiring", () => {
     );
   });
 
+  it("undoes an edited approval with the inverse of what was actually written", async () => {
+    // F2, end to end through the real client. Staged WITH_RGS -> RETURNED,
+    // edited to AT_EMBASSY. The inverse PUT has to name WITH_RGS -- the value
+    // the case came FROM -- and it can only be offered at all because
+    // AT_EMBASSY (what was really written) has a legal edge back.
+    const stagedProposal: ProposalView = {
+      proposalId: "prop_1",
+      toolName: "set_custody",
+      input: { caseId: "case_1", applicantRef: "A1", custody: "RETURNED" },
+      summary: [{ field: "applicants.A1.custody", from: "WITH_RGS", to: "RETURNED" }],
+      caseId: "case_1",
+      proposedBy: "agent@example.com",
+      proposedAt: "2026-03-04T10:00:00.000Z",
+      status: "PENDING",
+    };
+    const requestLog = stubPanelFetch({ proposals: [stagedProposal] });
+    renderPanel();
+
+    const card = await screen.findByLabelText("Proposed changes");
+    await userEvent.click(within(card).getByRole("button", { name: /edit/i }));
+    await userEvent.selectOptions(within(card).getByLabelText(/custody/i), "AT_EMBASSY");
+    await userEvent.click(within(card).getByRole("button", { name: /approve/i }));
+
+    const approvals = await waitFor(() => {
+      const matched = requestLog.filter((entry) => entry.url.includes("/approve"));
+      expect(matched).toHaveLength(1);
+      return matched;
+    });
+    expect(approvals[0]!.body).toEqual({
+      editedInput: { caseId: "case_1", applicantRef: "A1", custody: "AT_EMBASSY" },
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: /undo/i }));
+
+    await waitFor(() => {
+      const reversal = requestLog.find((entry) => entry.url.includes("/applicants/A1/custody"));
+      expect(reversal).toBeDefined();
+      expect(reversal!.method).toBe("PUT");
+      expect(reversal!.body).toEqual({ toCustody: "WITH_RGS" });
+    });
+  });
+
+  it("renders a change the trust ladder applied on its own, and says it was not approved", async () => {
+    // R72. `appliedChanges` is the auto-apply path (trust level 2), which
+    // `autoApplyOptIn: false` makes unreachable in production today -- but the
+    // route returns the field, spec §6 asks for an undo on every applied
+    // change, and the panel used to read it only to decide on a cache
+    // invalidation.
+    const autoApplied: ProposalView = {
+      proposalId: "prop_auto",
+      toolName: "set_custody",
+      input: { caseId: "case_1", applicantRef: "A1", custody: "AT_EMBASSY" },
+      summary: [{ field: "applicants.A1.custody", from: "WITH_RGS", to: "AT_EMBASSY" }],
+      caseId: "case_1",
+      proposedBy: "agent@example.com",
+      proposedAt: "2026-03-04T10:00:00.000Z",
+      status: "APPROVED",
+    };
+    const requestLog = stubPanelFetch({
+      turnOutcomes: [
+        { ok: true, result: buildTurnResult("Moved it.", { appliedChanges: [autoApplied] }) },
+      ],
+    });
+    renderPanel();
+
+    await userEvent.type(screen.getByLabelText(/ask the agent/i), "move A1 to the embassy");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText(/applied automatically/i)).toBeInTheDocument();
+
+    // And it gets the same undo treatment as a change a human approved.
+    await userEvent.click(await screen.findByRole("button", { name: /undo/i }));
+    await waitFor(() => {
+      const reversal = requestLog.find((entry) => entry.url.includes("/applicants/A1/custody"));
+      expect(reversal).toBeDefined();
+      expect(reversal!.body).toEqual({ toCustody: "WITH_RGS" });
+    });
+  });
+
   it("names the proposals that could not be read rather than dropping them silently", async () => {
     vi.stubGlobal(
       "fetch",

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../../src/lib/adminApi";
@@ -18,11 +18,12 @@ function proposalFor(
   toolName: string,
   summary: ProposalView["summary"],
   proposalId = "prop_1",
+  input: Record<string, unknown> = { caseId: "case_1", applicantRef: "A1", custody: "AT_EMBASSY" },
 ): ProposalView {
   return {
     proposalId,
     toolName,
-    input: { caseId: "case_1", applicantRef: "A1", custody: "AT_EMBASSY" },
+    input,
     summary,
     caseId: "case_1",
     proposedBy: "agent@rgs.test",
@@ -174,6 +175,13 @@ describe("ProposalCard", () => {
       />,
     );
     await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    // F1: with nothing left pending, the card must describe what it just did
+    // -- not announce zero proposals over the change it has written.
+    expect(await screen.findByText("1 change applied")).toBeInTheDocument();
+    expect(screen.queryByText(/proposes 0 changes/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/nothing below has been written yet/i)).not.toBeInTheDocument();
+
     await userEvent.click(await screen.findByRole("button", { name: /undo/i }));
 
     await waitFor(() => expect(undoApproval).toHaveBeenCalledTimes(1));
@@ -192,6 +200,133 @@ describe("ProposalCard", () => {
         onUndoApproval={vi.fn()}
       />,
     );
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    expect(await screen.findByText(/cannot be undone from here/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /undo/i })).not.toBeInTheDocument();
+    expect(screen.getByText("1 change applied")).toBeInTheDocument();
+    expect(screen.queryByText(/nothing below has been written yet/i)).not.toBeInTheDocument();
+  });
+
+  it("describes a card whose proposals were all discarded without claiming one was written", async () => {
+    const discard = vi.fn().mockResolvedValue({});
+    render(<ProposalCard proposals={[proposalFor("set_custody", [])]} onDiscard={discard} />);
+    await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await userEvent.click(screen.getByRole("button", { name: /confirm discard/i }));
+
+    expect(await screen.findByText("1 change discarded")).toBeInTheDocument();
+    expect(screen.queryByText(/proposes 0 changes/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/nothing was written/i)).toBeInTheDocument();
+  });
+
+  it("keeps a proposal on screen with the server's words when the discard fails", async () => {
+    // F3. `discardProposal` used to be try/finally with no catch, invoked as
+    // `void discardProposal(...)` -- so a 409 produced no message, no state
+    // change, and an unhandled promise rejection. Every other write on this
+    // surface reports its own failure.
+    const discard = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiRequestError(409, "CONFLICT", "Proposal prop_1 is already APPROVED"),
+      );
+    render(<ProposalCard proposals={[proposalFor("set_custody", [])]} onDiscard={discard} />);
+    await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await userEvent.click(screen.getByRole("button", { name: /confirm discard/i }));
+
+    expect(await screen.findByText(/Proposal prop_1 is already APPROVED/)).toBeInTheDocument();
+    expect(screen.getByTestId("proposal-prop_1")).toBeInTheDocument();
+    // Still offered, so the desk agent can try again or approve instead.
+    expect(screen.getByRole("button", { name: /confirm discard/i })).toBeEnabled();
+  });
+
+  it("plays back the value the human is about to write, not the one the model staged", async () => {
+    // F2, the Intent Handshake half. Between opening the editor and clicking
+    // Approve, the card used to keep rendering the staged `to` -- so it played
+    // back one change and wrote another.
+    render(
+      <ProposalCard
+        proposals={[
+          proposalFor(
+            "set_custody",
+            [{ field: "applicants.A1.custody", from: "WITH_RGS", to: "RETURNED" }],
+            "prop_1",
+            { caseId: "case_1", applicantRef: "A1", custody: "RETURNED" },
+          ),
+        ]}
+      />,
+    );
+    // Scoped to the played-back diff: the editor's own <option> list carries
+    // every custody label too, so an unscoped query cannot tell the sentence
+    // the card is making from the choices it is offering.
+    const playedBackDiff = () => within(screen.getByTestId("proposal-diff-prop_1"));
+    expect(playedBackDiff().getByText("Returned")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /edit/i }));
+    await userEvent.selectOptions(screen.getByLabelText(/custody/i), "AT_EMBASSY");
+
+    // The diff now reads WITH_RGS -> AT_EMBASSY, which is what Approve sends.
+    expect(playedBackDiff().getByText("With us")).toBeInTheDocument();
+    expect(playedBackDiff().getByText("At embassy")).toBeInTheDocument();
+    expect(playedBackDiff().queryByText("Returned")).not.toBeInTheDocument();
+  });
+
+  it("offers an undo based on the value the human approved, not the one the model staged", async () => {
+    // F2. Staged WITH_RGS -> RETURNED, edited to AT_EMBASSY. The case ends up
+    // at AT_EMBASSY, and AT_EMBASSY -> WITH_RGS is legal
+    // (crm.canTransitionCustody), so an undo IS possible. Reading the staged
+    // summary instead asks canTransitionCustody("RETURNED", "WITH_RGS") --
+    // RETURNED has no outgoing edges -- and refuses a real undo while telling
+    // the desk agent a falsehood.
+    const approve = vi.fn().mockResolvedValue({});
+    const undoApproval = vi.fn().mockResolvedValue({});
+    render(
+      <ProposalCard
+        proposals={[
+          proposalFor(
+            "set_custody",
+            [{ field: "applicants.A1.custody", from: "WITH_RGS", to: "RETURNED" }],
+            "prop_1",
+            { caseId: "case_1", applicantRef: "A1", custody: "RETURNED" },
+          ),
+        ]}
+        onApprove={approve}
+        onUndoApproval={undoApproval}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /edit/i }));
+    await userEvent.selectOptions(screen.getByLabelText(/custody/i), "AT_EMBASSY");
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    await userEvent.click(await screen.findByRole("button", { name: /undo/i }));
+
+    await waitFor(() => expect(undoApproval).toHaveBeenCalledTimes(1));
+    // The applied entry carries what was SENT, so the reversal is computed
+    // from the case's real state rather than from the model's proposal.
+    expect(undoApproval.mock.calls[0]![0]).toMatchObject({
+      proposalId: "prop_1",
+      effectiveInput: { caseId: "case_1", applicantRef: "A1", custody: "AT_EMBASSY" },
+    });
+  });
+
+  it("refuses an undo when the EDITED transition has no way back, even though the staged one did", async () => {
+    // F2, the other direction. Staged WITH_RGS -> AT_EMBASSY, edited to
+    // RETURNED. Reading the staged summary asks
+    // canTransitionCustody("AT_EMBASSY", "WITH_RGS") -> true and offers a
+    // button whose PUT 409s, because the case is actually at RETURNED.
+    const approve = vi.fn().mockResolvedValue({});
+    render(
+      <ProposalCard
+        proposals={[
+          proposalFor("set_custody", [
+            { field: "applicants.A1.custody", from: "WITH_RGS", to: "AT_EMBASSY" },
+          ]),
+        ]}
+        onApprove={approve}
+        onUndoApproval={vi.fn()}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /edit/i }));
+    await userEvent.selectOptions(screen.getByLabelText(/custody/i), "RETURNED");
     await userEvent.click(screen.getByRole("button", { name: /approve/i }));
 
     expect(await screen.findByText(/cannot be undone from here/i)).toBeInTheDocument();
