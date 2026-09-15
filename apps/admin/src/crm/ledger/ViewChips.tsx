@@ -40,6 +40,13 @@ export function ViewChips({ userEmail, activeFilters, activeSort, onApplyView }:
   const [activeViewId, setActiveViewId] = useState<string | undefined>(undefined);
   const [isNamingNewView, setIsNamingNewView] = useState(false);
   const [newViewName, setNewViewName] = useState("");
+  /**
+   * Set only when a save did not reach storage (fix round 1, F4). The list
+   * below is re-read from `localStorage` after every save, so a failed write
+   * is otherwise indistinguishable from never having pressed Save: the chip
+   * is simply not there.
+   */
+  const [saveFailureMessage, setSaveFailureMessage] = useState<string | undefined>(undefined);
 
   function selectView(view: LedgerView) {
     setActiveViewId(view.viewId);
@@ -55,8 +62,19 @@ export function ViewChips({ userEmail, activeFilters, activeSort, onApplyView }:
       filters: activeFilters,
       sort: activeSort,
     };
-    saveView(userEmail, newView);
+    const wasPersisted = saveView(userEmail, newView);
     setViews(loadViews(userEmail));
+    if (!wasPersisted) {
+      // The naming box stays open with the typed name still in it: the desk
+      // agent's next move is to try again (another window, site data
+      // re-enabled), and retyping the name is a second small punishment for
+      // a failure that was not theirs. `activeViewId` is deliberately NOT
+      // set -- marking a view active that no chip can render leaves the
+      // whole row unpressed, which says nothing at all.
+      setSaveFailureMessage("Could not save this view — storage is unavailable");
+      return;
+    }
+    setSaveFailureMessage(undefined);
     setActiveViewId(newView.viewId);
     setNewViewName("");
     setIsNamingNewView(false);
@@ -122,7 +140,12 @@ export function ViewChips({ userEmail, activeFilters, activeSort, onApplyView }:
           <button
             type="button"
             onClick={confirmSaveCurrentView}
-            className="rounded-crm-control border border-crm-primary bg-crm-lavender px-2 py-1 text-[12px]"
+            // Neutral, not `--crm-primary`: that colour marks exactly one
+            // control in the whole product (Approve on an agent proposal
+            // card), and Save is named in the constraint as one it must not
+            // mark. Same treatment as "Keep theirs" in `LedgerTable`'s
+            // conflict prompt (fix round 1, F3).
+            className="rounded-crm-control border border-crm-rule-box px-2 py-1 text-[12px]"
           >
             Save
           </button>
@@ -135,6 +158,12 @@ export function ViewChips({ userEmail, activeFilters, activeSort, onApplyView }:
         >
           + Save current view
         </button>
+      )}
+
+      {saveFailureMessage !== undefined && (
+        <span role="status" className="text-[12px] text-crm-rose">
+          {saveFailureMessage}
+        </span>
       )}
     </div>
   );

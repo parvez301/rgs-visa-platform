@@ -27,6 +27,31 @@ export function mountedCaseIds(container: HTMLElement, options: { allowEmpty?: b
   return rowElements.map((rowElement) => rowElement.getAttribute("data-case-id") ?? "");
 }
 
+/**
+ * The element carrying one mounted row's GRID SEMANTICS -- `role="row"`,
+ * `aria-selected`, `aria-expanded`.
+ *
+ * Deliberately not the same element as `[data-testid='ledger-row']`, which is
+ * the positioned wrapper the virtualizer transforms and sizes, and which
+ * carries no role at all: a `row`'s required owned elements are its
+ * `gridcell`s, so a generic container between the two drops every cell out of
+ * the row in the computed accessibility tree (fix round 1, F5). Tests that
+ * measure POSITION want the wrapper; tests that assert SELECTION or
+ * EXPANSION want this.
+ */
+export function mountedGridRow(container: HTMLElement, caseId: string): HTMLElement {
+  const gridRowElement = container.querySelector<HTMLElement>(
+    `[data-testid='ledger-row'][data-case-id='${caseId}'] [role='row']`,
+  );
+  if (gridRowElement === null) {
+    throw new Error(
+      `Case ${caseId} has no role="row" element among the mounted rows ` +
+        `(${mountedCaseIds(container, { allowEmpty: true }).join(", ") || "none"}).`,
+    );
+  }
+  return gridRowElement;
+}
+
 /** The cell of one mounted row, by column key. Throws if the row is not mounted. */
 export function mountedCell(container: HTMLElement, caseId: string, columnKey: string): HTMLElement {
   const rowElement = container.querySelector(`[data-testid='ledger-row'][data-case-id='${caseId}']`);
@@ -75,7 +100,16 @@ const TEST_AUTH_STATE: AuthState = {
  * context above. A fresh `QueryClient` per render keeps one test's cache
  * from leaking into the next.
  */
-export function renderLedger(element: ReactElement): RenderResult {
+export function renderLedger(element: ReactElement): RenderResult & {
+  /**
+   * Re-renders a NEW element inside the very same providers and the very same
+   * `QueryClient` -- what `LedgerPage` does when a client-side filter changes
+   * `rows` (Task 13). `RenderResult.rerender` cannot be used directly for
+   * that: it replaces the whole tree, so it would drop the auth/query/toast
+   * providers this helper wrapped the element in.
+   */
+  rerenderLedger: (nextElement: ReactElement) => void;
+} {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -83,17 +117,28 @@ export function renderLedger(element: ReactElement): RenderResult {
   // (see the brief's own note that it stays `virtual.ts`), and TypeScript
   // refuses JSX syntax outside a `.tsx` file regardless of the `jsx` compiler
   // option.
-  const result = render(
-    createElement(
+  function wrapInProviders(elementToWrap: ReactElement) {
+    return createElement(
       AuthContext.Provider,
       { value: TEST_AUTH_STATE },
-      createElement(QueryClientProvider, { client: queryClient }, createElement(UndoToastProvider, null, element)),
-    ),
-  );
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(UndoToastProvider, null, elementToWrap),
+      ),
+    );
+  }
+
+  const result = render(wrapInProviders(element));
   // Fail fast, once, at the render rather than at the first confusing
   // assertion three lines later.
   expect(result.container.querySelector("[data-testid='ledger-scroll']")).not.toBeNull();
-  return result;
+  return {
+    ...result,
+    rerenderLedger: (nextElement: ReactElement) => {
+      result.rerender(wrapInProviders(nextElement));
+    },
+  };
 }
 
 /**

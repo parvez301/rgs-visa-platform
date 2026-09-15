@@ -50,7 +50,11 @@ describe("views", () => {
   it("round-trips a saved view", () => {
     const view = buildView({ viewId: "custom-round-trip", name: "My round trip" });
 
-    saveView("ops@rgs.test", view);
+    // Fix round 1, F4: the return value is the caller's only signal that the
+    // view really is in storage -- `ViewChips` re-reads the list from storage
+    // immediately afterwards, so a save that failed silently leaves it
+    // showing no such view and no explanation.
+    expect(saveView("ops@rgs.test", view)).toBe(true);
     const loaded = loadViews("ops@rgs.test");
 
     expect(loaded.find((candidate) => candidate.viewId === "custom-round-trip")).toEqual(view);
@@ -126,11 +130,20 @@ describe("views", () => {
     expect(matchingViews[0]!.name).toBe("Live work");
   });
 
-  it("does not take the Ledger down when saving throws", () => {
+  it("reports the failure, rather than only not throwing, when saving throws", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("quota exceeded");
     });
 
-    expect(() => saveView("ops@rgs.test", buildView())).not.toThrow();
+    // `not.toThrow()` alone (what this test used to assert) is satisfied by a
+    // swallowed failure, which is exactly the defect: the caller re-reads the
+    // list from storage, finds no new view, and has nothing to tell the desk
+    // agent. Both halves matter -- a private window must not take the Ledger
+    // down, AND the caller has to be able to see that nothing was saved.
+    let saveOutcome: boolean | undefined;
+    expect(() => {
+      saveOutcome = saveView("ops@rgs.test", buildView());
+    }).not.toThrow();
+    expect(saveOutcome).toBe(false);
   });
 });

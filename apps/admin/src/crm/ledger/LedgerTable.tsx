@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { crm } from "@rgs/shared";
 import { describeLedgerEditValue, useLedgerEdit } from "../api/mutations";
 import { ApplicantSubRows, APPLICANT_SUBROW_LINE_HEIGHT } from "./ApplicantSubRows";
@@ -14,21 +14,31 @@ interface LedgerTableProps {
 
 /**
  * How tall an EXPANDED row needs to be: the collapsed row itself, plus one
- * line per applicant `<ApplicantSubRows>` will draw. It reads
- * `applicantSummary.count` -- the same roll-up the collapsed "Applicants"
- * column already renders (`columns.tsx`'s `renderApplicants`) -- rather than
- * waiting for `useCase` to resolve, because the virtualizer must place every
- * row up front, long before any expanded row's own fetch has settled.
+ * line per applicant `<ApplicantSubRows>` is drawing.
  *
- * A case imported before that roll-up existed (`applicantSummary ===
- * undefined`) has no count to read yet; `1` is the floor every real case
- * guarantees (`CrmCaseSchema.applicants` requires at least one), not a
- * guess that could come in short. See the module comment below, on
- * `estimateSize`, for why a short guess here could never overlap the next
- * row even if the real count turns out bigger.
+ * Three sources, best first (fix round 1, F1):
+ *
+ * 1. `reportedLineCount` -- what the mounted `<ApplicantSubRows>` says it is
+ *    ACTUALLY rendering right now (1 while loading, 1 for the error line, one
+ *    per applicant once loaded). Only available after that component has
+ *    mounted and reported, which is why it cannot be the only source.
+ * 2. `applicantSummary.count` -- the roll-up the collapsed "Applicants"
+ *    column already renders (`columns.tsx`'s `renderApplicants`). Available
+ *    up front, which is what the virtualizer needs to place rows before any
+ *    expanded row's own fetch has settled.
+ * 3. `1` -- the floor `CrmCaseSchema.applicants` (`.min(1)`) guarantees.
+ *
+ * The 7,156 cases imported before `writeCase` computed a roll-up
+ * (`packages/shared/src/crm/ledger.ts`) have no (2), so before this fix a
+ * three-applicant one of them reserved 32 + 1 x 28 = 60px and then drew
+ * 32 + 3 x 28 = 116px into it, straight over the next row. Nothing corrected
+ * that on its own: heights here are DERIVED, not MEASURED (see `estimateSize`
+ * below), so a short guess is permanent, not transient. (2) and (3) are
+ * therefore only ever the opening estimate -- (1) is what makes the height
+ * true, and `reportedLineCountsByCaseId` below is what carries it here.
  */
-function estimateExpandedRowHeight(row: crm.LedgerRow): number {
-  const applicantLineCount = row.applicantSummary?.count ?? 1;
+function estimateExpandedRowHeight(row: crm.LedgerRow, reportedLineCount: number | undefined): number {
+  const applicantLineCount = reportedLineCount ?? row.applicantSummary?.count ?? 1;
   return LEDGER_ROW_HEIGHT + applicantLineCount * APPLICANT_SUBROW_LINE_HEIGHT;
 }
 
@@ -43,6 +53,30 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
     rowCount: rows.length,
     columnCount: LEDGER_COLUMNS.length,
   });
+
+  // What each mounted `<ApplicantSubRows>` reports it is really drawing, keyed
+  // by case id rather than row index: `rows` is re-filtered client-side on
+  // every keystroke now (Task 13), and an index means a different case after
+  // each of those. A case that scrolls out of the mounted window keeps its
+  // entry, so re-expanding it later reserves the right height immediately
+  // instead of flickering through the fallback again.
+  const [reportedLineCountsByCaseId, setReportedLineCountsByCaseId] = useState<Map<string, number>>(
+    () => new Map(),
+  );
+
+  // Stable identity (`[]` deps): `<ApplicantSubRows>` reports from an effect
+  // keyed on this callback, so a new function every render would re-report on
+  // every render. Returning the SAME Map when the count has not changed is
+  // what keeps that report from queuing a pointless re-render and a pointless
+  // `.measure()` besides.
+  const reportApplicantLineCount = useCallback((caseId: string, lineCount: number) => {
+    setReportedLineCountsByCaseId((previousLineCounts) => {
+      if (previousLineCounts.get(caseId) === lineCount) return previousLineCounts;
+      const nextLineCounts = new Map(previousLineCounts);
+      nextLineCounts.set(caseId, lineCount);
+      return nextLineCounts;
+    });
+  }, []);
 
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
@@ -66,7 +100,8 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
     estimateSize: (index) => {
       const row = rows[index];
       if (row === undefined) return LEDGER_ROW_HEIGHT;
-      return gridState.expandedRowIndexes.includes(index) ? estimateExpandedRowHeight(row) : LEDGER_ROW_HEIGHT;
+      if (!gridState.expandedRowIndexes.includes(index)) return LEDGER_ROW_HEIGHT;
+      return estimateExpandedRowHeight(row, reportedLineCountsByCaseId.get(row.caseId));
     },
     // Enough rows above and below the window that a fast scroll does not show
     // blank bands, and few enough that the DOM stays small.
@@ -83,10 +118,43 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
   // current `estimateSize` -- without this, toggling a row's expansion would
   // change `expandedRowIndexes` but leave every row exactly where it already
   // was, until some unrelated scroll happened to force a recompute anyway.
+  //
+  // `reportedLineCountsByCaseId` is in the deps for exactly the same reason
+  // (fix round 1, F1): a sub-row group reporting three lines where one was
+  // reserved changes what `estimateSize` WOULD return, and nothing but
+  // `.measure()` makes the virtualizer ask again.
   useEffect(() => {
     rowVirtualizer.measure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridState.expandedRowIndexes]);
+  }, [gridState.expandedRowIndexes, reportedLineCountsByCaseId]);
+
+  // Every index in `gridState` -- focus, selection, expansion -- addresses a
+  // POSITION in `rows`, and from Task 13 on `rows` is re-filtered and
+  // re-sorted client-side on every keystroke in the Ledger's search box and on
+  // every view chip click (`LedgerPage`), not just on a server refetch. So the
+  // rows those numbers point at change underneath them, and "row 0 is
+  // expanded" silently becomes a different case -- one the desk agent never
+  // expanded, whose applicants are then fetched and disclosed under it (fix
+  // round 1, F2).
+  //
+  // The case ids on both sides are what the reducer needs to tell "the same
+  // cases came back" (a background refetch: leave everything alone) from "the
+  // set changed" (remap what survived, drop what did not).
+  //
+  // `useLayoutEffect`, not `useEffect`: this runs before the browser paints,
+  // so the frame where row 0 renders another case's disclosure never reaches
+  // the screen.
+  const currentCaseIds = rows.map((row) => row.caseId);
+  // Seeded with THIS render's ids so mounting is not itself treated as a
+  // replacement; the reducer no-ops on an unchanged list anyway, which is what
+  // keeps this from re-rendering the grid on every refetch.
+  const previousCaseIdsRef = useRef<string[]>(currentCaseIds);
+  useLayoutEffect(() => {
+    const previousCaseIds = previousCaseIdsRef.current;
+    previousCaseIdsRef.current = currentCaseIds;
+    dispatchGridAction({ kind: "rowsReplaced", previousCaseIds, nextCaseIds: currentCaseIds });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   // Direct human edits go straight to the REST routes -- the agent's
   // approval gate governs what the agent writes, not a desk agent's own
@@ -177,13 +245,19 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
               const isRowSelected = gridState.selectedRowIndexes.includes(virtualRow.index);
               const isRowExpanded = gridState.expandedRowIndexes.includes(virtualRow.index);
               return (
+                // The positioned wrapper carries NO role (fix round 1, F5):
+                // it owns the virtualizer's transform and the expanded
+                // height, and it contains the disclosed sub-rows as well as
+                // the cells. `role="row"` belongs on the cell container
+                // alone, because a `row`'s required owned elements are its
+                // `gridcell`s -- a generic container in between drops them
+                // out of the row in the accessibility tree and
+                // screen-reader table navigation over the Ledger stops
+                // working.
                 <div
                   key={row.caseId}
                   data-testid="ledger-row"
                   data-case-id={row.caseId}
-                  role="row"
-                  aria-selected={isRowSelected ? "true" : "false"}
-                  aria-expanded={isRowExpanded}
                   className="absolute left-0 w-full border-b border-crm-rule-row bg-crm-canvas"
                   style={{
                     height: virtualRow.size,
@@ -191,6 +265,9 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
                   }}
                 >
                   <div
+                    role="row"
+                    aria-selected={isRowSelected ? "true" : "false"}
+                    aria-expanded={isRowExpanded}
                     className="grid hover:bg-crm-surface"
                     style={{ gridTemplateColumns, height: LEDGER_ROW_HEIGHT }}
                   >
@@ -252,7 +329,9 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
                       );
                     })}
                   </div>
-                  {isRowExpanded && <ApplicantSubRows caseId={row.caseId} />}
+                  {isRowExpanded && (
+                    <ApplicantSubRows caseId={row.caseId} onLineCountChange={reportApplicantLineCount} />
+                  )}
                 </div>
               );
             })}

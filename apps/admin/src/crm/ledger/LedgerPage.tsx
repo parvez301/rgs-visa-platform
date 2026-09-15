@@ -201,20 +201,28 @@ export function LedgerPage() {
  * `truncated` only means the page-filling walk stopped at `MAX_LEDGER_PAGES`
  * before its cursor ran out, and nothing in the response says how much
  * ledger sits past that point. Fabricating a total would be worse than
- * omitting one. What the client knows exactly is how many rows it loaded --
- * `shownRowCount` -- and that is the number a desk agent actually needs, to
+ * omitting one. What the client knows exactly is how many rows it LOADED --
+ * `loadedRowCount` -- and that is the number a desk agent actually needs, to
  * judge whether the case they are hunting for could be past the edge of
  * this view.
+ *
+ * R48 (fix round 1, F6): "Loaded", never "Showing". Rows loaded and rows on
+ * screen are two different numbers from Task 13 on -- `visibleLedgerRows` is
+ * the loaded rows AFTER the client-side filters and the search box -- so a
+ * truncated ledger plus any filter used to put "Showing the first 500 cases"
+ * over a table of three. The NUMBER stays the loaded one on purpose: it names
+ * the load boundary, which is the only thing this banner exists to say. It is
+ * the verb that was false.
  */
 function describePartialLedgerBanner(
   isTruncated: boolean,
-  shownRowCount: number,
+  loadedRowCount: number,
   unreadableCaseCount: number,
 ): string {
   const sentences: string[] = [];
   if (isTruncated) {
     sentences.push(
-      `Showing the first ${shownRowCount} case${shownRowCount === 1 ? "" : "s"}. The ledger is longer than this view loads.`,
+      `Loaded the first ${loadedRowCount} case${loadedRowCount === 1 ? "" : "s"}; the ledger is longer than this view loads.`,
     );
   }
   if (unreadableCaseCount > 0) {

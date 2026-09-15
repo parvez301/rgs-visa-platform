@@ -27,7 +27,15 @@ export type GridAction =
   | { kind: "commitAndStay" }
   | { kind: "toggleSelection" }
   | { kind: "extendSelection"; direction: "up" | "down" }
-  | { kind: "clickSelect"; rowIndex: number; columnIndex: number; withShift: boolean };
+  | { kind: "clickSelect"; rowIndex: number; columnIndex: number; withShift: boolean }
+  /**
+   * The rows this state addresses have been replaced -- a client-side filter,
+   * a search keystroke, a view chip, a sort. Carries the case ids on either
+   * side because every index in `GridState` is a POSITION: without the two
+   * lists there is no way to tell "row 0 is a different case now" from "row 0
+   * is the same case as before" (fix round 1, F2).
+   */
+  | { kind: "rowsReplaced"; previousCaseIds: string[]; nextCaseIds: string[] };
 
 export interface GridBounds {
   rowCount: number;
@@ -188,6 +196,54 @@ export function gridReducer(previousState: GridState, action: GridAction, bounds
         ...previousState,
         focus: { rowIndex: action.rowIndex, columnIndex: action.columnIndex },
         selectedRowIndexes,
+      };
+    }
+
+    case "rowsReplaced": {
+      // A refetch that returns the same cases in the same order must not
+      // disturb anything -- returning the identical state object (not a
+      // remapped copy of it) is what keeps a background refresh from
+      // re-rendering the grid and re-measuring every row.
+      if (
+        action.previousCaseIds.length === action.nextCaseIds.length &&
+        action.previousCaseIds.every((previousCaseId, rowIndex) => previousCaseId === action.nextCaseIds[rowIndex])
+      ) {
+        return previousState;
+      }
+
+      const rowIndexByCaseId = new Map(action.nextCaseIds.map((caseId, rowIndex) => [caseId, rowIndex]));
+      // A row index under the OLD list becomes a row index under the new one,
+      // or `undefined` if that case was filtered out. Selection and expansion
+      // are carried across with it, in their existing order, so a case a desk
+      // agent expanded stays expanded and one they never touched never
+      // becomes expanded by inheriting a number.
+      const remapRowIndexes = (rowIndexes: number[]): number[] =>
+        rowIndexes
+          .map((rowIndex) => {
+            const caseIdAtRowIndex = action.previousCaseIds[rowIndex];
+            return caseIdAtRowIndex === undefined ? undefined : rowIndexByCaseId.get(caseIdAtRowIndex);
+          })
+          .filter((rowIndex): rowIndex is number => rowIndex !== undefined);
+
+      const previouslyFocusedCaseId = action.previousCaseIds[previousState.focus.rowIndex];
+      const focusedCaseRowIndex =
+        previouslyFocusedCaseId === undefined ? undefined : rowIndexByCaseId.get(previouslyFocusedCaseId);
+      // Focus follows its own case wherever it went; if that case is gone it
+      // falls to the nearest row that still exists, and only to row 0 when
+      // nothing nearer survives. Never past the end: a focus pointing at a row
+      // that does not exist is what leaves DOM focus on `document.body` and
+      // the grid unreachable from the keyboard.
+      const nextFocusedRowIndex =
+        focusedCaseRowIndex ??
+        (action.nextCaseIds.length === 0
+          ? 0
+          : clampIndex(previousState.focus.rowIndex, 0, action.nextCaseIds.length - 1));
+
+      return {
+        ...previousState,
+        focus: { ...previousState.focus, rowIndex: nextFocusedRowIndex },
+        selectedRowIndexes: remapRowIndexes(previousState.selectedRowIndexes),
+        expandedRowIndexes: remapRowIndexes(previousState.expandedRowIndexes),
       };
     }
 

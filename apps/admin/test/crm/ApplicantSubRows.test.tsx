@@ -106,6 +106,15 @@ describe("ApplicantSubRows", () => {
     expect(within(applicantRows[1]!).getByText("K7654321")).toBeInTheDocument();
     expect(within(applicantRows[1]!).getByText("At embassy")).toBeInTheDocument();
     expect(within(applicantRows[1]!).getByText("Approved")).toBeInTheDocument();
+
+    // Fix round 1, F5: these lines are a LIST inside a labelled group, not
+    // grid structure. `rowgroup` is only valid as a child of a
+    // table/grid/treegrid, and the `row`s it used to contain owned no cells
+    // at all -- an expanded Ledger row is one grid row whose disclosure is
+    // rendered inside it, never a nested grid of its own.
+    expect(screen.queryAllByRole("rowgroup")).toHaveLength(0);
+    expect(screen.getByRole("group")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
   });
 
   it("shows a loading line, not an empty list, while the case is fetching", () => {
@@ -148,7 +157,11 @@ describe("ApplicantSubRows", () => {
       "The applicants for this case could not be loaded.",
     );
     expect(screen.queryByTestId("applicant-subrows")).not.toBeInTheDocument();
-    expect(screen.queryAllByRole("rowgroup")).toHaveLength(0);
+    // Not an empty group either: an empty list of applicants reads as "this
+    // case has none", which `CrmCaseSchema.applicants` (`.min(1)`) says can
+    // never be true.
+    expect(screen.queryByRole("group")).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
   });
 
   it("renders courier mode and tracking number together when both are present", () => {

@@ -111,6 +111,27 @@ describe("LedgerTable", () => {
     expect(mountedCell(container, "case_3000", "caseRef").textContent).toBe("RGS-4000");
   });
 
+  it("keeps every gridcell a direct child of its own row (fix round 1, F5)", () => {
+    const { container } = renderLedger(
+      <LedgerTable rows={buildRows(10)} partnerNamesById={partnerNames} />,
+    );
+
+    const gridCells = [...container.querySelectorAll("[role='gridcell']")];
+    // Guard first: an empty list of cells would make the real assertion below
+    // trivially true, which is spec §10's named trap.
+    expect(gridCells.length).toBeGreaterThan(0);
+
+    // `row` has required owned elements. A generic container in between --
+    // the positioned wrapper the virtualizer transforms, say -- drops the
+    // cells out of the row in the computed accessibility tree, and
+    // screen-reader table navigation over the Ledger stops working. Nothing
+    // about it is visible on screen, which is why it needs its own assertion.
+    const cellsNotOwnedByARow = gridCells.filter(
+      (cellElement) => cellElement.parentElement?.getAttribute("role") !== "row",
+    );
+    expect(cellsNotOwnedByARow).toHaveLength(0);
+  });
+
   it("renders an empty ledger as an empty state rather than a broken table", () => {
     const { container, getByText } = renderLedger(
       <LedgerTable rows={[]} partnerNamesById={partnerNames} />,

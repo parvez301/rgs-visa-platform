@@ -108,18 +108,27 @@ export function loadViews(userEmail: string): LedgerView[] {
 }
 
 /**
- * A `localStorage` write that throws must not take the Ledger down either:
- * the view simply does not persist, and the desk agent keeps working with
- * the in-memory list until they save again somewhere that allows it.
+ * `true` only when the view really is in storage; `false` when it is not, for
+ * either of the two reasons below. A `localStorage` write that throws (quota
+ * exceeded, a private window, cleared site data) still must not take the
+ * Ledger down -- but it must not pass for a save either (fix round 1, F4).
+ * The earlier version swallowed the failure on the grounds that "the
+ * in-memory list is still correct", which its only caller falsifies:
+ * `ViewChips` re-reads the whole list straight back out of storage after
+ * every save, so a swallowed failure leaves the desk agent looking at a chip
+ * row with no new view on it and no word about why. Whether to say so, and
+ * how, is the caller's decision to make -- but it can only make it if this
+ * function reports what happened.
  *
  * Saving over a built-in view's id is refused for the same reason deleting
  * one is (below): built-in ids are reserved, not just protected from
  * deletion, and a custom view silently squatting on `built-in-live-work`
  * would otherwise appear as a second, differently-configured "Live work" the
- * moment `loadViews` concatenates the two lists.
+ * moment `loadViews` concatenates the two lists. That refusal is a `false`
+ * too: nothing was stored.
  */
-export function saveView(userEmail: string, view: LedgerView): void {
-  if (isBuiltInLedgerViewId(view.viewId)) return;
+export function saveView(userEmail: string, view: LedgerView): boolean {
+  if (isBuiltInLedgerViewId(view.viewId)) return false;
   try {
     const existingSavedViews = readSavedViewsOnly(userEmail);
     const nextSavedViews = [
@@ -127,8 +136,9 @@ export function saveView(userEmail: string, view: LedgerView): void {
       view,
     ];
     localStorage.setItem(storageKeyFor(userEmail), JSON.stringify(nextSavedViews));
+    return true;
   } catch {
-    // Nothing to do: the write failed, the in-memory list is still correct.
+    return false;
   }
 }
 

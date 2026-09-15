@@ -1,9 +1,9 @@
-import { act } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
 import { LedgerTable } from "../../src/crm/ledger/LedgerTable";
-import { installVirtualScrolling, mountedCaseIds, mountedCell, renderLedger } from "./virtual";
+import { installVirtualScrolling, mountedCaseIds, mountedCell, mountedGridRow, renderLedger } from "./virtual";
 
 // This test drives the virtualizer's own scrollToIndex (keyboard nav past
 // the mounted window) rather than only the scrollTop+dispatchEvent that
@@ -35,6 +35,15 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+/**
+ * Written out rather than imported from `columns.tsx`/`ApplicantSubRows.tsx`:
+ * an assertion built from the same constants the component computes its height
+ * from would still hold if both moved together, which is exactly the change
+ * this file exists to catch.
+ */
+const LEDGER_ROW_HEIGHT_PX = 32;
+const APPLICANT_SUBROW_LINE_HEIGHT_PX = 28;
 
 function buildRows(rowCount: number): crm.LedgerRow[] {
   return Array.from({ length: rowCount }, (_unused, rowIndex) => ({
@@ -72,6 +81,30 @@ function getGridElement(container: HTMLElement): HTMLElement {
   return gridElement;
 }
 
+/**
+ * Every mounted row's `translateY` offset, in mounted order -- the only thing
+ * in this file that can see one row painting over the next, since jsdom has no
+ * layout engine to ask for a real rect. Shared by both overlap tests below:
+ * they differ only in what they expect the gaps to be, never in how the gaps
+ * are read.
+ */
+function readMountedRowTops(container: HTMLElement): number[] {
+  return mountedCaseIds(container).map((caseId) => {
+    const rowElement = container.querySelector<HTMLElement>(
+      `[data-testid='ledger-row'][data-case-id='${caseId}']`,
+    );
+    if (rowElement === null) throw new Error(`Row ${caseId} vanished between listing and measuring`);
+    const translateYMatch = /translateY\((\d+)px\)/.exec(rowElement.style.transform);
+    if (translateYMatch === null) {
+      throw new Error(
+        `Row ${caseId} has no translateY in its transform ("${rowElement.style.transform}") -- ` +
+          "this test can only see the overlap bug if rows are positioned by transform.",
+      );
+    }
+    return Number(translateYMatch[1]);
+  });
+}
+
 describe("LedgerTable keyboard and selection", () => {
   it("moves the focused cell with the arrow keys", async () => {
     const user = userEvent.setup();
@@ -105,15 +138,13 @@ describe("LedgerTable keyboard and selection", () => {
 
     await user.keyboard(" ");
 
-    expect(
-      container.querySelector("[data-testid='ledger-row'][data-case-id='case_0000']"),
-    ).toHaveAttribute("aria-selected", "true");
+    // `aria-selected` lives on the row's CELL container, not on the
+    // positioned wrapper that carries the transform (fix round 1, F5).
+    expect(mountedGridRow(container, "case_0000")).toHaveAttribute("aria-selected", "true");
 
     await user.keyboard(" ");
 
-    expect(
-      container.querySelector("[data-testid='ledger-row'][data-case-id='case_0000']"),
-    ).toHaveAttribute("aria-selected", "false");
+    expect(mountedGridRow(container, "case_0000")).toHaveAttribute("aria-selected", "false");
   });
 
   it("extends the selection to the next row with Shift+ArrowDown", async () => {
@@ -124,12 +155,8 @@ describe("LedgerTable keyboard and selection", () => {
 
     await user.keyboard("{Shift>}{ArrowDown}{/Shift}");
 
-    expect(
-      container.querySelector("[data-testid='ledger-row'][data-case-id='case_0000']"),
-    ).toHaveAttribute("aria-selected", "true");
-    expect(
-      container.querySelector("[data-testid='ledger-row'][data-case-id='case_0001']"),
-    ).toHaveAttribute("aria-selected", "true");
+    expect(mountedGridRow(container, "case_0000")).toHaveAttribute("aria-selected", "true");
+    expect(mountedGridRow(container, "case_0001")).toHaveAttribute("aria-selected", "true");
     expect(mountedCell(container, "case_0001", "caseRef")).toHaveFocus();
   });
 
@@ -143,10 +170,7 @@ describe("LedgerTable keyboard and selection", () => {
     await user.keyboard("{/Shift}");
 
     for (const caseId of ["case_0000", "case_0001", "case_0002", "case_0003"]) {
-      expect(container.querySelector(`[data-testid='ledger-row'][data-case-id='${caseId}']`)).toHaveAttribute(
-        "aria-selected",
-        "true",
-      );
+      expect(mountedGridRow(container, caseId)).toHaveAttribute("aria-selected", "true");
     }
   });
 
@@ -184,20 +208,7 @@ describe("LedgerTable keyboard and selection", () => {
     // invalidates them. `rowVirtualizer.measure()` is what clears that cache.
     await user.keyboard("{ArrowRight}");
 
-    const rowTops = mountedCaseIds(container).map((caseId) => {
-      const rowElement = container.querySelector<HTMLElement>(
-        `[data-testid='ledger-row'][data-case-id='${caseId}']`,
-      );
-      if (rowElement === null) throw new Error(`Row ${caseId} vanished between listing and measuring`);
-      const translateYMatch = /translateY\((\d+)px\)/.exec(rowElement.style.transform);
-      if (translateYMatch === null) {
-        throw new Error(
-          `Row ${caseId} has no translateY in its transform ("${rowElement.style.transform}") -- ` +
-            "this test can only see the overlap bug if rows are positioned by transform.",
-        );
-      }
-      return Number(translateYMatch[1]);
-    });
+    const rowTops = readMountedRowTops(container);
 
     // Two independent assertions, because each catches a different shape of
     // the same bug. Sorted-ascending catches rows placed out of order; the
@@ -214,6 +225,54 @@ describe("LedgerTable keyboard and selection", () => {
     const gapAfterExpandedRow = rowTops[1]! - rowTops[0]!;
     const gapAfterCollapsedRow = rowTops[2]! - rowTops[1]!;
     expect(gapAfterExpandedRow).toBeGreaterThan(gapAfterCollapsedRow);
+  });
+
+  it("reserves height for every applicant an UN-SUMMARISED case turns out to have (fix round 1, F1)", async () => {
+    // The row shape that dominates production today: `buildRows` above omits
+    // `applicantSummary` entirely, which is what all 7,156 cases imported
+    // before `writeCase` computed one look like
+    // (packages/shared/src/crm/ledger.ts). The height is DERIVED, never
+    // measured from the DOM (jsdom cannot measure), so a guess that comes in
+    // short is never self-corrected -- the sub-rows simply paint over the
+    // next row. Only the sub-rows themselves know the real line count, and
+    // only once the fetch has resolved.
+    const threeApplicantCase = {
+      caseId: "case_0000",
+      caseRef: "RGS-1000",
+      applicants: [
+        { applicantRef: "A1", travellerId: "traveller_1", custody: "WITH_RGS", outcome: "PENDING" },
+        { applicantRef: "A2", travellerId: "traveller_2", custody: "WITH_RGS", outcome: "PENDING" },
+        { applicantRef: "A3", travellerId: "traveller_3", custody: "AT_EMBASSY", outcome: "PENDING" },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => threeApplicantCase })),
+    );
+
+    const user = userEvent.setup();
+    const { container } = renderLedger(<LedgerTable rows={buildRows(50)} partnerNamesById={{}} />);
+    await user.click(mountedCell(container, "case_0000", "caseRef"));
+
+    await user.keyboard("{ArrowRight}");
+
+    // Assert only once the three applicant lines are really on screen: before
+    // that the sub-rows are still on their single loading line, where
+    // reserving 32 + 1 x 28 is the correct answer and this test would pass
+    // without proving anything.
+    await waitFor(() => {
+      expect(container.querySelectorAll("[data-testid='applicant-subrow']")).toHaveLength(3);
+    });
+
+    // The re-measure the report triggers lands in a render of its own, after
+    // the one that first drew the three lines -- so this waits for the
+    // positions rather than reading them in the same tick.
+    await waitFor(() => {
+      const rowTops = readMountedRowTops(container);
+      expect(rowTops[1]! - rowTops[0]!).toBeGreaterThanOrEqual(
+        LEDGER_ROW_HEIGHT_PX + 3 * APPLICANT_SUBROW_LINE_HEIGHT_PX,
+      );
+    });
   });
 
   it("scrolls a distant row into the mounted window before focusing it", async () => {

@@ -148,8 +148,10 @@ describe("LedgerPage — the partial-ledger banner", () => {
     const banner = screen.getByRole("status");
     // F2: the count of MISSING rows is unknowable client-side once the walk
     // stops at MAX_LEDGER_PAGES -- the banner must say how many loaded
-    // instead, never fabricate a total.
-    expect(banner.textContent).toContain("Showing the first 5 cases");
+    // instead, never fabricate a total. R48 (fix round 1, F6): "Loaded", not
+    // "Showing" -- the number counts rows the client HOLDS, which is not the
+    // same as the rows on screen the moment any client-side filter is on.
+    expect(banner.textContent).toContain("Loaded the first 5 cases");
     expect(banner.textContent).not.toContain("could not be read");
   });
 
@@ -163,7 +165,7 @@ describe("LedgerPage — the partial-ledger banner", () => {
     // Unlike the truncated count, this one IS known exactly -- it is
     // unreadableCaseIds.length -- so the banner states it precisely.
     expect(banner.textContent).toContain("2 cases could not be read from storage");
-    expect(banner.textContent).not.toContain("Showing the first");
+    expect(banner.textContent).not.toContain("Loaded the first");
   });
 
   it("says both things when both are true, and neither hides the other", () => {
@@ -176,8 +178,42 @@ describe("LedgerPage — the partial-ledger banner", () => {
     renderLedgerPage();
 
     const banner = screen.getByRole("status");
-    expect(banner.textContent).toContain("Showing the first 10 cases");
+    expect(banner.textContent).toContain("Loaded the first 10 cases");
     expect(banner.textContent).toContain("1 case could not be read from storage");
+  });
+
+
+  it("names the LOADED count, not the filtered count, when a client-side filter is also on (R48)", async () => {
+    const user = userEvent.setup();
+    const fiveDistinctRows = Array.from({ length: 5 }, (_unused, rowIndex) =>
+      buildLedgerRow({ caseId: `case_${rowIndex}`, caseRef: `RGS-100${rowIndex}` }),
+    );
+    stubLedgerLoad({ rows: fiveDistinctRows, truncated: true, unreadableCaseIds: [] });
+    stubPartners();
+
+    const { container } = renderLedgerPage();
+    // ONE character, and it has to be: `LedgerTable`'s focus-sync effect has
+    // no dependency array, so the re-render this keystroke causes pulls DOM
+    // focus out of this input and onto the grid's focused cell, and a second
+    // character never arrives. That is a real defect, reported alongside this
+    // fix round and out of its scope -- "4" matches RGS-1004 and nothing
+    // else, which is all this test needs to put a client-side filter in
+    // force.
+    await user.type(screen.getByLabelText("Search"), "4");
+
+    // The filter really is in force -- without this the assertion below is
+    // about a table that never filtered anything.
+    expect(container.querySelectorAll("[data-testid='ledger-row']")).toHaveLength(1);
+
+    const banner = screen.getByRole("status");
+    // The number names the LOAD BOUNDARY: how much of the ledger this client
+    // holds, which is what tells a desk agent whether the case they are
+    // hunting for could be past the edge of what was fetched. A client-side
+    // filter does not move that boundary, so the number must not follow it
+    // down to 1 -- and the verb must not claim to describe what is on screen.
+    expect(banner.textContent).toContain("Loaded the first 5 cases");
+    expect(banner.textContent).not.toContain("Showing");
+    expect(banner.textContent).not.toContain("Loaded the first 1 case");
   });
 });
 
