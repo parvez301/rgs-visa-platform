@@ -16,7 +16,8 @@ interface LedgerTableProps {
  * How tall an EXPANDED row needs to be: the collapsed row itself, plus one
  * line per applicant `<ApplicantSubRows>` is drawing.
  *
- * Three sources, best first (fix round 1, F1):
+ * The LARGEST of three claims about the line count, never the first one that
+ * happens to exist (fix round 1 F1; R54 as amended in fix round 2, F8):
  *
  * 1. `reportedLineCount` -- what the mounted `<ApplicantSubRows>` says it is
  *    ACTUALLY rendering right now (1 while loading, 1 for the error line, one
@@ -28,17 +29,22 @@ interface LedgerTableProps {
  *    expanded row's own fetch has settled.
  * 3. `1` -- the floor `CrmCaseSchema.applicants` (`.min(1)`) guarantees.
  *
- * The 7,156 cases imported before `writeCase` computed a roll-up
- * (`packages/shared/src/crm/ledger.ts`) have no (2), so before this fix a
- * three-applicant one of them reserved 32 + 1 x 28 = 60px and then drew
- * 32 + 3 x 28 = 116px into it, straight over the next row. Nothing corrected
- * that on its own: heights here are DERIVED, not MEASURED (see `estimateSize`
- * below), so a short guess is permanent, not transient. (2) and (3) are
- * therefore only ever the opening estimate -- (1) is what makes the height
- * true, and `reportedLineCountsByCaseId` below is what carries it here.
+ * Why the largest rather than the freshest, which is what this function did
+ * first: the two claims disagree in BOTH directions, and the two disagreements
+ * do not cost the same. The 7,156 cases imported before `writeCase` computed a
+ * roll-up (`packages/shared/src/crm/ledger.ts`) have no (2) at all, so a
+ * three-applicant one of them reserved 32 + 1 x 28 = 60px from (3) and then
+ * drew 32 + 3 x 28 = 116px into it, straight over the next row -- and heights
+ * here are DERIVED, not MEASURED (see `estimateSize` below), so that undercount
+ * is permanent, never self-correcting. A case that HAS a roll-up of 3 hits the
+ * opposite disagreement: (1) reports 1 for as long as the fetch is in flight,
+ * which under a freshest-wins rule shrank the row from 116px to 60px and back
+ * again while the agent watched. An over-reserve is a gap under the sub-rows;
+ * an under-reserve is the overlap. Taking the max pays the gap, never the
+ * overlap, and the gap closes itself the moment the real count arrives.
  */
 function estimateExpandedRowHeight(row: crm.LedgerRow, reportedLineCount: number | undefined): number {
-  const applicantLineCount = reportedLineCount ?? row.applicantSummary?.count ?? 1;
+  const applicantLineCount = Math.max(reportedLineCount ?? 0, row.applicantSummary?.count ?? 0, 1);
   return LEDGER_ROW_HEIGHT + applicantLineCount * APPLICANT_SUBROW_LINE_HEIGHT;
 }
 
@@ -199,6 +205,32 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
     // `gridState.editing` is set, so skipping the sync entirely until editing
     // ends loses nothing: there is nothing new to focus.
     if (gridState.editing !== undefined) return;
+
+    // Fix round 2, F7 (R57): the grid may only reclaim focus it ALREADY OWNS.
+    // The guard above covers an open in-grid editor; it says nothing about
+    // focus that left the grid entirely. `LedgerPage`'s search box is outside
+    // this component, and every keystroke in it changes `rows` and re-renders
+    // this table -- so this effect ran and pulled focus back onto the focused
+    // cell after the FIRST character, sending the rest of the term to the grid
+    // as keymap input. Measured before the fix: typing "RGS-1003" left the
+    // input holding "R" and the table unfiltered.
+    //
+    // `document.activeElement` on `body` means either nothing owns focus or
+    // the previously focused cell was just unmounted by the virtualizer --
+    // both cases this effect exists to repair, so it may act. Anything else
+    // outside this container (the search input, a view chip, the Save button,
+    // the agent panel) is where a human deliberately put focus, and taking it
+    // from them is never this effect's business. `focusin`/`focusout`
+    // bookkeeping cannot tell those two apart -- `relatedTarget` is null both
+    // when a cell unmounts and when a click lands on non-focusable chrome --
+    // which is why this reads `activeElement` instead.
+    const elementOwningFocus = document.activeElement;
+    const focusIsUnclaimedOrInsideTheGrid =
+      elementOwningFocus === null ||
+      elementOwningFocus === document.body ||
+      scrollContainerRef.current?.contains(elementOwningFocus) === true;
+    if (!focusIsUnclaimedOrInsideTheGrid) return;
+
     const focusedRow = rows[gridState.focus.rowIndex];
     const focusedColumn = LEDGER_COLUMNS[gridState.focus.columnIndex];
     if (focusedRow === undefined || focusedColumn === undefined) return;

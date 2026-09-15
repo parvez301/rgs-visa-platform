@@ -192,14 +192,12 @@ describe("LedgerPage — the partial-ledger banner", () => {
     stubPartners();
 
     const { container } = renderLedgerPage();
-    // ONE character, and it has to be: `LedgerTable`'s focus-sync effect has
-    // no dependency array, so the re-render this keystroke causes pulls DOM
-    // focus out of this input and onto the grid's focused cell, and a second
-    // character never arrives. That is a real defect, reported alongside this
-    // fix round and out of its scope -- "4" matches RGS-1004 and nothing
-    // else, which is all this test needs to put a client-side filter in
-    // force.
-    await user.type(screen.getByLabelText("Search"), "4");
+    // The whole term. Round 1 could only type ONE character here: the grid's
+    // focus-sync effect pulled DOM focus out of this input on the re-render
+    // the first keystroke caused, and the rest of the term went to the grid
+    // as keymap input. Fix round 2's F7 guard is what makes a real search
+    // term typable, and this line would go back to holding "R" without it.
+    await user.type(screen.getByLabelText("Search"), "RGS-1004");
 
     // The filter really is in force -- without this the assertion below is
     // about a table that never filtered anything.

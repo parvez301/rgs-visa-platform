@@ -227,6 +227,42 @@ describe("LedgerTable keyboard and selection", () => {
     expect(gapAfterExpandedRow).toBeGreaterThan(gapAfterCollapsedRow);
   });
 
+  it("holds a SUMMARISED row at its roll-up height while the fetch is still in flight (fix round 2, F8)", async () => {
+    // The other half of the same arithmetic. This row DOES carry a roll-up
+    // (`applicantSummary.count: 3`), and the file-level `fetch` stub never
+    // resolves, so `<ApplicantSubRows>` sits on its single loading line and
+    // reports a line count of 1 for as long as the test runs. Preferring that
+    // report over the roll-up -- which is what R54 originally said -- made the
+    // row reserve 116px on expand, drop to 60px, and climb back to 116px when
+    // the fetch landed: a visible jump on every slow expand. R54 as amended
+    // takes the LARGER of the two, because an over-reserve is a gap and an
+    // under-reserve is the overlap Step 5 exists to prevent.
+    const summarisedRows = buildRows(50).map((row) => ({
+      ...row,
+      applicantSummary: {
+        count: 3,
+        custody: { AT_EMBASSY: 2, WITH_RGS: 1 },
+        outcome: { PENDING: 3 },
+      },
+    }));
+
+    const user = userEvent.setup();
+    const { container } = renderLedger(<LedgerTable rows={summarisedRows} partnerNamesById={{}} />);
+    await user.click(mountedCell(container, "case_0000", "caseRef"));
+
+    await user.keyboard("{ArrowRight}");
+
+    // The loading line really is what is on screen -- without this the
+    // assertion below could be passing against a resolved three-applicant
+    // case, which is the F1 test's job, not this one's.
+    expect(container.querySelector("[data-testid='applicant-subrows-loading']")).not.toBeNull();
+
+    const rowTops = readMountedRowTops(container);
+    // Exactly the roll-up height, not merely at least it: reserving MORE than
+    // the roll-up would be a gap under the sub-rows that nothing ever closes.
+    expect(rowTops[1]! - rowTops[0]!).toBe(LEDGER_ROW_HEIGHT_PX + 3 * APPLICANT_SUBROW_LINE_HEIGHT_PX);
+  });
+
   it("reserves height for every applicant an UN-SUMMARISED case turns out to have (fix round 1, F1)", async () => {
     // The row shape that dominates production today: `buildRows` above omits
     // `applicantSummary` entirely, which is what all 7,156 cases imported
