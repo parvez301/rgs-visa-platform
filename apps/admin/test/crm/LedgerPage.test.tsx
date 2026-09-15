@@ -9,6 +9,7 @@ import { LedgerPage } from "../../src/crm/ledger/LedgerPage";
 import { useLedgerRows, usePartners } from "../../src/crm/api/hooks";
 import type { LedgerLoad } from "../../src/crm/api/crmClient";
 import { UndoToastProvider } from "../../src/crm/UndoToast";
+import { AgentPanelProvider } from "../../src/crm/agent/AgentPanelProvider";
 
 /**
  * `AdminShell` renders a react-router `<Link>`/`<NavLink>` in its header.
@@ -23,7 +24,9 @@ function renderLedgerPage(element: ReactElement = <LedgerPage />) {
   return render(
     <QueryClientProvider client={queryClient}>
       <UndoToastProvider>
-        <MemoryRouter>{element}</MemoryRouter>
+        <AgentPanelProvider>
+          <MemoryRouter>{element}</MemoryRouter>
+        </AgentPanelProvider>
       </UndoToastProvider>
     </QueryClientProvider>,
   );
@@ -37,10 +40,24 @@ function renderLedgerPage(element: ReactElement = <LedgerPage />) {
  * agent stuck in one mode. `crmClient` and `useLedgerRows`'s own query-key
  * behaviour already have their own tests (crmClient.test.ts, hooks.test.ts).
  */
-vi.mock("../../src/crm/api/hooks", () => ({
-  useLedgerRows: vi.fn(),
-  usePartners: vi.fn(),
-}));
+vi.mock("../../src/crm/api/hooks", async (importOriginal) => {
+  const actualHooksModule = await importOriginal<typeof import("../../src/crm/api/hooks")>();
+  return {
+    ...actualHooksModule,
+    useLedgerRows: vi.fn(),
+    usePartners: vi.fn(),
+    // Task 15: `CrmLayout`'s right column renders `AgentPanel`, which runs
+    // these three queries on mount. Pinned to "still loading" rather than left
+    // real, because this file stubs no `fetch` at all -- a real query here
+    // would reach `.env.local`'s VITE_API_URL from a unit test. Nothing below
+    // asserts anything about the panel.
+    useProposals: () => STILL_LOADING_QUERY,
+    useMemories: () => STILL_LOADING_QUERY,
+  };
+});
+
+/** Shared by the two agent hooks the mock above pins; see its comment. */
+const STILL_LOADING_QUERY = { data: undefined, isLoading: true, isError: false, error: null };
 
 /**
  * `AdminShell` (rendered inside `CrmLayout`) reads `useAuth` for the header's

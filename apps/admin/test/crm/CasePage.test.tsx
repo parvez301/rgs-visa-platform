@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
 import { AuthContext, type AuthState } from "../../src/lib/auth";
 import { UndoToastProvider } from "../../src/crm/UndoToast";
+import { AgentPanelProvider } from "../../src/crm/agent/AgentPanelProvider";
 import { CasePage } from "../../src/crm/case/CasePage";
 import type { CrmEventView } from "../../src/crm/api/crmClient";
 
@@ -133,11 +134,20 @@ function renderCasePage(
     <AuthContext.Provider value={TEST_AUTH_STATE}>
       <QueryClientProvider client={queryClient}>
         <UndoToastProvider>
-          <MemoryRouter initialEntries={["/crm/cases/case_1"]}>
-            <Routes>
-              <Route path="/crm/cases/:caseId" element={<CasePage />} />
-            </Routes>
-          </MemoryRouter>
+          {/*
+            Task 15: `CrmLayout`'s right column now renders `AgentPanel`, whose
+            conversation lives in a provider mounted above the routes in
+            `main.tsx` (R63). The URL-routed `fetch` stub above answers the
+            panel's three GETs with `{}`, which every one of its readers treats
+            as an empty list -- this file asserts nothing about the panel.
+          */}
+          <AgentPanelProvider>
+            <MemoryRouter initialEntries={["/crm/cases/case_1"]}>
+              <Routes>
+                <Route path="/crm/cases/:caseId" element={<CasePage />} />
+              </Routes>
+            </MemoryRouter>
+          </AgentPanelProvider>
         </UndoToastProvider>
       </QueryClientProvider>
     </AuthContext.Provider>,

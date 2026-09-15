@@ -53,6 +53,43 @@ export const CASE_TYPE_LABELS: Record<crm.CaseType, string> = {
   OTHER: "Other",
 };
 
+/**
+ * `ENTRY_TYPES` and `PROCESSING_SPEEDS` (packages/shared/src/crm/statuses.ts).
+ * Neither the Ledger nor the Case screen renders these today -- the agent
+ * panel is the first surface that has to, because `update_case` can propose
+ * either of them and a proposal card showing `PREMIUM_LOUNGE` to a desk agent
+ * is the raw-enum rule broken in the one place a human is being asked to
+ * approve something.
+ */
+export const ENTRY_TYPE_LABELS: Record<crm.EntryType, string> = {
+  SINGLE: "Single entry",
+  DOUBLE: "Double entry",
+  MULTIPLE: "Multiple entry",
+};
+
+export const PROCESSING_LABELS: Record<crm.ProcessingSpeed, string> = {
+  NORMAL: "Normal",
+  EXPRESS: "Express",
+  PREMIUM_LOUNGE: "Premium lounge",
+};
+
+/**
+ * The seven write tools the agent can propose from, as the sentence a card
+ * headline uses. Deliberately NOT a total Record over a shared union: tool
+ * names cross the wire as plain strings on `ProposedChange.toolName` and the
+ * backend can add one this build has never heard of, which is what
+ * `describeEnumValue` is for.
+ */
+export const PROPOSAL_TOOL_LABELS: Record<string, string> = {
+  create_case: "Create a case",
+  update_case: "Change case details",
+  add_line_item: "Add a line item",
+  set_custody: "Move passport custody",
+  set_billing: "Move billing status",
+  remember: "Remember a fact",
+  forget: "Forget a remembered fact",
+};
+
 export const COURIER_LABELS: Record<crm.CourierMode, string> = {
   DTDC: "DTDC",
   SPEEDPOST: "Speed Post",

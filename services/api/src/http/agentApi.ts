@@ -152,7 +152,7 @@ function replayedMessageLength(message: z.infer<typeof AgentMessageBody>): numbe
   return message.content.length + toolCallsLength + (message.toolCallId?.length ?? 0);
 }
 
-const RunTurnBody = z
+export const RunTurnBody = z
   .object({
     userMessage: z.string().trim().min(1).max(MAX_USER_MESSAGE_LENGTH),
     conversation: z.array(AgentMessageBody).max(MAX_TURN_CONVERSATION_MESSAGES).optional(),

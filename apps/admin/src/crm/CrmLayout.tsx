@@ -8,6 +8,13 @@ const DEFAULT_AGENT_PANEL_WIDTH = 360;
 
 interface CrmLayoutProps {
   children: ReactNode;
+  /**
+   * The agent surface for the right column (R62). Passed in by each screen --
+   * `LedgerPage` with the grid's current selection, `CasePage` with the one
+   * case it is showing -- rather than mounted here, because only the screen
+   * knows what the agent should inherit.
+   */
+  agentPanel: ReactNode;
 }
 
 /**
@@ -15,13 +22,19 @@ interface CrmLayoutProps {
  * above a two-column `[main | agent panel]` grid, split by a draggable
  * vertical rule.
  *
- * The agent panel itself is Task 15's deliverable. Until then the right
- * column carries a placeholder plus the trust indicator spec §12 asks every
- * screen with an agent surface to show, so the two-column shape -- and the
- * space the real panel will occupy -- exists from the day the Ledger ships.
+ * Spec §6: resizable, collapsible, NEVER a modal. Nothing here sets
+ * `role="dialog"`, `aria-modal` or `inert`, and the main column stays fully
+ * interactive whatever the panel is doing -- a desk agent working a case must
+ * never have to dismiss the agent to keep working.
+ *
+ * Collapse is React state rather than a stored preference: the toggle stays
+ * reachable while collapsed (it moves into the splitter rail), so the panel
+ * can never become unreachable, and nothing about the Ledger changes when it
+ * is away.
  */
-export function CrmLayout({ children }: CrmLayoutProps) {
+export function CrmLayout({ children, agentPanel }: CrmLayoutProps) {
   const [agentPanelWidth, setAgentPanelWidth] = useState(DEFAULT_AGENT_PANEL_WIDTH);
+  const [isAgentPanelCollapsed, setIsAgentPanelCollapsed] = useState(false);
   const isDraggingSplitterRef = useRef(false);
 
   function beginDraggingSplitter(pointerDownEvent: PointerEvent<HTMLDivElement>) {
@@ -30,7 +43,7 @@ export function CrmLayout({ children }: CrmLayoutProps) {
   }
 
   function dragSplitter(pointerMoveEvent: PointerEvent<HTMLDivElement>) {
-    if (!isDraggingSplitterRef.current) return;
+    if (!isDraggingSplitterRef.current || isAgentPanelCollapsed) return;
     const layoutRightEdge = pointerMoveEvent.currentTarget.parentElement?.getBoundingClientRect().right ?? 0;
     const proposedAgentPanelWidth = layoutRightEdge - pointerMoveEvent.clientX;
     setAgentPanelWidth(
@@ -46,8 +59,12 @@ export function CrmLayout({ children }: CrmLayoutProps) {
   return (
     <AdminShell>
       <div
-        className="crm-root grid h-[calc(100vh-160px)] min-h-[480px]"
-        style={{ gridTemplateColumns: `minmax(0, 1fr) 6px ${agentPanelWidth}px` }}
+        className="crm-root relative grid h-[calc(100vh-160px)] min-h-[480px]"
+        style={{
+          gridTemplateColumns: isAgentPanelCollapsed
+            ? "minmax(0, 1fr) 6px 0px"
+            : `minmax(0, 1fr) 6px ${agentPanelWidth}px`,
+        }}
       >
         <div className="min-w-0 overflow-hidden">{children}</div>
         <div
@@ -59,15 +76,24 @@ export function CrmLayout({ children }: CrmLayoutProps) {
           onPointerMove={dragSplitter}
           onPointerUp={stopDraggingSplitter}
         />
-        <div className="flex flex-col gap-3 overflow-y-auto border-l border-crm-rule-box p-4">
-          <span className="inline-flex w-fit items-center gap-1.5 rounded-crm-badge bg-crm-surface px-2 py-1 text-[12px] text-crm-steel">
-            <span aria-hidden="true">●</span> Agent panel arrives in a later task
-          </span>
-          <p className="text-[13px] text-crm-steel">
-            Every change the agent proposes will show up here for approval before it touches a
-            case.
-          </p>
+        <div className="flex min-h-0 flex-col overflow-hidden border-l border-crm-rule-box">
+          {!isAgentPanelCollapsed && agentPanel}
         </div>
+        {/*
+          Absolutely positioned against the grid, deliberately NOT a child of
+          the splitter: a button inside the drag handle receives the same
+          pointerdown that starts a resize, so every click on it began a drag
+          it never meant to start. Out of flow means it stays put -- and stays
+          reachable by keyboard -- when the column itself is 0 wide.
+        */}
+        <button
+          type="button"
+          onClick={() => setIsAgentPanelCollapsed((wasCollapsed) => !wasCollapsed)}
+          aria-expanded={!isAgentPanelCollapsed}
+          className="absolute right-2 top-1 z-10 rounded-crm-control border border-crm-rule-box bg-crm-canvas px-1.5 py-0.5 text-[12px] text-crm-steel"
+        >
+          {isAgentPanelCollapsed ? "Show the agent panel" : "Hide the agent panel"}
+        </button>
       </div>
     </AdminShell>
   );

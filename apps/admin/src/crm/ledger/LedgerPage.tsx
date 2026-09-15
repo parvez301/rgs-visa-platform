@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { crm } from "@rgs/shared";
 import { useAuth } from "../../lib/auth";
 import { CrmLayout } from "../CrmLayout";
+import { AgentPanel } from "../agent/AgentPanel";
 import { useLedgerRows, usePartners } from "../api/hooks";
 import { CASE_STATUS_LABELS } from "../labels";
 import { applyFilters, applySort, type LedgerFilters, type LedgerSort } from "./filters";
@@ -34,6 +35,21 @@ export function LedgerPage() {
   const [selectedPartnerId, setSelectedPartnerId] = useState<string | undefined>(undefined);
   const [clientLedgerFilters, setClientLedgerFilters] = useState<ClientOnlyLedgerFilters>(NO_CLIENT_FILTERS);
   const [ledgerSort, setLedgerSort] = useState<LedgerSort>(DEFAULT_LEDGER_SORT);
+  /**
+   * R62: the grid's selection, lifted here so `CrmLayout`'s right column can
+   * hand it to the agent. `useCallback` with `[]` deps keeps the identity
+   * stable, so `LedgerTable`'s reporting effect fires on a real selection
+   * change rather than on every render of this page.
+   */
+  const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
+  const reportSelectedCaseIds = useCallback((nextSelectedCaseIds: string[]) => {
+    setSelectedCaseIds((currentSelectedCaseIds) =>
+      currentSelectedCaseIds.length === nextSelectedCaseIds.length &&
+      currentSelectedCaseIds.every((caseId, index) => caseId === nextSelectedCaseIds[index])
+        ? currentSelectedCaseIds
+        : nextSelectedCaseIds,
+    );
+  }, []);
 
   const ledgerRowsQuery = useLedgerRows(selectedCaseStatuses, selectedPartnerId);
   const partnersQuery = usePartners();
@@ -93,7 +109,7 @@ export function LedgerPage() {
   }, [ledgerLoad?.rows, clientLedgerFilters, ledgerSort, partnerNamesById]);
 
   return (
-    <CrmLayout>
+    <CrmLayout agentPanel={<AgentPanel selectedCaseIds={selectedCaseIds} />}>
       <div className="flex h-full flex-col gap-3 p-4">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[13px] font-medium text-crm-charcoal">Status</span>
@@ -183,7 +199,11 @@ export function LedgerPage() {
               The ledger could not be loaded: {String(ledgerRowsQuery.error)}
             </p>
           ) : (
-            <LedgerTable rows={visibleLedgerRows} partnerNamesById={partnerNamesById} />
+            <LedgerTable
+              rows={visibleLedgerRows}
+              partnerNamesById={partnerNamesById}
+              onSelectionChange={reportSelectedCaseIds}
+            />
           )}
         </div>
       </div>

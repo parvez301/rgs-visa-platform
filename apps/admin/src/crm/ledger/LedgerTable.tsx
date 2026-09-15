@@ -12,6 +12,13 @@ import { useGridKeyboard } from "./useGridKeyboard";
 interface LedgerTableProps {
   rows: crm.LedgerRow[];
   partnerNamesById: Record<string, string>;
+  /**
+   * The case ids of the currently selected rows, reported upward whenever they
+   * change (R62). Lifted rather than published through a context: the grid's
+   * selection is index-keyed reducer state, and the mapping from indexes to
+   * cases only makes sense beside the `rows` those indexes address.
+   */
+  onSelectionChange?(selectedCaseIds: string[]): void;
 }
 
 /**
@@ -50,7 +57,7 @@ function estimateExpandedRowHeight(row: crm.LedgerRow, reportedLineCount: number
   return LEDGER_ROW_HEIGHT + applicantLineCount * APPLICANT_SUBROW_LINE_HEIGHT;
 }
 
-export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
+export function LedgerTable({ rows, partnerNamesById, onSelectionChange }: LedgerTableProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Grid semantics (focus, selection, expand/collapse) live in the reducer
@@ -198,6 +205,34 @@ export function LedgerTable({ rows, partnerNamesById }: LedgerTableProps) {
     dispatchGridAction({ kind: "rowsReplaced", previousCaseIds, nextCaseIds: currentCaseIds });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
+
+  /**
+   * R62: the agent panel inherits the grid's selection.
+   *
+   * CASE IDS, never indexes: `selectedRowIndexes` addresses positions in
+   * `rows`, and `rows` is re-filtered on every keystroke in the search box
+   * (Task 13), so an index handed upward names a different case a moment
+   * later.
+   *
+   * The `filter` is load-bearing, not defensive. `rowsReplaced` does remap the
+   * indexes when the rows change underneath them -- but it is dispatched from
+   * an effect, so there is one commit in between where `rows` is already the
+   * new list and `selectedRowIndexes` is still the old one. On that render an
+   * index past the end addresses nothing, and without this the panel is told
+   * about a case that is not a case.
+   *
+   * `onSelectionChange` is deliberately out of the dependency list: callers
+   * pass a stable callback (`LedgerPage` memoizes one), and depending on an
+   * inline lambda would re-report on every render of the page above.
+   */
+  useEffect(() => {
+    if (onSelectionChange === undefined) return;
+    const selectedCaseIds = gridState.selectedRowIndexes
+      .map((selectedRowIndex) => rows[selectedRowIndex]?.caseId)
+      .filter((caseId): caseId is string => caseId !== undefined);
+    onSelectionChange(selectedCaseIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gridState.selectedRowIndexes, rows]);
 
   // Direct human edits go straight to the REST routes -- the agent's
   // approval gate governs what the agent writes, not a desk agent's own

@@ -5,6 +5,7 @@ import { createElement, type ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 import { AuthContext, type AuthState } from "../../src/lib/auth";
 import { UndoToastProvider } from "../../src/crm/UndoToast";
+import { AgentPanelProvider } from "../../src/crm/agent/AgentPanelProvider";
 
 /**
  * Rows the virtualizer ACTUALLY mounted, with a guard.
@@ -118,6 +119,12 @@ export function renderLedger(element: ReactElement): RenderResult & {
   // (see the brief's own note that it stays `virtual.ts`), and TypeScript
   // refuses JSX syntax outside a `.tsx` file regardless of the `jsx` compiler
   // option.
+  // `AgentPanelProvider` from Task 15 on: `CrmLayout`'s right column holds the
+  // agent panel, whose conversation lives in a provider mounted above the
+  // routes in `main.tsx` (R63). `useAgentPanelSession` throws without it --
+  // deliberately, because a silent local-state fallback would lose the
+  // conversation on every navigation -- so the harness mounts the same
+  // provider production does.
   // `MemoryRouter` from Task 14 on: the Ledger's REF cell is a `<Link>` to
   // `/crm/cases/:caseId` (spec §5, "reached by clicking a REF"), and
   // react-router's `useHref` throws outside a router. In production
@@ -135,7 +142,11 @@ export function renderLedger(element: ReactElement): RenderResult & {
         createElement(
           UndoToastProvider,
           null,
-          createElement(MemoryRouter, null, elementToWrap),
+          createElement(
+            AgentPanelProvider,
+            null,
+            createElement(MemoryRouter, null, elementToWrap),
+          ),
         ),
       ),
     );

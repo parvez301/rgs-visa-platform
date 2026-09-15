@@ -2,6 +2,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { useParams } from "react-router";
 import { crm } from "@rgs/shared";
 import { CrmLayout } from "../CrmLayout";
+import { AgentPanel } from "../agent/AgentPanel";
 import { AxisChip } from "../components/Chip";
 import { ConflictPrompt } from "../components/ConflictPrompt";
 import {
@@ -54,7 +55,9 @@ export function CasePage() {
   const { caseId } = useParams();
   if (caseId === undefined || caseId === "") {
     return (
-      <CrmLayout>
+      // No case to inherit, so the panel is handed an empty selection rather
+      // than a made-up one.
+      <CrmLayout agentPanel={<AgentPanel />}>
         <div className="crm-root h-full overflow-y-auto p-4">
           <p role="alert" className="text-[14px] text-crm-charcoal">
             This link has no case reference in it, so there is no case to load.
@@ -88,7 +91,8 @@ function CaseScreen({ caseId }: { caseId: string }) {
   const caseRecord = caseQuery.data;
 
   return (
-    <CrmLayout>
+    // R62: the Case screen's "selection" is the one case it is showing.
+    <CrmLayout agentPanel={<AgentPanel selectedCaseIds={[caseId]} />}>
       <div className="crm-root relative h-full overflow-y-auto p-4 text-[14px] leading-[1.45]">
         {caseQuery.isLoading ? (
           <p className="text-crm-steel">Loading this case…</p>
