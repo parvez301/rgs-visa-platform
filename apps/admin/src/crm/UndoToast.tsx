@@ -50,9 +50,13 @@ function describeUndoFailure(undoError: unknown): string {
 }
 
 /**
- * Mounted once, in `CrmLayout`, so every screen under it shares one toast
- * stack. `useLedgerEdit` is the one caller today, but the context is not
- * ledger-specific -- anything that wants an undo affordance can reach it.
+ * Mounted once, in `AppProviders` above the routes, so every screen shares one
+ * toast stack. NOT in `CrmLayout`: `CaseScreen` calls `useLedgerEdit()` above
+ * its own layout, and this provider was once documented as living there while
+ * nothing mounted it at all -- staging `/crm` rendered blank (2026-09-16).
+ * `useLedgerEdit` and `useApplicantEdit` are the callers today, but the
+ * context is not ledger-specific -- anything wanting an undo affordance can
+ * reach it.
  */
 export function UndoToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<UndoToastEntry[]>([]);

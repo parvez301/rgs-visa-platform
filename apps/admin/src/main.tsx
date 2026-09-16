@@ -1,9 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
-import { AuthProvider, useAuth } from "./lib/auth";
-import { AgentPanelProvider } from "./crm/agent/AgentPanelProvider";
+import { AppProviders } from "./AppProviders";
+import { useAuth } from "./lib/auth";
 import { ActivityPage } from "./pages/ActivityPage";
 import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
 import { AuthPage } from "./pages/AuthPage";
@@ -15,10 +14,6 @@ import { NoticesPage } from "./pages/NoticesPage";
 import { QueuePage } from "./pages/QueuePage";
 import { UserActivityPage } from "./pages/UserActivityPage";
 import "./styles.css";
-
-const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
-});
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isLoading, isSignedIn } = useAuth();
@@ -35,95 +30,86 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        {/*
-          R63: mounted ONCE, above the routes. `CrmLayout` -- and therefore the
-          agent panel inside it -- is rendered per page, so a conversation owned
-          by the panel would be wiped every time a desk agent clicks a REF and
-          walks from the Ledger to a case.
-        */}
-        <AgentPanelProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/auth" element={<AuthPage />} />
-              <Route
-                path="/"
-                element={
-                  <RequireAuth>
-                    <QueuePage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/applications/:applicationId"
-                element={
-                  <RequireAuth>
-                    <ApplicationDetailPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/activity"
-                element={
-                  <RequireAuth>
-                    <ActivityPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/leads"
-                element={
-                  <RequireAuth>
-                    <LeadsPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/config"
-                element={
-                  <RequireAuth>
-                    <ConfigPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/notices"
-                element={
-                  <RequireAuth>
-                    <NoticesPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/users/:userId"
-                element={
-                  <RequireAuth>
-                    <UserActivityPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/crm"
-                element={
-                  <RequireAuth>
-                    <LedgerPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/crm/cases/:caseId"
-                element={
-                  <RequireAuth>
-                    <CasePage />
-                  </RequireAuth>
-                }
-              />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </BrowserRouter>
-        </AgentPanelProvider>
-      </AuthProvider>
-    </QueryClientProvider>
+    {/* Every provider lives in `AppProviders` so a test can mount the same tree. */}
+    <AppProviders>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/auth" element={<AuthPage />} />
+          <Route
+            path="/"
+            element={
+              <RequireAuth>
+                <QueuePage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/applications/:applicationId"
+            element={
+              <RequireAuth>
+                <ApplicationDetailPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/activity"
+            element={
+              <RequireAuth>
+                <ActivityPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/leads"
+            element={
+              <RequireAuth>
+                <LeadsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/config"
+            element={
+              <RequireAuth>
+                <ConfigPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/notices"
+            element={
+              <RequireAuth>
+                <NoticesPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/users/:userId"
+            element={
+              <RequireAuth>
+                <UserActivityPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/crm"
+            element={
+              <RequireAuth>
+                <LedgerPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/crm/cases/:caseId"
+            element={
+              <RequireAuth>
+                <CasePage />
+              </RequireAuth>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AppProviders>
   </StrictMode>,
 );
