@@ -40,6 +40,24 @@ export type GridAction =
 export interface GridBounds {
   rowCount: number;
   columnCount: number;
+  /**
+   * Which column indexes have an editor behind them, as set membership.
+   *
+   * The reducer is otherwise given no column metadata at all (see the
+   * `REF_COLUMN_INDEX` comment below), and this is the one exception, because
+   * `beginEdit` cannot be correct without it: six of `LEDGER_COLUMNS`'s ten
+   * columns carry no `editable` field, so an Enter on Partner, Country,
+   * Applicants, Received or Total used to set `editing` on a cell that renders
+   * no editor -- and `move` returns the previous state while `editing` is set,
+   * so every arrow key stopped working until the desk agent happened to press
+   * Escape, with nothing on screen to say why.
+   *
+   * Carried as INDEXES rather than as the columns themselves so this file
+   * still never imports `LEDGER_COLUMNS`: `LedgerTable` computes the set once
+   * from its own column list, and the reducer stays testable with a synthetic
+   * grid that names its own editable columns.
+   */
+  editableColumnIndexes: ReadonlySet<number>;
 }
 
 /**
@@ -130,8 +148,14 @@ export function gridReducer(previousState: GridState, action: GridAction, bounds
       return { ...previousState, focus: nextFocus };
     }
 
-    case "beginEdit":
+    case "beginEdit": {
+      // A no-op on a read-only column, never a state change with no editor
+      // behind it: see `GridBounds.editableColumnIndexes` for the navigation
+      // freeze that shape caused. Returning `previousState` itself (not a
+      // copy) also keeps a stray Enter from re-rendering the whole grid.
+      if (!bounds.editableColumnIndexes.has(previousState.focus.columnIndex)) return previousState;
       return { ...previousState, editing: { ...previousState.focus } };
+    }
 
     case "cancelEdit":
       return { ...previousState, editing: undefined };

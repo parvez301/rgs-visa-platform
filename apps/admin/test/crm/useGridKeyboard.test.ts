@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { gridReducer, type GridState } from "../../src/crm/ledger/useGridKeyboard";
 
-const bounds = { rowCount: 10, columnCount: 10 };
+/**
+ * The synthetic grid this reducer is tested against, now carrying the one piece
+ * of column metadata `gridReducer` is allowed to see (Critical #2 / G2).
+ *
+ * The indexes deliberately mirror `LEDGER_COLUMNS`'s real editable set -- Type
+ * (visaType), Status, Billing and Appointment -- and, just as deliberately,
+ * leave column 0 out: REF is read-only in the product, and a `bounds` object
+ * carrying a bare `{ rowCount, columnCount }` is precisely what let
+ * "begins an edit at columnIndex 0" pin the defect for the whole branch.
+ */
+const EDITABLE_COLUMN_INDEXES: ReadonlySet<number> = new Set([3, 5, 6, 8]);
+const READ_ONLY_COLUMN_INDEX = 0;
+const EDITABLE_COLUMN_INDEX = 5;
+const bounds = { rowCount: 10, columnCount: 10, editableColumnIndexes: EDITABLE_COLUMN_INDEXES };
 const initialState: GridState = {
   focus: { rowIndex: 0, columnIndex: 0 },
   selectedRowIndexes: [],
@@ -205,17 +218,42 @@ describe("gridReducer", () => {
   });
 
   it("begins and cancels an edit without moving the focus", () => {
-    const editing = gridReducer(initialState, { kind: "beginEdit" }, bounds);
-    expect(editing.editing).toEqual({ rowIndex: 0, columnIndex: 0 });
+    // On an EDITABLE column. The previous version of this test began the edit
+    // at columnIndex 0 and asserted `editing` was set, which pinned the defect
+    // rather than the contract: REF has no editor, so that state could only
+    // ever freeze the arrow keys (`move` returns the previous state while
+    // `editing` is set) with nothing on screen to explain it.
+    const onAnEditableColumn = { ...initialState, focus: { rowIndex: 0, columnIndex: EDITABLE_COLUMN_INDEX } };
+    const editing = gridReducer(onAnEditableColumn, { kind: "beginEdit" }, bounds);
+    expect(editing.editing).toEqual({ rowIndex: 0, columnIndex: EDITABLE_COLUMN_INDEX });
     const cancelled = gridReducer(editing, { kind: "cancelEdit" }, bounds);
     expect(cancelled.editing).toBeUndefined();
-    expect(cancelled.focus).toEqual({ rowIndex: 0, columnIndex: 0 });
+    expect(cancelled.focus).toEqual({ rowIndex: 0, columnIndex: EDITABLE_COLUMN_INDEX });
+  });
+
+  it("does nothing at all on Enter over a read-only column, rather than freezing the arrow keys", () => {
+    // Critical #2 of the whole-branch review. Six of the ten Ledger columns
+    // carry no `editable` field, so `editing` set there names a cell with no
+    // editor to blur or Escape out of -- and until the desk agent happens to
+    // press Escape, every arrow key is dead. Asserted as identity, not just
+    // equality: a read-only Enter must not even re-render the grid.
+    const onAReadOnlyColumn = { ...initialState, focus: { rowIndex: 0, columnIndex: READ_ONLY_COLUMN_INDEX } };
+    const afterEnter = gridReducer(onAReadOnlyColumn, { kind: "beginEdit" }, bounds);
+
+    expect(afterEnter.editing).toBeUndefined();
+    expect(afterEnter).toBe(onAReadOnlyColumn);
+    // And the arrows still work, which is the consequence this test exists for.
+    expect(gridReducer(afterEnter, { kind: "move", direction: "down" }, bounds).focus).toEqual({
+      rowIndex: 1,
+      columnIndex: READ_ONLY_COLUMN_INDEX,
+    });
   });
 
   it("ignores a move while a cell is being edited, so arrow keys reach the input", () => {
-    const editing = gridReducer(initialState, { kind: "beginEdit" }, bounds);
+    const onAnEditableColumn = { ...initialState, focus: { rowIndex: 0, columnIndex: EDITABLE_COLUMN_INDEX } };
+    const editing = gridReducer(onAnEditableColumn, { kind: "beginEdit" }, bounds);
     const stillEditing = gridReducer(editing, { kind: "move", direction: "down" }, bounds);
-    expect(stillEditing.focus).toEqual({ rowIndex: 0, columnIndex: 0 });
-    expect(stillEditing.editing).toEqual({ rowIndex: 0, columnIndex: 0 });
+    expect(stillEditing.focus).toEqual({ rowIndex: 0, columnIndex: EDITABLE_COLUMN_INDEX });
+    expect(stillEditing.editing).toEqual({ rowIndex: 0, columnIndex: EDITABLE_COLUMN_INDEX });
   });
 });

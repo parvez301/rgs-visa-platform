@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { crm } from "@rgs/shared";
@@ -308,21 +315,53 @@ function OneKindOfMarker({ caseRef, kind, reviewItemIds, isFocusedRow }: OneKind
     popoverRef.current?.focus();
   }, [isPopoverOpen]);
 
-  function togglePopover(clickEvent: ReactMouseEvent<HTMLButtonElement>): void {
-    // The Ledger's gridcell carries its own click handler, which selects the
-    // row -- and a selection change is reported to the agent panel (R62).
-    // Opening a review popover is not a statement about which cases the agent
-    // should be looking at.
-    clickEvent.stopPropagation();
+  /** Open if closed, close if open -- what both the mouse and the keyboard do. */
+  function togglePopover(): void {
     if (isPopoverOpen) {
       closePopover();
       return;
     }
     const markerRect = markerButtonRef.current?.getBoundingClientRect();
-    // The ref is this very button, so it is set by the time its own click
-    // handler runs; the zero rect keeps the maths total rather than guarding a
-    // state that cannot happen.
+    // The ref is this very button, so it is set by the time its own handler
+    // runs; the zero rect keeps the maths total rather than guarding a state
+    // that cannot happen.
     setPopoverAnchor(computePopoverAnchor(markerRect ?? { top: 0, bottom: 0, left: 0 }));
+  }
+
+  function togglePopoverOnClick(clickEvent: ReactMouseEvent<HTMLButtonElement>): void {
+    // The Ledger's gridcell carries its own click handler, which selects the
+    // row -- and a selection change is reported to the agent panel (R62).
+    // Opening a review popover is not a statement about which cases the agent
+    // should be looking at.
+    clickEvent.stopPropagation();
+    togglePopover();
+  }
+
+  /**
+   * R75(a): the chip handles its OWN activation keys, and stops them before the
+   * grid sees them.
+   *
+   * R74 made this chip a roving Tab stop, which made it reachable and left it
+   * inoperable. A keydown here bubbles into `LedgerTable`'s scroll container,
+   * whose `onKeyDown` is the grid's fixed keymap (spec §5) -- and that keymap
+   * `preventDefault()`s both of a button's activation keys: plain Enter on the
+   * REF column navigates away to the case screen (R65), and Space toggles the
+   * row's selection. A `preventDefault()` on `keydown` also suppresses the
+   * browser's synthesized `click`, so neither key ever reached `onClick`
+   * either: the tab stop promised something it could not deliver.
+   *
+   * `stopPropagation()` before the grid's handler runs is the same technique
+   * `EditableCell` uses for an open editor, and the same one `togglePopoverOnClick`
+   * above already uses for the mouse. EVERY other key is left alone on purpose:
+   * the arrows must still reach the grid so a desk agent can navigate straight
+   * off a marked row, and Escape belongs to the capture-phase listener that
+   * closes the panel (R67).
+   */
+  function togglePopoverOnActivationKey(keyboardEvent: ReactKeyboardEvent<HTMLButtonElement>): void {
+    if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
+    keyboardEvent.preventDefault();
+    keyboardEvent.stopPropagation();
+    togglePopover();
   }
 
   return (
@@ -330,7 +369,8 @@ function OneKindOfMarker({ caseRef, kind, reviewItemIds, isFocusedRow }: OneKind
       <button
         ref={markerButtonRef}
         type="button"
-        onClick={togglePopover}
+        onClick={togglePopoverOnClick}
+        onKeyDown={togglePopoverOnActivationKey}
         // R74: a ROVING tab stop, exactly like the gridcell wrapper's own
         // (`LedgerTable.tsx`). The REF `<Link>` beside this chip carries
         // `tabIndex={-1}` because an anchor at the browser default would put a

@@ -65,6 +65,17 @@ interface LedgerTableProps {
  * an under-reserve is the overlap. Taking the max pays the gap, never the
  * overlap, and the gap closes itself the moment the real count arrives.
  */
+/**
+ * The column indexes `gridReducer` will open an editor on (Critical #2 of the
+ * whole-branch review). Computed ONCE at module scope rather than per render:
+ * `LEDGER_COLUMNS` is a module-level constant, so this set can never change
+ * while the app runs, and a fresh `Set` every render would hand
+ * `useGridKeyboard` a new `bounds` object for no reason.
+ */
+const EDITABLE_LEDGER_COLUMN_INDEXES: ReadonlySet<number> = new Set(
+  LEDGER_COLUMNS.flatMap((column, columnIndex) => (column.editable === undefined ? [] : [columnIndex])),
+);
+
 function estimateExpandedRowHeight(row: crm.LedgerRow, reportedLineCount: number | undefined): number {
   const applicantLineCount = Math.max(reportedLineCount ?? 0, row.applicantSummary?.count ?? 0, 1);
   return LEDGER_ROW_HEIGHT + applicantLineCount * APPLICANT_SUBROW_LINE_HEIGHT;
@@ -85,6 +96,7 @@ export function LedgerTable({
   const { state: gridState, onKeyDown: onGridKeyDown, dispatch: dispatchGridAction } = useGridKeyboard({
     rowCount: rows.length,
     columnCount: LEDGER_COLUMNS.length,
+    editableColumnIndexes: EDITABLE_LEDGER_COLUMN_INDEXES,
   });
   const navigate = useNavigate();
 
@@ -314,12 +326,25 @@ export function LedgerTable({
     // bookkeeping cannot tell those two apart -- `relatedTarget` is null both
     // when a cell unmounts and when a click lands on non-focusable chrome --
     // which is why this reads `activeElement` instead.
+    //
+    // R75(b), narrowing R57 rather than removing it: the third clause used to
+    // be "anywhere inside this scroll container", which admits every focusable
+    // DESCENDANT of a cell as well as the cell itself -- the review-marker chip
+    // (R74), an open editor's own input. Those are exactly the elements a human
+    // put focus on deliberately, and this effect ran on every render with no
+    // dependency array, so the very next re-render (a settled refetch, a
+    // selection report, a ledger invalidation) yanked focus off the chip and
+    // back onto the gridcell wrapper: a tab stop that could not be held. The
+    // grid may reclaim only focus it OWNS, and what it owns is the roving tab
+    // stop it renders itself -- the `role="gridcell"` wrapper. The no-deps
+    // array stays; its reasons are above.
     const elementOwningFocus = document.activeElement;
-    const focusIsUnclaimedOrInsideTheGrid =
+    const focusIsUnclaimedOrOnAGridcellThisGridRendered =
       elementOwningFocus === null ||
       elementOwningFocus === document.body ||
-      scrollContainerRef.current?.contains(elementOwningFocus) === true;
-    if (!focusIsUnclaimedOrInsideTheGrid) return;
+      (elementOwningFocus.getAttribute("role") === "gridcell" &&
+        scrollContainerRef.current?.contains(elementOwningFocus) === true);
+    if (!focusIsUnclaimedOrOnAGridcellThisGridRendered) return;
 
     const focusedRow = rows[gridState.focus.rowIndex];
     const focusedColumn = LEDGER_COLUMNS[gridState.focus.columnIndex];

@@ -1,8 +1,9 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
+import type { OpenReviewSummaryEntry } from "../../src/crm/api/crmClient";
 import { LedgerTable } from "../../src/crm/ledger/LedgerTable";
 import { installVirtualScrolling, mountedCaseIds, mountedCell, mountedGridRow, renderLedger } from "./virtual";
 
@@ -116,6 +117,26 @@ function readMountedRowTops(container: HTMLElement): number[] {
 function RouterLocationProbe() {
   const routerLocation = useLocation();
   return <span data-testid="router-location">{routerLocation.pathname}</span>;
+}
+
+/**
+ * One open review item on the FIRST row, which is where the grid's focus
+ * starts -- so the chip R74 makes tabbable is the chip these tests reach.
+ */
+const FIRST_ROW_HAS_ONE_REVIEW_ITEM: ReadonlyMap<string, OpenReviewSummaryEntry> = new Map([
+  ["RGS-1000", { caseRef: "RGS-1000", fieldItemIds: ["rev_1"], mergeItemIds: [] }],
+]);
+
+/**
+ * The review-marker chip on one mounted row, reached through `mountedCell` so
+ * a chip the virtualizer never mounted fails as "not among the mounted rows"
+ * rather than as a quietly absent element (spec §10's first named trap). The
+ * REF cell's only other child is the `<a>`, so the button in it is the marker.
+ */
+function markerChipOnRow(container: HTMLElement, caseId: string): HTMLElement {
+  return within(mountedCell(container, caseId, "caseRef")).getByRole("button", {
+    name: /1 import problem/i,
+  });
 }
 
 describe("LedgerTable keyboard and selection", () => {
@@ -407,5 +428,121 @@ describe("LedgerTable keyboard and selection", () => {
     // must reach the browser untouched.
     const tabKeyboardEvent = dispatchGridKeyDown(gridElement, "Tab");
     expect(tabKeyboardEvent.defaultPrevented).toBe(false);
+  });
+
+  it("leaves the arrow keys working after Enter on a read-only column (Critical #2, D23/D28)", async () => {
+    // Partner is one of the six Ledger columns with no `editable` field. Enter
+    // there used to set `editing` on a cell that renders no editor, and `move`
+    // returns the previous state while `editing` is set -- so every arrow key
+    // died until the desk agent happened to press Escape, with nothing on
+    // screen to say why. Written at the TABLE level, not the reducer's: the
+    // pairing of `editing` with `columns.tsx`'s `editable` field only exists
+    // here (G2).
+    const user = userEvent.setup();
+    const { container } = renderLedger(<LedgerTable rows={buildRows(50)} partnerNamesById={{}} />);
+    await user.click(mountedCell(container, "case_0000", "partner"));
+    expect(mountedCell(container, "case_0000", "partner")).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+
+    // Nothing opened, because there is nothing on this column to open.
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+
+    await user.keyboard("{ArrowDown}");
+
+    expect(mountedCell(container, "case_0001", "partner")).toHaveFocus();
+  });
+
+  it("R75: Tab reaches the focused row's marker chip, and Enter there opens the panel instead of leaving the Ledger", async () => {
+    // G1: every existing marker test opens the popover with a synthetic mouse
+    // click, and `ReviewMarker.test.tsx` renders the chip OUTSIDE `LedgerTable`
+    // -- so the grid's own `onKeyDown` is not even in the tree. The mechanism
+    // that killed this feature is event propagation from the chip INTO that
+    // handler, and a plain Enter on the REF column navigates away (R65).
+    const user = userEvent.setup();
+    const { container } = renderLedger(
+      <>
+        <LedgerTable
+          rows={buildRows(50)}
+          partnerNamesById={{}}
+          reviewEntriesByCaseRef={FIRST_ROW_HAS_ONE_REVIEW_ITEM}
+        />
+        <RouterLocationProbe />
+      </>,
+    );
+    await user.click(mountedCell(container, "case_0000", "caseRef"));
+
+    // R74's roving tab stop, exercised rather than read off an attribute.
+    await user.tab();
+    const markerChip = markerChipOnRow(container, "case_0000");
+    expect(markerChip).toHaveFocus();
+
+    fireEvent.keyDown(markerChip, { key: "Enter" });
+
+    expect(screen.getByRole("group", { name: "Import review for RGS-1000" })).toBeInTheDocument();
+    // The half that makes this a real test of propagation: without the chip's
+    // own handler the grid's keymap consumes this Enter and navigates.
+    expect(screen.getByTestId("router-location").textContent).toBe("/");
+  });
+
+  it("R75: Space on the marker chip opens the panel and leaves the row's selection alone", async () => {
+    const user = userEvent.setup();
+    const { container } = renderLedger(
+      <LedgerTable
+        rows={buildRows(50)}
+        partnerNamesById={{}}
+        reviewEntriesByCaseRef={FIRST_ROW_HAS_ONE_REVIEW_ITEM}
+      />,
+    );
+    await user.click(mountedCell(container, "case_0000", "caseRef"));
+    await user.tab();
+    const markerChip = markerChipOnRow(container, "case_0000");
+    expect(markerChip).toHaveFocus();
+    // The precondition the assertion below is a change FROM -- without it,
+    // "still not selected" could be true of a row that was never selectable.
+    expect(mountedGridRow(container, "case_0000")).toHaveAttribute("aria-selected", "false");
+
+    fireEvent.keyDown(markerChip, { key: " " });
+
+    expect(screen.getByRole("group", { name: "Import review for RGS-1000" })).toBeInTheDocument();
+    // Space is the grid's selection toggle (spec §4). Opening a review panel is
+    // not a statement about which cases the agent should be looking at (R62).
+    expect(mountedGridRow(container, "case_0000")).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("R75(b): a re-render does not pull focus off the marker chip and back onto the gridcell", async () => {
+    // D5. The R57 focus-sync effect has no dependency array, so it runs on
+    // every render, and its guard used to admit anything inside the scroll
+    // container -- the chip included. A settled refetch, a selection report or
+    // any prop change then reclaimed focus, which made R74's tab stop
+    // unholdable as well as inoperable.
+    const user = userEvent.setup();
+    const { container, rerenderLedger } = renderLedger(
+      <LedgerTable
+        rows={buildRows(50)}
+        partnerNamesById={{}}
+        reviewEntriesByCaseRef={FIRST_ROW_HAS_ONE_REVIEW_ITEM}
+      />,
+    );
+    await user.click(mountedCell(container, "case_0000", "caseRef"));
+    await user.tab();
+    expect(markerChipOnRow(container, "case_0000")).toHaveFocus();
+
+    // A prop change the desk agent never asked for -- the partner names
+    // arriving from their own query is the everyday one.
+    act(() => {
+      rerenderLedger(
+        <LedgerTable
+          rows={buildRows(50)}
+          partnerNamesById={{ partner_1: "Skyline Travels" }}
+          reviewEntriesByCaseRef={FIRST_ROW_HAS_ONE_REVIEW_ITEM}
+        />,
+      );
+    });
+
+    // The re-render really happened -- otherwise the effect never ran and this
+    // proves nothing about its guard.
+    expect(mountedCell(container, "case_0000", "partner").textContent).toBe("Skyline Travels");
+    expect(markerChipOnRow(container, "case_0000")).toHaveFocus();
   });
 });
