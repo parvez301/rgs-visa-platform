@@ -68,9 +68,17 @@ const STILL_LOADING_QUERY = { data: undefined, isLoading: true, isError: false, 
 
 let currentReviewSummaryQuery: unknown = STILL_LOADING_QUERY;
 
-function stubReviewSummary(entries: OpenReviewSummaryEntry[]): void {
+/**
+ * G6: `unreadableReviewItemIds` was hard-coded to `[]` here, which made the one
+ * field nothing READ look exactly like the three that are read. It is a real
+ * parameter now, defaulted so every existing caller keeps its meaning.
+ */
+function stubReviewSummary(
+  entries: OpenReviewSummaryEntry[],
+  unreadableReviewItemIds: string[] = [],
+): void {
   currentReviewSummaryQuery = {
-    data: { entries, unreadableReviewItemIds: [] },
+    data: { entries, unreadableReviewItemIds },
     isLoading: false,
     isError: false,
     error: null,
@@ -167,12 +175,53 @@ describe("LedgerPage — the partial-ledger banner", () => {
   it("renders no banner on a clean load", () => {
     stubLedgerLoad({ truncated: false, unreadableCaseIds: [] });
     stubPartners();
+    // Explicitly clean on BOTH axes now that the banner has a third reason to
+    // appear: a summary with no unreadable items must still produce silence.
+    stubReviewSummary([{ caseRef: "RGS-1001", fieldItemIds: ["rev_1"], mergeItemIds: [] }], []);
 
     renderLedgerPage();
 
     // A banner that always shows is exactly as useless as one that never
     // does -- this case is as load-bearing as the other three.
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("says when import-review items could not be read, so a marked row is not silently clean (D40)", () => {
+    // Finding #5. `summariseOpenReviewItems` goes out of its way to name the
+    // items it could not parse and `LedgerPage` read `entries` alone, so a case
+    // whose review items are unreadable rendered as a clean row -- which
+    // inverts the markers' entire purpose (spec §7). The ledger itself is
+    // complete here, which is the point: this banner has to appear on a screen
+    // that has no OTHER reason to show one.
+    stubLedgerLoad({ truncated: false, unreadableCaseIds: [] });
+    stubPartners();
+    stubReviewSummary([], ["rev_bad_1", "rev_bad_2"]);
+
+    renderLedgerPage();
+
+    const banner = screen.getByRole("status");
+    expect(banner.textContent).toContain("2 import-review items could not be read");
+    // The ledger's own two sentences stay out of it -- neither condition holds.
+    expect(banner.textContent).not.toContain("Loaded the first");
+    expect(banner.textContent).not.toContain("could not be read from storage");
+  });
+
+  it("says all three things at once, and none hides the others", () => {
+    const shownRows = Array.from({ length: 4 }, (_unused, rowIndex) =>
+      buildLedgerRow({ caseId: `case_${rowIndex}` }),
+    );
+    stubLedgerLoad({ rows: shownRows, truncated: true, unreadableCaseIds: ["case_x"] });
+    stubPartners();
+    stubReviewSummary([], ["rev_bad_1"]);
+
+    renderLedgerPage();
+
+    const banner = screen.getByRole("status");
+    expect(banner.textContent).toContain("Loaded the first 4 cases");
+    expect(banner.textContent).toContain("1 case could not be read from storage");
+    // Singular, and still its own sentence rather than a clause appended to
+    // the one above it.
+    expect(banner.textContent).toContain("1 import-review item could not be read");
   });
 
   it("names how many rows ARE shown when truncated, never a fabricated missing count", () => {

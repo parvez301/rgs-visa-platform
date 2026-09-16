@@ -124,6 +124,14 @@ describe("ProposalCard", () => {
     expect(screen.getByText(/Cannot move custody from RETURNED to AT_EMBASSY/)).toBeInTheDocument();
     // The failed one is still there to retry or discard -- not silently gone.
     expect(screen.getByTestId("proposal-prop_2")).toBeInTheDocument();
+
+    // Finding #6 / D37: the failed proposal stays pending, so the card's
+    // sub-line used to read "Nothing below has been written yet" a few lines
+    // above its own "1 applied, 1 failed." -- two contradictory statements
+    // about whether a billable write happened, on the surface whose whole job
+    // is the Intent Handshake.
+    expect(screen.queryByText(/Nothing below has been written yet/i)).not.toBeInTheDocument();
+    expect(screen.getByText("1 applied. 1 still waiting for you.")).toBeInTheDocument();
   });
 
   it("offers Discard on every proposal (Escape Hatch)", () => {

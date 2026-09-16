@@ -400,7 +400,21 @@ export function ProposalCard({
       </h3>
       <p className="mt-1 text-[13px] text-crm-steel">
         {pendingProposals.length > 0
-          ? "Nothing below has been written yet. Approve applies it; Discard throws it away."
+          ? // "Nothing below has been written yet" is only true when nothing
+            // below HAS been written -- all three clauses, not just the first
+            // (finding #6, D37). After "Approve all 2" where one applied and
+            // one 409'd, the failed proposal stays pending, so the old
+            // one-clause condition put that sentence over a change that was
+            // written, a few lines above `describeApprovalOutcome`'s own
+            // "1 applied, 1 failed." Two contradictory statements about
+            // whether a billable write happened, on the approval surface.
+            appliedChanges.length === 0 && discardedProposalIds.length === 0
+            ? "Nothing below has been written yet. Approve applies it; Discard throws it away."
+            : describeMixedProposalState(
+                appliedChanges.length,
+                discardedProposalIds.length,
+                pendingProposals.length,
+              )
           : appliedChanges.length > 0
             ? "Nothing is left waiting for you on this turn."
             : "Nothing was written."}
@@ -626,6 +640,34 @@ function describeSettledHeading(appliedCount: number, discardedCount: number): s
     return appliedCount === 1 ? "1 change applied" : `${appliedCount} changes applied`;
   }
   return discardedCount === 1 ? "1 change discarded" : `${discardedCount} changes discarded`;
+}
+
+/**
+ * What the card says while SOME of this turn's work has settled and some has
+ * not -- the state the "nothing has been written yet" sentence used to cover
+ * and lie about.
+ *
+ * Each fact gets its own short sentence, and the still-pending one comes last
+ * because it is the one the desk agent can still act on. Counts only: there is
+ * no enum here to route through `labels.ts`, and a per-item account of WHICH
+ * change did what is already below, on the items themselves.
+ */
+function describeMixedProposalState(
+  appliedCount: number,
+  discardedCount: number,
+  pendingCount: number,
+): string {
+  const sentences: string[] = [];
+  if (appliedCount > 0) {
+    sentences.push(appliedCount === 1 ? "1 applied." : `${appliedCount} applied.`);
+  }
+  if (discardedCount > 0) {
+    sentences.push(discardedCount === 1 ? "1 discarded." : `${discardedCount} discarded.`);
+  }
+  sentences.push(
+    pendingCount === 1 ? "1 still waiting for you." : `${pendingCount} still waiting for you.`,
+  );
+  return sentences.join(" ");
 }
 
 function describeApprovalOutcome(outcome: ApprovalOutcome): string {

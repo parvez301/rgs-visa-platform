@@ -124,7 +124,18 @@ export function LedgerPage() {
 
   const ledgerLoad = ledgerRowsQuery.data;
   const unreadableCaseCount = ledgerLoad?.unreadableCaseIds.length ?? 0;
-  const isLedgerPartial = Boolean(ledgerLoad?.truncated) || unreadableCaseCount > 0;
+  /**
+   * D40 / finding #5: the review summary names the items it could not parse,
+   * and nothing read that list -- so a case whose review items are unreadable
+   * rendered as a CLEAN row, which inverts the whole argument for the markers
+   * (spec §7: a dirty row must not look clean). It joins the partial-ledger
+   * banner rather than getting a banner of its own: that banner is already a
+   * `role="status"` stating several independent facts about how complete this
+   * screen is, and this is one more.
+   */
+  const unreadableReviewItemCount = reviewSummaryQuery.data?.unreadableReviewItemIds.length ?? 0;
+  const isLedgerPartial =
+    Boolean(ledgerLoad?.truncated) || unreadableCaseCount > 0 || unreadableReviewItemCount > 0;
 
   const visibleLedgerRows = useMemo(() => {
     const loadedRows = ledgerLoad?.rows ?? [];
@@ -212,6 +223,7 @@ export function LedgerPage() {
               Boolean(ledgerLoad?.truncated),
               ledgerLoad?.rows.length ?? 0,
               unreadableCaseCount,
+              unreadableReviewItemCount,
             )}
           </div>
         )}
@@ -264,6 +276,7 @@ function describePartialLedgerBanner(
   isTruncated: boolean,
   loadedRowCount: number,
   unreadableCaseCount: number,
+  unreadableReviewItemCount: number,
 ): string {
   const sentences: string[] = [];
   if (isTruncated) {
@@ -274,6 +287,17 @@ function describePartialLedgerBanner(
   if (unreadableCaseCount > 0) {
     sentences.push(
       `${unreadableCaseCount} case${unreadableCaseCount === 1 ? "" : "s"} could not be read from storage and ${unreadableCaseCount === 1 ? "is" : "are"} missing from this list.`,
+    );
+  }
+  if (unreadableReviewItemCount > 0) {
+    // Names the CONSEQUENCE, not just the count: an unreadable review item is
+    // invisible on the row it belongs to, and a row that needs attention
+    // looking clean is the thing a desk agent has to be told about. The count
+    // is known exactly (it is `unreadableReviewItemIds.length`), the case it
+    // belongs to is not -- the summary cannot say which case an item it could
+    // not parse was about -- so the sentence does not pretend to name one.
+    sentences.push(
+      `${unreadableReviewItemCount} import-review item${unreadableReviewItemCount === 1 ? "" : "s"} could not be read, so a row that needs attention may look clean.`,
     );
   }
   return sentences.join(" ");
