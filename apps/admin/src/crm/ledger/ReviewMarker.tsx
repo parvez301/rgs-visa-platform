@@ -28,6 +28,51 @@ import { REVIEW_REASON_LABELS } from "../labels";
 /** px between the marker chip and the popover it opens. */
 const POPOVER_GAP_PX = 4;
 const POPOVER_WIDTH_PX = 360;
+/**
+ * The panel's own scroll box. It is BOTH the CSS max-height and the height the
+ * flip below reserves (fix round 1, F2): while the max-height lived only in a
+ * `max-h-80` class, the number that decided WHERE the panel goes and the number
+ * that decided how tall it gets were two values free to drift apart.
+ */
+const POPOVER_MAX_HEIGHT_PX = 320;
+
+/** What the anchor maths needs from the chip's rect, and nothing else. */
+interface MarkerChipRect {
+  top: number;
+  bottom: number;
+  left: number;
+}
+
+/**
+ * Where the panel can actually be READ, given where the chip is
+ * (fix round 1, F2).
+ *
+ * The Ledger is a full-height grid of 32px rows, so a large share of the chips
+ * a desk agent can see sit in the bottom 320px of the viewport. Anchored below
+ * with no flip, those panels open past the fold -- and because the panel is
+ * `position: fixed`, scrolling the grid never brings one into view; it only
+ * moves the row away from the parked panel. Flipping the panel above the chip
+ * is what keeps it on screen at all.
+ *
+ * The horizontal clamp is the same argument sideways: the REF column is
+ * sticky-left, so the chip is near the left edge on a wide screen, but on a
+ * narrow one (or a browser window dragged small) a 360px panel anchored at the
+ * chip runs off the right edge, where `position: fixed` again means no scroll
+ * reaches it.
+ */
+function computePopoverAnchor(markerChipRect: MarkerChipRect): { top: number; left: number } {
+  const fitsBelowTheChip =
+    markerChipRect.bottom + POPOVER_GAP_PX + POPOVER_MAX_HEIGHT_PX <= window.innerHeight;
+  return {
+    top: fitsBelowTheChip
+      ? markerChipRect.bottom + POPOVER_GAP_PX
+      : markerChipRect.top - POPOVER_MAX_HEIGHT_PX - POPOVER_GAP_PX,
+    // `Math.max(0, ...)` as well as the right-edge clamp: on a viewport
+    // narrower than the panel itself the right-edge clamp alone computes a
+    // NEGATIVE left, which hides the panel off the other side instead.
+    left: Math.max(0, Math.min(markerChipRect.left, window.innerWidth - POPOVER_WIDTH_PX)),
+  };
+}
 
 /**
  * The two kinds of review work, which spec §7 requires be marked differently:
@@ -92,6 +137,16 @@ interface ReviewMarkerProps {
    * answers.
    */
   entry: OpenReviewSummaryEntry | undefined;
+  /**
+   * Whether this marker's row is the one the grid's focus sits on (R74).
+   *
+   * Passed down from `LedgerTable` through `LedgerCellContext` rather than read
+   * from a context, and REQUIRED rather than defaulted: a default would let a
+   * new call site silently pick either "every marker is a Tab stop" (the
+   * regression R74 exists to prevent) or "no marker is reachable by keyboard
+   * at all" (the reason a plain `tabIndex={-1}` is not the answer).
+   */
+  isFocusedRow: boolean;
 }
 
 /**
@@ -105,15 +160,25 @@ interface ReviewMarkerProps {
  * and a `useQuery`/`useAuth` at this level would make every row depend on
  * providers it does not otherwise need.
  */
-export function ReviewMarker({ caseRef, entry }: ReviewMarkerProps) {
+export function ReviewMarker({ caseRef, entry, isFocusedRow }: ReviewMarkerProps) {
   if (entry === undefined) return null;
   return (
     <>
       {entry.fieldItemIds.length > 0 && (
-        <OneKindOfMarker caseRef={caseRef} kind="field" reviewItemIds={entry.fieldItemIds} />
+        <OneKindOfMarker
+          caseRef={caseRef}
+          kind="field"
+          reviewItemIds={entry.fieldItemIds}
+          isFocusedRow={isFocusedRow}
+        />
       )}
       {entry.mergeItemIds.length > 0 && (
-        <OneKindOfMarker caseRef={caseRef} kind="merge" reviewItemIds={entry.mergeItemIds} />
+        <OneKindOfMarker
+          caseRef={caseRef}
+          kind="merge"
+          reviewItemIds={entry.mergeItemIds}
+          isFocusedRow={isFocusedRow}
+        />
       )}
     </>
   );
@@ -123,6 +188,7 @@ interface OneKindOfMarkerProps {
   caseRef: string;
   kind: ReviewMarkerKind;
   reviewItemIds: string[];
+  isFocusedRow: boolean;
 }
 
 /**
@@ -140,7 +206,7 @@ interface OneKindOfMarkerProps {
  * `role="group"` with an `aria-label` naming the REF says what this is without
  * claiming the rest of the screen is inert.
  */
-function OneKindOfMarker({ caseRef, kind, reviewItemIds }: OneKindOfMarkerProps) {
+function OneKindOfMarker({ caseRef, kind, reviewItemIds, isFocusedRow }: OneKindOfMarkerProps) {
   const markerCopy = MARKER_COPY[kind];
   const markerButtonRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -153,13 +219,20 @@ function OneKindOfMarker({ caseRef, kind, reviewItemIds }: OneKindOfMarkerProps)
   const isPopoverOpen = popoverAnchor !== undefined;
   const markerWords = markerCopy.describeMarker(reviewItemIds.length);
 
-  const closePopover = useCallback(() => {
+  // Closing WITHOUT taking focus back, for the close paths no human asked for:
+  // the row scrolled away underneath the panel, or the row unmounted. Nobody
+  // pressed anything, so there is no "back where the human left it" to go to.
+  const dismissPopoverWithoutRestoringFocus = useCallback(() => {
     setPopoverAnchor(undefined);
+  }, []);
+
+  const closePopover = useCallback(() => {
+    dismissPopoverWithoutRestoringFocus();
     // R67: focus goes back where the human left it. Nothing does this for us --
     // the popover lives in `document.body`, so closing it would otherwise drop
     // focus onto the body and leave a keyboard user at the top of the page.
     markerButtonRef.current?.focus();
-  }, []);
+  }, [dismissPopoverWithoutRestoringFocus]);
 
   // Escape and click-outside, while open only. Both listeners are registered
   // in the CAPTURE phase: the Ledger's own grid keymap (`useGridKeyboard`)
@@ -189,6 +262,40 @@ function OneKindOfMarker({ caseRef, kind, reviewItemIds }: OneKindOfMarkerProps)
   }, [isPopoverOpen, closePopover]);
 
   /**
+   * Fix round 1, F2: a scroll anywhere outside the panel closes it.
+   *
+   * The panel is positioned `fixed` from the chip's rect at the moment it
+   * opened, so it does not follow the row it belongs to -- and when the grid
+   * scrolls, the row is exactly what moves. Closing is the honest answer:
+   * re-measuring every frame would glue a 360px panel to a row travelling up
+   * the screen and then leave it hanging in space when the virtualizer
+   * unmounts that row anyway.
+   *
+   * `capture: true` because `scroll` events do not bubble: the Ledger's own
+   * scroll container is a descendant of `document`, and only a capture-phase
+   * listener here sees its scroll at all.
+   *
+   * Focus is deliberately NOT restored on this path, for the same reason the
+   * unmount path does not restore it: nobody closed this panel, and pulling
+   * focus back onto a chip that may itself be scrolling out of the mounted
+   * window is worse than leaving focus where the human put it.
+   */
+  useEffect(() => {
+    if (!isPopoverOpen) return;
+    function handleScrollAnywhere(scrollEvent: Event): void {
+      const scrolledNode = scrollEvent.target as Node | null;
+      // The panel has a scroll box of its own (max-height 320): a scroll
+      // INSIDE it is a human reading this list, not the row moving under it.
+      if (scrolledNode !== null && popoverRef.current?.contains(scrolledNode) === true) return;
+      dismissPopoverWithoutRestoringFocus();
+    }
+    document.addEventListener("scroll", handleScrollAnywhere, true);
+    return () => {
+      document.removeEventListener("scroll", handleScrollAnywhere, true);
+    };
+  }, [isPopoverOpen, dismissPopoverWithoutRestoringFocus]);
+
+  /**
    * Focus moves INTO the popover on open, which is both the ordinary
    * expectation for a disclosure and the thing that stops `LedgerTable`'s
    * focus-sync effect (R57) from pulling focus back onto the focused gridcell
@@ -212,10 +319,10 @@ function OneKindOfMarker({ caseRef, kind, reviewItemIds }: OneKindOfMarkerProps)
       return;
     }
     const markerRect = markerButtonRef.current?.getBoundingClientRect();
-    setPopoverAnchor({
-      top: (markerRect?.bottom ?? 0) + POPOVER_GAP_PX,
-      left: markerRect?.left ?? 0,
-    });
+    // The ref is this very button, so it is set by the time its own click
+    // handler runs; the zero rect keeps the maths total rather than guarding a
+    // state that cannot happen.
+    setPopoverAnchor(computePopoverAnchor(markerRect ?? { top: 0, bottom: 0, left: 0 }));
   }
 
   return (
@@ -224,6 +331,19 @@ function OneKindOfMarker({ caseRef, kind, reviewItemIds }: OneKindOfMarkerProps)
         ref={markerButtonRef}
         type="button"
         onClick={togglePopover}
+        // R74: a ROVING tab stop, exactly like the gridcell wrapper's own
+        // (`LedgerTable.tsx`). The REF `<Link>` beside this chip carries
+        // `tabIndex={-1}` because an anchor at the browser default would put a
+        // Tab stop in every mounted row; a plain `<button>` here was quietly
+        // doing that same thing. But `tabIndex={-1}` alone would make the
+        // marker unreachable without a mouse, and spec §5's keymap is fixed --
+        // there is no ninth key to add. Tabbable on the focused row ONLY, so
+        // the grid still has at most one marker in its tab order: Tab from the
+        // focused REF cell reaches this chip and the next Tab leaves the grid;
+        // from a cell further right in the same row the chip is one Shift+Tab
+        // away instead, because the REF cell comes first in document order.
+        // Every other mounted marker stays out of the tab order entirely.
+        tabIndex={isFocusedRow ? 0 : -1}
         aria-expanded={isPopoverOpen}
         title={markerWords}
         className={markerCopy.chipClassName}
@@ -252,11 +372,14 @@ function OneKindOfMarker({ caseRef, kind, reviewItemIds }: OneKindOfMarkerProps)
               top: popoverAnchor.top,
               left: popoverAnchor.left,
               width: POPOVER_WIDTH_PX,
+              // The same number `computePopoverAnchor` reserves when it flips
+              // the panel above the chip -- see POPOVER_MAX_HEIGHT_PX.
+              maxHeight: POPOVER_MAX_HEIGHT_PX,
             }}
             // `crm-root` because this subtree hangs off `document.body`, outside
             // the Ledger's own root -- without it the panel would inherit the
             // browser's default type rather than the desk's 14px/1.45.
-            className="crm-root z-50 max-h-80 overflow-auto rounded-crm-card border border-crm-rule-box bg-crm-canvas p-3 shadow"
+            className="crm-root z-50 overflow-auto rounded-crm-card border border-crm-rule-box bg-crm-canvas p-3 shadow"
           >
             <div className="flex items-baseline justify-between gap-2">
               <p className="font-medium text-crm-charcoal">

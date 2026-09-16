@@ -10,20 +10,24 @@ import { ReviewMarker } from "../../src/crm/ledger/ReviewMarker";
 
 describe("ReviewMarker", () => {
   it("marks a case with field-level problems", () => {
-    render(<ReviewMarker caseRef="RGS-1001" entry={{ caseRef: "RGS-1001", fieldItemIds: ["rev_1", "rev_2"], mergeItemIds: [] }} />);
+    // `isFocusedRow={false}` on purpose (R74): a marked row carries its mark
+    // whether or not the grid's focus is on it -- what roves with the focus is
+    // only whether Tab can REACH the chip, which LedgerTable.test.tsx asserts
+    // against a real grid.
+    render(<ReviewMarker caseRef="RGS-1001" entry={{ caseRef: "RGS-1001", fieldItemIds: ["rev_1", "rev_2"], mergeItemIds: [] }} isFocusedRow={false} />);
     expect(screen.getByRole("button", { name: /2 import problems/i })).toBeInTheDocument();
   });
 
   it("marks a merge candidate differently from a field problem", () => {
-    const { container: fieldMarker } = render(<ReviewMarker caseRef="RGS-1001" entry={{ caseRef: "RGS-1001", fieldItemIds: ["rev_1"], mergeItemIds: [] }} />);
-    const { container: mergeMarker } = render(<ReviewMarker caseRef="RGS-1002" entry={{ caseRef: "RGS-1002", fieldItemIds: [], mergeItemIds: ["rev_9"] }} />);
+    const { container: fieldMarker } = render(<ReviewMarker caseRef="RGS-1001" entry={{ caseRef: "RGS-1001", fieldItemIds: ["rev_1"], mergeItemIds: [] }} isFocusedRow={false} />);
+    const { container: mergeMarker } = render(<ReviewMarker caseRef="RGS-1002" entry={{ caseRef: "RGS-1002", fieldItemIds: [], mergeItemIds: ["rev_9"] }} isFocusedRow={false} />);
 
     expect(mergeMarker.textContent).toMatch(/may be a duplicate/i);
     expect(mergeMarker.firstElementChild?.className).not.toBe(fieldMarker.firstElementChild?.className);
   });
 
   it("renders no marker at all for a clean case", () => {
-    const { container } = render(<ReviewMarker caseRef="RGS-1001" entry={undefined} />);
+    const { container } = render(<ReviewMarker caseRef="RGS-1001" entry={undefined} isFocusedRow={false} />);
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -122,6 +126,48 @@ describe("ReviewMarker", () => {
     expect(within(firstItem).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /1 import problem/i })).toBeInTheDocument();
   });
+
+  it("opens the panel ABOVE a chip with no room below it, instead of below the fold", async () => {
+    // Not an edge case: the Ledger is a full-height grid of 32px rows, so on
+    // an 800px viewport roughly the bottom 40% of the chips a desk agent can
+    // see have less than a panel's height beneath them. Anchored below with no
+    // flip, every one of those panels opens off-screen -- and the panel is
+    // `position: fixed`, so scrolling the grid never brings it back.
+    stubReviewFetch({
+      fieldItemIds: ["rev_1"],
+      reviewItemsById: { rev_1: buildReviewItem({ reviewItemId: "rev_1" }) },
+    });
+    setViewportSize({ innerWidth: 1280, innerHeight: 800 });
+    renderMarkerForCase();
+
+    const marker = await screen.findByRole("button", { name: /1 import problem/i });
+    const chipTopPx = 700;
+    stubChipRect(marker, { top: chipTopPx, left: 40 });
+
+    await userEvent.click(marker);
+
+    const panel = screen.getByRole("group", { name: `Import review for ${TEST_CASE_REF}` });
+    // The whole panel, not just its top edge, has to end up above the chip.
+    expect(parseFloat(panel.style.top) + PANEL_MAX_HEIGHT_PX).toBeLessThanOrEqual(chipTopPx);
+  });
+
+  it("clamps the panel inside the viewport's right edge", async () => {
+    stubReviewFetch({
+      fieldItemIds: ["rev_1"],
+      reviewItemsById: { rev_1: buildReviewItem({ reviewItemId: "rev_1" }) },
+    });
+    const viewportWidthPx = 1000;
+    setViewportSize({ innerWidth: viewportWidthPx, innerHeight: 800 });
+    renderMarkerForCase();
+
+    const marker = await screen.findByRole("button", { name: /1 import problem/i });
+    stubChipRect(marker, { top: 100, left: 900 });
+
+    await userEvent.click(marker);
+
+    const panel = screen.getByRole("group", { name: `Import review for ${TEST_CASE_REF}` });
+    expect(parseFloat(panel.style.left)).toBe(viewportWidthPx - PANEL_WIDTH_PX);
+  });
 });
 
 const TEST_CASE_REF = "RGS-1001";
@@ -140,6 +186,54 @@ const TEST_AUTH_STATE: AuthState = {
 interface RequestLogEntry {
   method: string;
   url: string;
+}
+
+/**
+ * The panel's own two layout numbers, written out rather than imported from
+ * `ReviewMarker.tsx`: an assertion built from the same constant the component
+ * positions with would still hold if both moved together, and "the panel is
+ * 360 wide and at most 320 tall" is exactly what these tests are pinning.
+ */
+const PANEL_WIDTH_PX = 360;
+const PANEL_MAX_HEIGHT_PX = 320;
+
+/** jsdom's own viewport, restored after every test that changes it. */
+const ORIGINAL_VIEWPORT_SIZE = { innerWidth: window.innerWidth, innerHeight: window.innerHeight };
+
+function setViewportSize(viewportSize: { innerWidth: number; innerHeight: number }): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: viewportSize.innerWidth,
+  });
+  Object.defineProperty(window, "innerHeight", {
+    configurable: true,
+    writable: true,
+    value: viewportSize.innerHeight,
+  });
+}
+
+/**
+ * Where the chip is on screen. jsdom has no layout engine -- every element
+ * reports a zero rect -- so a placement test that did not stub this would be
+ * asking the component where it puts a panel anchored to a 0x0 chip at the
+ * top-left corner, which is the one position no clamp and no flip ever
+ * changes.
+ */
+function stubChipRect(chipButton: HTMLElement, chipPosition: { top: number; left: number }): void {
+  const CHIP_SIDE_PX = 16; // `h-4 min-w-4`
+  chipButton.getBoundingClientRect = () =>
+    ({
+      top: chipPosition.top,
+      bottom: chipPosition.top + CHIP_SIDE_PX,
+      left: chipPosition.left,
+      right: chipPosition.left + CHIP_SIDE_PX,
+      width: CHIP_SIDE_PX,
+      height: CHIP_SIDE_PX,
+      x: chipPosition.left,
+      y: chipPosition.top,
+      toJSON: () => ({}),
+    }) as DOMRect;
 }
 
 function buildReviewItem(overrides: Partial<crm.ReviewItem> = {}): crm.ReviewItem {
@@ -250,7 +344,9 @@ function ReviewMarkerForCase() {
   const reviewEntry = reviewSummaryQuery.data?.entries.find(
     (summaryEntry) => summaryEntry.caseRef === TEST_CASE_REF,
   );
-  return <ReviewMarker caseRef={TEST_CASE_REF} entry={reviewEntry} />;
+  // These tests drive the chip with the mouse, so `isFocusedRow` changes
+  // nothing they assert -- it governs the chip's TAB reachability only (R74).
+  return <ReviewMarker caseRef={TEST_CASE_REF} entry={reviewEntry} isFocusedRow={true} />;
 }
 
 function renderMarkerForCase(element: ReactElement = <ReviewMarkerForCase />) {
@@ -270,4 +366,5 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  setViewportSize(ORIGINAL_VIEWPORT_SIZE);
 });

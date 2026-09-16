@@ -24,6 +24,15 @@ export const LEDGER_ROW_HEIGHT = 32;
 export interface LedgerCellContext {
   /** This case's open review items, joined on `caseRef`. Absent for a clean case. */
   reviewEntry?: OpenReviewSummaryEntry;
+  /**
+   * Whether the grid's focus sits on this row (R74, fix round 1 F1).
+   *
+   * It rides in the cell context rather than in `LedgerRow` because it is not
+   * a fact about the CASE at all -- it is a fact about where the grid's cursor
+   * is this render, which is precisely the kind of per-row, not-in-the-row
+   * datum this interface exists for.
+   */
+  isFocusedRow: boolean;
 }
 
 export interface LedgerColumn {
@@ -69,6 +78,9 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
     // the only thing the summary knows about a case -- the projection carries
     // no caseId -- and because the REF cell is sticky, so the mark stays
     // visible however far right the desk agent has scrolled.
+    // R74 (fix round 1, F1): the marker chip is the ONE exception to the "no
+    // Tab stop per mounted row" rule above, and only because its tab stop
+    // ROVES with the grid's focus -- `isFocusedRow` is what makes it roam.
     render: (row, _partnerName, cellContext) => (
       <>
         <Link
@@ -78,7 +90,11 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
         >
           {row.caseRef}
         </Link>
-        <ReviewMarker caseRef={row.caseRef} entry={cellContext.reviewEntry} />
+        <ReviewMarker
+          caseRef={row.caseRef}
+          entry={cellContext.reviewEntry}
+          isFocusedRow={cellContext.isFocusedRow}
+        />
       </>
     ),
   },

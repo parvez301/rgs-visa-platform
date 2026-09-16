@@ -371,6 +371,12 @@ export function LedgerTable({
               // ignore the answer.
               const cellContext: LedgerCellContext = {
                 reviewEntry: reviewEntriesByCaseRef?.get(row.caseRef),
+                // R74: which row the grid's focus is on decides which review
+                // marker is a Tab stop. Compared against the ROW index only --
+                // the marker lives in the REF cell but is reachable by Tab
+                // from whichever cell of that row holds focus, so the column
+                // deliberately does not enter into it.
+                isFocusedRow: gridState.focus.rowIndex === virtualRow.index,
               };
               return (
                 // The positioned wrapper carries NO role (fix round 1, F5):

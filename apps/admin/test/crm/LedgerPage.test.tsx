@@ -10,6 +10,7 @@ import { useLedgerRows, usePartners } from "../../src/crm/api/hooks";
 import type { LedgerLoad, OpenReviewSummaryEntry } from "../../src/crm/api/crmClient";
 import { UndoToastProvider } from "../../src/crm/UndoToast";
 import { AgentPanelProvider } from "../../src/crm/agent/AgentPanelProvider";
+import { mountedCell } from "./virtual";
 
 /**
  * `AdminShell` renders a react-router `<Link>`/`<NavLink>` in its header.
@@ -325,9 +326,12 @@ describe("LedgerPage — review markers on the row (spec §7)", () => {
 
     const { container } = renderLedgerPage();
 
-    const markedRefCell = container.querySelector<HTMLElement>(
-      "[data-case-id='case_0002'] [data-column='caseRef']",
-    )!;
+    // Through the harness helper, never a hand-rolled selector (fix round 1,
+    // F3): `mountedCell` throws when the virtualizer mounted nothing, which is
+    // the one thing that would make every assertion below pass vacuously --
+    // spec §10's first named trap. A raw `querySelector` with a `!` is how
+    // that door gets re-opened.
+    const markedRefCell = mountedCell(container, "case_0002", "caseRef");
     // Both kinds, because this case carries both kinds of work -- and they are
     // separate marks, because they are resolved by separate judgements.
     expect(within(markedRefCell).getByRole("button", { name: /1 import problem/i })).toBeInTheDocument();
@@ -336,9 +340,7 @@ describe("LedgerPage — review markers on the row (spec §7)", () => {
     // The row the summary said nothing about carries no mark at all. Without
     // this the assertions above would also pass for a table that marked every
     // row it rendered.
-    const cleanRefCell = container.querySelector<HTMLElement>(
-      "[data-case-id='case_0001'] [data-column='caseRef']",
-    )!;
+    const cleanRefCell = mountedCell(container, "case_0001", "caseRef");
     expect(within(cleanRefCell).queryByRole("button")).not.toBeInTheDocument();
   });
 });

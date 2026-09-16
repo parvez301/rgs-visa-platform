@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
+import type { OpenReviewSummaryEntry } from "../../src/crm/api/crmClient";
 import { LedgerTable } from "../../src/crm/ledger/LedgerTable";
 import { mountedCaseIds, mountedCell, renderLedger, scrollLedgerTo } from "./virtual";
 
@@ -21,6 +24,39 @@ function buildRows(rowCount: number): crm.LedgerRow[] {
 }
 
 const partnerNames = { partner_1: "Skyline Travels" };
+
+/**
+ * Two marked rows, one kind of work each -- the shape R74 is about. Two,
+ * because "exactly one chip is tabbable" says nothing at all about roving if
+ * only one chip exists to be it.
+ */
+const TWO_MARKED_ROWS: ReadonlyMap<string, OpenReviewSummaryEntry> = new Map([
+  ["RGS-1000", { caseRef: "RGS-1000", fieldItemIds: ["rev_1"], mergeItemIds: [] }],
+  ["RGS-1001", { caseRef: "RGS-1001", fieldItemIds: ["rev_2"], mergeItemIds: [] }],
+]);
+
+function getGridElement(container: HTMLElement): HTMLElement {
+  const gridElement = container.querySelector<HTMLElement>("[data-testid='ledger-scroll']");
+  if (gridElement === null) throw new Error("No ledger scroll/grid container in this render");
+  return gridElement;
+}
+
+/**
+ * Every mounted review-marker chip, with the tab stop it carries.
+ *
+ * Read through `mountedCaseIds`/`mountedCell`, which throw rather than hand
+ * back an empty list: "no chip is a tab stop" must never be able to pass
+ * because the virtualizer mounted nothing (spec §10's first named trap). The
+ * REF cell's other child is an `<a>`, so every `button` in it is a marker.
+ */
+function markerChipTabStops(container: HTMLElement): { caseId: string; tabIndex: number }[] {
+  return mountedCaseIds(container).flatMap((caseId) =>
+    [...mountedCell(container, caseId, "caseRef").querySelectorAll("button")].map((chipButton) => ({
+      caseId,
+      tabIndex: chipButton.tabIndex,
+    })),
+  );
+}
 
 describe("LedgerTable", () => {
   it("mounts a window of rows, not all 7,156", () => {
@@ -148,6 +184,96 @@ describe("LedgerTable", () => {
     expect(cellsNotOwnedByARow).toHaveLength(0);
   });
 
+  it("R74: only the FOCUSED row's review marker is a Tab stop", () => {
+    // The REF `<Link>` beside the chip carries `tabIndex={-1}` precisely so
+    // that Tab still leaves the grid after one press; a plain `<button>` in
+    // the same cell was quietly putting that stop back, once per mounted
+    // marked row. The chip stays keyboard-reachable by roving with the grid's
+    // focus instead of by leaving the tab order alone.
+    const { container } = renderLedger(
+      <LedgerTable
+        rows={buildRows(5)}
+        partnerNamesById={partnerNames}
+        reviewEntriesByCaseRef={TWO_MARKED_ROWS}
+      />,
+    );
+
+    const chipTabStops = markerChipTabStops(container);
+    // Guard: if the fixture stops producing two chips, the assertion below is
+    // a statement about one chip and proves no roving at all.
+    expect(chipTabStops.map((chip) => chip.caseId)).toEqual(["case_0000", "case_0001"]);
+    // Focus starts on row 0, so row 0's chip is the only reachable one.
+    expect(chipTabStops.filter((chip) => chip.tabIndex === 0)).toEqual([
+      { caseId: "case_0000", tabIndex: 0 },
+    ]);
+  });
+
+  it("R74: the tabbable marker follows the grid's focus down the rows", () => {
+    const { container } = renderLedger(
+      <LedgerTable
+        rows={buildRows(5)}
+        partnerNamesById={partnerNames}
+        reviewEntriesByCaseRef={TWO_MARKED_ROWS}
+      />,
+    );
+
+    fireEvent.keyDown(getGridElement(container), { key: "ArrowDown" });
+
+    const chipTabStops = markerChipTabStops(container);
+    expect(chipTabStops.filter((chip) => chip.tabIndex === 0)).toEqual([
+      { caseId: "case_0001", tabIndex: 0 },
+    ]);
+    // And the chip the focus LEFT is back out of the tab order -- without
+    // this, a marker that only ever gained tab stops would still pass above.
+    expect(chipTabStops.find((chip) => chip.caseId === "case_0000")?.tabIndex).toBe(-1);
+  });
+
+  it("closes an open review panel when the grid scrolls under it, and does not grab focus back", async () => {
+    // The panel's items are fetched only when it opens (R69) and this file
+    // stubs no API, so a `fetch` that never settles leaves them on "Loading
+    // this review item…" -- nothing here asserts anything about item content.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    const { container } = renderLedger(
+      <LedgerTable
+        rows={buildRows(60)}
+        partnerNamesById={partnerNames}
+        reviewEntriesByCaseRef={TWO_MARKED_ROWS}
+      />,
+    );
+
+    const markerChip = within(mountedCell(container, "case_0000", "caseRef")).getByRole("button", {
+      name: /1 import problem/i,
+    });
+    await userEvent.click(markerChip);
+    expect(screen.getByRole("group", { name: "Import review for RGS-1000" })).toBeInTheDocument();
+
+    // Three rows' worth: far enough to be a real scroll, and well inside the
+    // 12-row overscan, so case_0000 is still mounted afterwards. That is what
+    // makes this a test of the scroll listener rather than of the unmount
+    // path, which closes the panel for a different reason entirely.
+    //
+    // Wrapped in `act` because this scroll updates TWO components (the
+    // virtualizer's own window and the marker's open state) from a listener
+    // React did not dispatch. The neighbouring scroll test predates this and
+    // carries the suite's one known `act(...)` warning; a second source of
+    // them is a defect, not a quirk to live with.
+    await act(async () => {
+      await scrollLedgerTo(container, 3 * 32);
+    });
+    expect(mountedCaseIds(container)).toContain("case_0000");
+
+    // The panel is `position: fixed` from the chip's rect at open time, so it
+    // cannot follow the row -- it would hang over unrelated rows while the
+    // agent scrolled past.
+    expect(screen.queryByRole("group", { name: "Import review for RGS-1000" })).not.toBeInTheDocument();
+    // Nobody closed this panel, so nothing may take focus back to the chip:
+    // that would move a keyboard agent's focus for them, mid-scroll.
+    expect(document.activeElement).not.toBe(markerChip);
+  });
+
   it("renders an empty ledger as an empty state rather than a broken table", () => {
     const { container, getByText } = renderLedger(
       <LedgerTable rows={[]} partnerNamesById={partnerNames} />,
@@ -156,4 +282,8 @@ describe("LedgerTable", () => {
     expect(mountedCaseIds(container, { allowEmpty: true })).toEqual([]);
     expect(getByText(/no cases/i)).toBeInTheDocument();
   });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
