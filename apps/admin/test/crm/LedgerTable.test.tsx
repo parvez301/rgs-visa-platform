@@ -155,7 +155,14 @@ describe("LedgerTable", () => {
     );
     expect(mountedCaseIds(container)).not.toContain("case_3000");
 
-    await scrollLedgerTo(container, 3000 * 32);
+    // R78: wrapped in `act` because this scroll updates the virtualizer's
+    // mounted window from a listener React did not dispatch. Nothing about
+    // what this test asserts changes -- both assertions below are made after
+    // the scroll has settled either way -- and the sibling scroll test below
+    // has done exactly this since it was written.
+    await act(async () => {
+      await scrollLedgerTo(container, 3000 * 32);
+    });
 
     // Asserted against a row the virtualizer actually mounted -- this is the
     // mechanism spec §10 asks the plan to name.
@@ -257,9 +264,8 @@ describe("LedgerTable", () => {
     //
     // Wrapped in `act` because this scroll updates TWO components (the
     // virtualizer's own window and the marker's open state) from a listener
-    // React did not dispatch. The neighbouring scroll test predates this and
-    // carries the suite's one known `act(...)` warning; a second source of
-    // them is a defect, not a quirk to live with.
+    // React did not dispatch. The neighbouring scroll test carried the suite's
+    // one known `act(...)` warning until R78 wrapped it the same way.
     await act(async () => {
       await scrollLedgerTo(container, 3 * 32);
     });

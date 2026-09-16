@@ -265,7 +265,13 @@ describe("useLedgerEdit", () => {
     await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
 
     expect(cachedRow(queryClient, "case_1").caseStatus).toBe("IN_PROGRESS");
-    resolveRequest({ caseStatus: "IN_PROGRESS" });
+    // R78: settled inside `act` purely so the success path's `showUndo` --
+    // a `setToasts` in `UndoToastProvider` -- does not land outside one and
+    // warn on stderr. The assertion above is unchanged and still made BEFORE
+    // the request resolves, which is the whole claim of this test.
+    await act(async () => {
+      resolveRequest({ caseStatus: "IN_PROGRESS" });
+    });
   });
 
   it("puts the old value back when the request fails", async () => {
@@ -303,7 +309,11 @@ describe("useLedgerEdit", () => {
     await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
 
     expect(cachedRow(queryClient, "case_1", secondFilterQueryKey).caseStatus).toBe("IN_PROGRESS");
-    resolveRequest({ caseStatus: "IN_PROGRESS" });
+    // R78, same reason as the test above: the assertion is already made, and
+    // this only keeps the success path's toast from updating outside `act`.
+    await act(async () => {
+      resolveRequest({ caseStatus: "IN_PROGRESS" });
+    });
   });
 
   it("R34: a failed write rolls back EVERY matching filter's cache entry, not just the guessed key", async () => {
