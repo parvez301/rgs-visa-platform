@@ -44,7 +44,7 @@ afterEach(() => {
  * from would still hold if both moved together, which is exactly the change
  * this file exists to catch.
  */
-const LEDGER_ROW_HEIGHT_PX = 32;
+const LEDGER_ROW_HEIGHT_PX = 40;
 const APPLICANT_SUBROW_LINE_HEIGHT_PX = 28;
 
 function buildRows(rowCount: number): crm.LedgerRow[] {

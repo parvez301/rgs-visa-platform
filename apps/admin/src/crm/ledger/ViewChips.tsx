@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { COMPACT_BUTTON_CLASS, INPUT_CLASS } from "../components/controls";
 import type { LedgerFilters, LedgerSort } from "./filters";
 import { deleteView, isBuiltInLedgerViewId, loadViews, saveView, type LedgerView } from "./views";
 
@@ -100,14 +101,16 @@ export function ViewChips({ userEmail, activeFilters, activeSort, onApplyView }:
               onClick={() => selectView(view)}
               // R71, and the same treatment the status chips beside this row
               // now carry: the pressed chip keeps its lavender fill and takes
-              // `border-crm-steel`. `--crm-primary` marks exactly one control
+              // `border-ink-soft`. `--crm-primary` marks exactly one control
               // in the product, and a filter chip is not it -- the Save button
               // below has said so since fix round 1's F3, while the chip
               // beside it quietly carried the colour anyway.
-              className={`${isBuiltIn ? "rounded-crm-control" : "rounded-l-crm-control"} border px-2 py-1 text-[12px] ${
+              // A pressed pill is ink-filled, the Queue page's own convention for
+              // an active filter; the accent red is kept for actions.
+              className={`${isBuiltIn ? "rounded-full" : "rounded-l-full"} border px-3 py-1.5 text-xs font-semibold transition-colors ${
                 isActiveView
-                  ? "border-crm-steel bg-crm-lavender text-crm-charcoal"
-                  : "border-crm-rule-box text-crm-steel"
+                  ? "border-ink bg-ink text-paper"
+                  : "border-line bg-paper text-ink-soft hover:border-ink/30"
               }`}
             >
               {view.name}
@@ -117,7 +120,7 @@ export function ViewChips({ userEmail, activeFilters, activeSort, onApplyView }:
                 type="button"
                 aria-label={`Delete the "${view.name}" view`}
                 onClick={() => removeView(view.viewId)}
-                className="rounded-r-crm-control border border-l-0 border-crm-rule-box px-1.5 py-1 text-[12px] text-crm-steel"
+                className="rounded-r-full border border-l-0 border-line bg-paper px-2 py-1.5 text-xs text-ink-soft transition-colors hover:text-rgs-red-deep"
               >
                 ×
               </button>
@@ -141,17 +144,13 @@ export function ViewChips({ userEmail, activeFilters, activeSort, onApplyView }:
             }}
             placeholder="Name this view"
             aria-label="Name this view"
-            className="rounded-crm-control border border-crm-rule-box px-2 py-1 text-[12px]"
+            className={`${INPUT_CLASS} py-1 text-xs`}
           />
           <button
             type="button"
             onClick={confirmSaveCurrentView}
-            // Neutral, not `--crm-primary`: that colour marks exactly one
-            // control in the whole product (Approve on an agent proposal
-            // card), and Save is named in the constraint as one it must not
-            // mark. Same treatment as "Keep theirs" in `LedgerTable`'s
-            // conflict prompt (fix round 1, F3).
-            className="rounded-crm-control border border-crm-rule-box px-2 py-1 text-[12px]"
+            // Secondary: Save confirms a name, it is not the screen's action.
+            className={COMPACT_BUTTON_CLASS}
           >
             Save
           </button>
@@ -160,14 +159,14 @@ export function ViewChips({ userEmail, activeFilters, activeSort, onApplyView }:
         <button
           type="button"
           onClick={() => setIsNamingNewView(true)}
-          className="rounded-crm-control border border-dashed border-crm-steel px-2 py-1 text-[12px] text-crm-steel"
+          className="rounded-full border border-dashed border-ink-soft/60 bg-paper px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-ink/40 hover:text-ink"
         >
           + Save current view
         </button>
       )}
 
       {saveFailureMessage !== undefined && (
-        <span role="status" className="text-[12px] text-crm-rose">
+        <span role="status" className="text-xs text-rgs-red-deep">
           {saveFailureMessage}
         </span>
       )}

@@ -170,17 +170,18 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
   return (
     <UndoToastContext.Provider value={{ showUndo }}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+      <div // Bottom LEFT: the bottom-right corner belongs to the floating Agent button (`CrmLayout`).
+      className="pointer-events-none fixed bottom-6 left-6 z-50 flex flex-col gap-2">
         {toasts.map((toast) => (
           <div
             key={toast.toastId}
             role="status"
-            className="pointer-events-auto flex max-w-sm items-start gap-3 rounded-crm-card border border-crm-rule-box bg-crm-canvas px-3 py-2 text-[13px] text-crm-charcoal shadow"
+            className="pointer-events-auto flex max-w-sm items-start gap-3 rounded-xl bg-ink px-4 py-3 text-sm text-paper shadow-lg"
           >
             <span className="flex-1">
               {toast.message}
               {toast.status === "failed" && (
-                <span className="block text-crm-steel">Undo failed: {toast.failureMessage}</span>
+                <span className="block text-paper/70">Undo failed: {toast.failureMessage}</span>
               )}
             </span>
             {toast.undo !== undefined && (
@@ -193,7 +194,7 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
                 // reserved for the single Approve button in the product, and a
                 // toast that appears after every committed edit is the last
                 // place that reservation should leak.
-                className="shrink-0 font-medium text-crm-charcoal underline disabled:opacity-60"
+                className="shrink-0 font-semibold text-paper underline underline-offset-2 disabled:opacity-60"
               >
                 {toast.status === "undoing" ? "Undoing…" : toast.status === "failed" ? "Retry undo" : "Undo"}
               </button>
@@ -202,7 +203,7 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
               type="button"
               onClick={() => dismissToast(toast.toastId)}
               aria-label="Dismiss"
-              className="shrink-0 text-crm-steel"
+              className="shrink-0 text-paper/60 hover:text-paper"
             >
               ×
             </button>

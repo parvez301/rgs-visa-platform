@@ -7,6 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { COMPACT_BUTTON_CLASS, COMPACT_PRIMARY_BUTTON_CLASS, INPUT_CLASS } from "../components/controls";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { crm } from "@rgs/shared";
 import { useAuth } from "../../lib/auth";
@@ -112,7 +113,7 @@ const MARKER_COPY: Record<ReviewMarkerKind, ReviewMarkerCopy> = {
     // status (spec §3): both say "the import could not read this", and import
     // debt should look like import debt wherever it surfaces.
     chipClassName:
-      "inline-flex h-4 min-w-4 items-center justify-center rounded-crm-chip border border-dashed border-crm-steel bg-crm-yellow px-1 text-[11px] leading-none text-crm-charcoal",
+      "inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-dashed border-amber-500 bg-amber-100 px-1.5 text-[11px] font-semibold leading-none text-amber-900",
     describeMarker: (openItemCount) =>
       openItemCount === 1 ? "1 import problem" : `${openItemCount} import problems`,
     consequenceSentence:
@@ -123,7 +124,7 @@ const MARKER_COPY: Record<ReviewMarkerKind, ReviewMarkerCopy> = {
   },
   merge: {
     chipClassName:
-      "inline-flex h-4 min-w-4 items-center justify-center rounded-crm-badge border border-crm-steel bg-crm-peach px-1 text-[11px] leading-none text-crm-charcoal",
+      "inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-violet-400 bg-violet-100 px-1.5 text-[11px] font-semibold leading-none text-violet-900",
     describeMarker: (openItemCount) =>
       openItemCount === 1 ? "May be a duplicate" : `May be a duplicate · ${openItemCount} flags`,
     consequenceSentence:
@@ -419,16 +420,16 @@ function OneKindOfMarker({ caseRef, kind, reviewItemIds, isFocusedRow }: OneKind
             // `crm-root` because this subtree hangs off `document.body`, outside
             // the Ledger's own root -- without it the panel would inherit the
             // browser's default type rather than the desk's 14px/1.45.
-            className="crm-root z-50 overflow-auto rounded-crm-card border border-crm-rule-box bg-crm-canvas p-3 shadow"
+            className="crm-root z-50 overflow-auto rounded-2xl border border-line bg-paper p-4 text-sm shadow-xl"
           >
             <div className="flex items-baseline justify-between gap-2">
-              <p className="font-medium text-crm-charcoal">
+              <p className="font-semibold text-ink">
                 {markerWords} — {caseRef}
               </p>
               <button
                 type="button"
                 onClick={closePopover}
-                className="rounded-crm-control border border-crm-rule-box px-2 py-0.5 text-[12px] text-crm-steel"
+                className={COMPACT_BUTTON_CLASS}
               >
                 Close
               </button>
@@ -439,7 +440,7 @@ function OneKindOfMarker({ caseRef, kind, reviewItemIds, isFocusedRow }: OneKind
               a statement about what this panel can do at all, and repeating it
               per row would read as though some rows were different.
             */}
-            <p className="mt-1 text-[13px] text-crm-steel">{markerCopy.consequenceSentence}</p>
+            <p className="mt-1 text-xs text-ink-soft">{markerCopy.consequenceSentence}</p>
 
             <ul className="mt-2 flex flex-col gap-2">
               {reviewItemIds.map((reviewItemId) => (
@@ -496,12 +497,12 @@ function ReviewItemRow({ reviewItemId, markerCopy }: ReviewItemRowProps) {
   });
 
   if (reviewItemQuery.isLoading) {
-    return <li className="text-[13px] text-crm-steel">Loading this review item…</li>;
+    return <li className="text-sm text-ink-soft">Loading this review item…</li>;
   }
   const reviewItem = reviewItemQuery.data;
   if (reviewItem === undefined) {
     return (
-      <li className="text-[13px] text-crm-steel">
+      <li className="text-[13px] text-ink-soft">
         This review item could not be read: {String(reviewItemQuery.error?.message ?? "unknown error")}
       </li>
     );
@@ -514,14 +515,14 @@ function ReviewItemRow({ reviewItemId, markerCopy }: ReviewItemRowProps) {
   const resolvedValueInputId = `review-item-value-${reviewItemId}`;
 
   return (
-    <li className="rounded-crm-control border border-crm-rule-box p-2 text-[13px] text-crm-charcoal">
+    <li className="rounded-xl border border-line bg-mist/40 p-3 text-sm text-ink">
       {/* The reason is an enum and never reaches a screen raw. */}
-      <p className="font-medium">{REVIEW_REASON_LABELS[reviewItem.reason]}</p>
-      <p className="mt-0.5 text-crm-steel">
+      <p className="font-semibold">{REVIEW_REASON_LABELS[reviewItem.reason]}</p>
+      <p className="mt-0.5 text-ink-soft">
         {reviewItem.sourceSheet} row {reviewItem.sourceRow} · {reviewItem.fieldName}:{" "}
         {reviewItem.rawValue.trim() === "" ? "(blank)" : `“${reviewItem.rawValue}”`}
       </p>
-      {reviewItem.detail !== undefined && <p className="mt-0.5 text-crm-steel">{reviewItem.detail}</p>}
+      {reviewItem.detail !== undefined && <p className="mt-0.5 text-ink-soft">{reviewItem.detail}</p>}
 
       <label className="mt-2 block" htmlFor={resolvedValueInputId}>
         {markerCopy.resolvedValueLabel}
@@ -532,20 +533,15 @@ function ReviewItemRow({ reviewItemId, markerCopy }: ReviewItemRowProps) {
         value={resolvedValueDraft}
         placeholder={markerCopy.resolvedValuePlaceholder}
         onChange={(changeEvent) => setTypedResolvedValue(changeEvent.target.value)}
-        className="mt-0.5 w-full rounded-crm-control border border-crm-rule-box px-2 py-1"
+        className={`${INPUT_CLASS} mt-1 w-full`}
       />
 
       <div className="mt-2 flex justify-end gap-2">
-        {/*
-          Neither control uses `--crm-primary`: it is reserved for Approve on a
-          proposal card, and recording a decision about a spreadsheet cell is
-          not that control.
-        */}
         <button
           type="button"
           disabled={resolveMutation.isPending}
           onClick={() => resolveMutation.mutate({ reviewStatus: "DISMISSED" })}
-          className="rounded-crm-control border border-crm-rule-box px-2 py-1"
+          className={COMPACT_BUTTON_CLASS}
         >
           Dismiss
         </button>
@@ -558,7 +554,7 @@ function ReviewItemRow({ reviewItemId, markerCopy }: ReviewItemRowProps) {
               resolvedValue: resolvedValueDraft.trim(),
             })
           }
-          className="rounded-crm-control border border-crm-steel bg-crm-surface px-2 py-1 disabled:opacity-50"
+          className={COMPACT_PRIMARY_BUTTON_CLASS}
         >
           {markerCopy.recordActionLabel}
         </button>
@@ -573,7 +569,7 @@ function ReviewItemRow({ reviewItemId, markerCopy }: ReviewItemRowProps) {
         failure would tell this reviewer their own decision had been recorded.
       */}
       {resolveMutation.isError && (
-        <p role="alert" className="mt-2 text-crm-charcoal">
+        <p role="alert" className="mt-2 text-rose-900">
           This item was not resolved: {resolveMutation.error.message}
         </p>
       )}

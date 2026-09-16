@@ -1,47 +1,16 @@
 /*
- * Notion's brand tokens (spec §3), as Tailwind 4 theme variables so they
- * generate utilities: --color-crm-canvas becomes bg-crm-canvas, text-crm-ink,
- * border-crm-rule-row and so on. The spec writes these as --crm-canvas; the
- * --color- prefix is what Tailwind 4 keys its colour utilities off, and is the
- * only change to the names.
+ * The CRM screens use the same design tokens as the rest of the admin
+ * (`styles.css`: ink, ink-soft, paper, mist, line, rgs-red) plus Tailwind's
+ * built-in hue scales for the status chips (`components/Chip.tsx`). This file
+ * carries only what is specific to the desk: a denser body size than the
+ * marketing-style pages, because a desk agent works a grid of thousands of
+ * rows and the line length of a cell is short.
  *
- * Two departures from the fetched Notion DESIGN.md, both from spec §3, both
- * deliberate: body type is 14px/1.45 rather than 16px/1.55 (that document
- * describes Notion's MARKETING site and carries no guidance on dense database
- * views; a desk agent must see ~30 cases without scrolling), and buttons are
- * 8px rectangles, never pills -- which is kept from the document verbatim and
- * is the easiest thing here to get wrong by habit.
+ * It is `@import`ed from `styles.css` (see `themeImport.test.ts`): a CSS file
+ * imported from a component is never seen by Tailwind's compiler.
  */
-@theme {
-  --color-crm-canvas: #ffffff;
-  --color-crm-surface: #f6f5f4;
-  --color-crm-ink: #1a1a1a;
-  --color-crm-charcoal: #37352f;
-  --color-crm-steel: #787671;
-  --color-crm-rule-row: #ede9e4;
-  --color-crm-rule-box: #e5e3df;
-  /* Reserved. One control in the entire product: Approve on a proposal card. */
-  --color-crm-primary: #5645d4;
-  /* Inline links only. Never a button. */
-  --color-crm-link: #0075de;
-
-  --color-crm-lavender: #e6e0f5;
-  --color-crm-mint: #d9f3e1;
-  --color-crm-rose: #fde0ec;
-  --color-crm-peach: #ffe8d4;
-  --color-crm-yellow: #f9e79f;
-
-  --radius-crm-chip: 4px;
-  --radius-crm-badge: 6px;
-  --radius-crm-control: 8px;
-  --radius-crm-card: 12px;
-
-  --spacing-crm-row: 32px;
-}
-
 .crm-root {
   font-size: 14px;
   line-height: 1.45;
-  color: var(--color-crm-ink);
-  background: var(--color-crm-canvas);
+  color: var(--color-ink);
 }

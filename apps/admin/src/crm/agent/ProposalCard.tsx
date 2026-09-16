@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PRIMARY_BUTTON_CLASS } from "../components/controls";
 import { crm } from "@rgs/shared";
 import type { ProposalView } from "../api/crmClient";
 import {
@@ -233,7 +234,7 @@ export interface ProposalCardProps {
 }
 
 const CARD_CONTROL_CLASS =
-  "rounded-crm-control border border-crm-rule-box bg-crm-canvas px-2 py-1 text-[13px] text-crm-charcoal disabled:opacity-60";
+  "rounded-lg border border-line bg-paper px-2.5 py-1 text-xs text-ink transition-colors hover:border-ink/30 disabled:opacity-60";
 
 /**
  * One card for everything the agent staged on a turn (spec §6's four AX
@@ -389,16 +390,16 @@ export function ProposalCard({
   return (
     <section
       aria-label="Proposed changes"
-      className="rounded-crm-card border border-crm-rule-box bg-crm-canvas p-3 text-[14px] leading-[1.45] text-crm-charcoal"
+      className="rounded-2xl border border-line bg-paper p-4 text-sm text-ink"
     >
-      <h3 className="text-[13px] font-medium">
+      <h3 className="text-sm font-semibold">
         {pendingProposals.length > 0
           ? pendingProposals.length === 1
             ? "The agent proposes one change"
             : `The agent proposes ${pendingProposals.length} changes`
           : describeSettledHeading(appliedChanges.length, discardedProposalIds.length)}
       </h3>
-      <p className="mt-1 text-[13px] text-crm-steel">
+      <p className="mt-1 text-xs text-ink-soft">
         {pendingProposals.length > 0
           ? // "Nothing below has been written yet" is only true when nothing
             // below HAS been written -- all three clauses, not just the first
@@ -432,7 +433,7 @@ export function ProposalCard({
             <li
               key={proposal.proposalId}
               data-testid={`proposal-${proposal.proposalId}`}
-              className="rounded-crm-badge border border-crm-rule-row p-2"
+              className="rounded-xl border border-line bg-mist/40 p-3"
             >
               <p className="text-[13px] font-medium">
                 {describeEnumValue(proposal.toolName, PROPOSAL_TOOL_LABELS)}
@@ -444,9 +445,9 @@ export function ProposalCard({
               >
                 {proposal.summary.map((summaryRow, summaryRowIndex) => (
                   <li key={`${summaryRow.field}-${summaryRowIndex}`} className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-crm-steel">{describeProposalField(summaryRow.field)}</span>
+                    <span className="text-ink-soft">{describeProposalField(summaryRow.field)}</span>
                     <span>{describeProposalValue(summaryRow.field, summaryRow.from)}</span>
-                    <span aria-hidden="true" className="text-crm-steel">
+                    <span aria-hidden="true" className="text-ink-soft">
                       →
                     </span>
                     <span>
@@ -464,7 +465,7 @@ export function ProposalCard({
                     const selectedValue =
                       editedValuesByProposalId[proposal.proposalId]?.[inputKey] ?? String(inputValue);
                     return (
-                      <label key={inputKey} className="flex flex-col gap-1 text-[13px] text-crm-steel">
+                      <label key={inputKey} className="flex flex-col gap-1 text-[13px] text-ink-soft">
                         {editableInput.label}
                         <select
                           value={selectedValue}
@@ -492,20 +493,20 @@ export function ProposalCard({
               )}
 
               {failureMessage !== undefined && (
-                <p role="alert" className="mt-2 text-[13px] text-crm-charcoal">
+                <p role="alert" className="mt-2 text-[13px] text-ink">
                   {failureMessage}
                 </p>
               )}
 
               {discardFailureMessage !== undefined && (
-                <p role="alert" className="mt-2 text-[13px] text-crm-charcoal">
+                <p role="alert" className="mt-2 text-[13px] text-ink">
                   {discardFailureMessage}
                 </p>
               )}
 
               {hasOpenedDiscard && (
                 <div className="mt-2 flex flex-col gap-1">
-                  <label className="flex flex-col gap-1 text-[13px] text-crm-steel">
+                  <label className="flex flex-col gap-1 text-[13px] text-ink-soft">
                     Why? (optional)
                     <input
                       type="text"
@@ -583,7 +584,7 @@ export function ProposalCard({
                     : " — applied."}
                 </span>
                 {isUndone ? (
-                  <span className="text-crm-steel">Undone.</span>
+                  <span className="text-ink-soft">Undone.</span>
                 ) : isReversible ? (
                   <button
                     type="button"
@@ -596,12 +597,12 @@ export function ProposalCard({
                   // Honest, not silent: there is no un-approve route, and for
                   // this change there is no legal move back through the case's
                   // own routes either.
-                  <span className="text-crm-steel">
+                  <span className="text-ink-soft">
                     This cannot be undone from here; change it back on the case if it was wrong.
                   </span>
                 )}
                 {undoFailure !== undefined && (
-                  <span role="alert" className="text-crm-steel">
+                  <span role="alert" className="text-ink-soft">
                     The undo failed: {undoFailure}
                   </span>
                 )}
@@ -617,7 +618,7 @@ export function ProposalCard({
             type="button"
             disabled={isApproving}
             onClick={() => void approveEveryPendingProposal()}
-            className="rounded-crm-control bg-crm-primary px-3 py-1 text-[13px] font-medium text-white disabled:opacity-60"
+            className={PRIMARY_BUTTON_CLASS}
           >
             {pendingProposals.length === 1 ? "Approve" : `Approve all ${pendingProposals.length}`}
           </button>

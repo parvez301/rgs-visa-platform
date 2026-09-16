@@ -304,31 +304,33 @@ describe("AgentPanel", () => {
 });
 
 describe("CrmLayout's agent column", () => {
-  it("renders the panel it is given instead of a placeholder", () => {
+  it("starts collapsed, and the floating Agent button opens the panel it is given", async () => {
     stubPanelFetch();
     renderUnderProviders(
       <CrmLayout agentPanel={<AgentPanel />}>
         <p>The ledger</p>
       </CrmLayout>,
     );
+    // Closed on first load (2026-09-16 redesign): the grid gets the room.
+    expect(screen.queryByLabelText(/ask the agent/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /show the agent panel/i }));
     expect(screen.queryByText(/arrives in a later task/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/ask the agent/i)).toBeInTheDocument();
   });
 
-  it("collapses the column and keeps the toggle reachable", async () => {
+  it("collapses the column again and keeps the toggle reachable", async () => {
     stubPanelFetch();
     renderUnderProviders(
       <CrmLayout agentPanel={<AgentPanel />}>
         <p>The ledger</p>
       </CrmLayout>,
     );
+    await userEvent.click(screen.getByRole("button", { name: /show the agent panel/i }));
+    expect(screen.getByLabelText(/ask the agent/i)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /hide the agent panel/i }));
     expect(screen.queryByLabelText(/ask the agent/i)).not.toBeInTheDocument();
-
-    const showAgain = screen.getByRole("button", { name: /show the agent panel/i });
-    await userEvent.click(showAgain);
-    expect(screen.getByLabelText(/ask the agent/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show the agent panel/i })).toBeInTheDocument();
   });
 });
 

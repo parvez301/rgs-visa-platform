@@ -74,7 +74,7 @@ export function ApplicantSubRows({ caseId, onLineCountChange }: ApplicantSubRows
     return (
       <div
         data-testid="applicant-subrows-loading"
-        className="flex items-center bg-crm-surface px-4 text-[12px] text-crm-steel"
+        className="flex items-center bg-mist px-4 text-[12px] text-ink-soft"
         style={{ height: APPLICANT_SUBROW_LINE_HEIGHT }}
       >
         Loading applicants…
@@ -95,7 +95,7 @@ export function ApplicantSubRows({ caseId, onLineCountChange }: ApplicantSubRows
       <div
         role="alert"
         data-testid="applicant-subrows-error"
-        className="flex items-center bg-crm-surface px-4 text-[12px] text-crm-rose"
+        className="flex items-center bg-mist px-4 text-[12px] text-rgs-red-deep"
         style={{ height: APPLICANT_SUBROW_LINE_HEIGHT }}
       >
         The applicants for this case could not be loaded.
@@ -116,18 +116,18 @@ export function ApplicantSubRows({ caseId, onLineCountChange }: ApplicantSubRows
       data-testid="applicant-subrows"
       role="group"
       aria-label="Applicants on this case"
-      className="bg-crm-surface"
+      className="bg-mist"
     >
       <ul>
         {loadedApplicants.map((applicant) => (
           <li
             key={applicant.applicantRef}
             data-testid="applicant-subrow"
-            className="flex items-center gap-3 border-t border-crm-rule-row px-4 text-[12px] text-crm-charcoal"
+            className="flex items-center gap-3 border-t border-line px-4 text-[12px] text-ink"
             style={{ height: APPLICANT_SUBROW_LINE_HEIGHT }}
           >
             <span className="font-medium">{applicant.applicantRef}</span>
-            <span className="text-crm-steel">{applicant.passportNumber ?? "No passport on file"}</span>
+            <span className="text-ink-soft">{applicant.passportNumber ?? "No passport on file"}</span>
             <AxisChip axis="custody" value={applicant.custody} />
             <AxisChip axis="outcome" value={applicant.outcome} />
             <span>{describeCourier(applicant)}</span>

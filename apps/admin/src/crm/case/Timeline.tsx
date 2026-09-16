@@ -13,17 +13,16 @@ interface TimelineProps {
  * difference that came from anything but the variant would make that
  * assertion pass while proving nothing.
  */
-const TIMELINE_ENTRY_BASE_CLASS =
-  "flex flex-col gap-0.5 rounded-crm-card px-3 py-2 text-[14px] leading-[1.45]";
+const TIMELINE_ENTRY_BASE_CLASS = "flex flex-col gap-0.5 rounded-xl px-4 py-3 text-sm";
 
-const HUMAN_TIMELINE_ENTRY_CLASS = `${TIMELINE_ENTRY_BASE_CLASS} border border-crm-rule-box bg-crm-canvas`;
+const HUMAN_TIMELINE_ENTRY_CLASS = `${TIMELINE_ENTRY_BASE_CLASS} border border-line bg-paper`;
 
 /**
  * Deliberately not a tint away from the human entry: a dashed rule and a
  * marker, the same visual vocabulary `Chip.tsx` uses for import debt, because
  * both say the same thing -- a value nobody chose by hand.
  */
-const AUTO_APPLIED_TIMELINE_ENTRY_CLASS = `${TIMELINE_ENTRY_BASE_CLASS} border border-dashed border-crm-steel bg-crm-surface`;
+const AUTO_APPLIED_TIMELINE_ENTRY_CLASS = `${TIMELINE_ENTRY_BASE_CLASS} border border-dashed border-amber-400 bg-amber-50/60`;
 
 const eventTimestampFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -53,7 +52,7 @@ function formatEventTimestamp(createdAt: string): string {
 export function Timeline({ events }: TimelineProps) {
   if (events.length === 0) {
     return (
-      <p className="text-[14px] text-crm-steel">
+      <p className="text-sm text-ink-soft">
         Nothing has happened on this case yet.
       </p>
     );
@@ -70,22 +69,22 @@ export function Timeline({ events }: TimelineProps) {
             className={isAutoApplied ? AUTO_APPLIED_TIMELINE_ENTRY_CLASS : HUMAN_TIMELINE_ENTRY_CLASS}
           >
             <div className="flex flex-wrap items-center gap-2">
-              <time dateTime={event.createdAt} className="text-[12px] text-crm-steel">
+              <time dateTime={event.createdAt} className="text-xs text-ink-soft">
                 {formatEventTimestamp(event.createdAt)}
               </time>
               {isAutoApplied && (
                 <span
                   data-testid="timeline-auto-applied-marker"
-                  className="rounded-crm-badge border border-dashed border-crm-steel bg-crm-yellow px-1.5 py-0.5 text-[12px] leading-none text-crm-charcoal"
+                  className="rounded-full border border-dashed border-amber-500 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold leading-none text-amber-900"
                 >
                   Auto-applied
                 </span>
               )}
             </div>
-            <p data-testid="timeline-entry-title" className="font-medium text-crm-charcoal">
+            <p data-testid="timeline-entry-title" className="font-semibold text-ink">
               {title}
             </p>
-            {detail !== "" && <p className="text-crm-steel">{detail}</p>}
+            {detail !== "" && <p className="text-ink-soft">{detail}</p>}
           </li>
         );
       })}

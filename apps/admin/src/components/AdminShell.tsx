@@ -11,13 +11,26 @@ const NAV_LINKS = [
   { label: "CRM", to: "/crm" },
 ] as const;
 
-export function AdminShell({ children }: { children: ReactNode }) {
+/**
+ * `contentWidth`: the visa-platform pages read best in a 1152px column; the
+ * CRM is a grid of ten columns beside an agent panel and needs the whole
+ * viewport. The header follows the same width so the nav lines up with the
+ * content under it either way.
+ */
+export function AdminShell({
+  children,
+  contentWidth = "default",
+}: {
+  children: ReactNode;
+  contentWidth?: "default" | "full";
+}) {
   const { email, signOut } = useAuth();
+  const widthClass = contentWidth === "full" ? "max-w-none" : "max-w-6xl";
 
   return (
     <div className="min-h-screen">
       <header className="bg-ink text-paper">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
+        <div className={`mx-auto flex ${widthClass} items-center justify-between gap-4 px-6 py-4`}>
           <Link to="/" className="flex items-center gap-3">
             <img
               src="/brand/rgs-logo.png"
@@ -52,7 +65,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           </nav>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
+      <main className={`mx-auto ${widthClass} px-6 ${contentWidth === "full" ? "py-6" : "py-8"}`}>{children}</main>
     </div>
   );
 }

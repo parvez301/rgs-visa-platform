@@ -5,7 +5,16 @@ import { CrmLayout } from "../CrmLayout";
 import { AgentPanel } from "../agent/AgentPanel";
 import type { OpenReviewSummaryEntry } from "../api/crmClient";
 import { useLedgerRows, usePartners, useReviewSummary } from "../api/hooks";
+import {
+  CARD_CLASS,
+  FIELD_LABEL_CLASS,
+  INPUT_CLASS,
+  PILL_OFF_CLASS,
+  PILL_ON_CLASS,
+  PRIMARY_BUTTON_CLASS,
+} from "../components/controls";
 import { CASE_STATUS_LABELS } from "../labels";
+import { NewCaseDrawer } from "../newCase/NewCaseDrawer";
 import { applyFilters, applySort, type LedgerFilters, type LedgerSort } from "./filters";
 import { LedgerTable } from "./LedgerTable";
 import { ViewChips } from "./ViewChips";
@@ -36,6 +45,7 @@ export function LedgerPage() {
   const [selectedPartnerId, setSelectedPartnerId] = useState<string | undefined>(undefined);
   const [clientLedgerFilters, setClientLedgerFilters] = useState<ClientOnlyLedgerFilters>(NO_CLIENT_FILTERS);
   const [ledgerSort, setLedgerSort] = useState<LedgerSort>(DEFAULT_LEDGER_SORT);
+  const [isNewCaseDrawerOpen, setIsNewCaseDrawerOpen] = useState(false);
   /**
    * R62: the grid's selection, lifted here so `CrmLayout`'s right column can
    * hand it to the agent. `useCallback` with `[]` deps keeps the identity
@@ -146,84 +156,94 @@ export function LedgerPage() {
 
   return (
     <CrmLayout agentPanel={<AgentPanel selectedCaseIds={selectedCaseIds} />}>
-      <div className="flex h-full flex-col gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[13px] font-medium text-crm-charcoal">Status</span>
-          {crm.CASE_STATUSES.map((caseStatus) => (
-            // Never `disabled` while a partner filter is active: a desk agent
-            // must always be able to click straight back into status
-            // filtering in one step. `toggleCaseStatus` already clears the
-            // partner selection, so disabling this button would be the only
-            // thing standing between a partner-filtered view and a status
-            // filter -- a dead end with no way out except the partner
-            // dropdown's own "All partners" option.
-            <button
-              key={caseStatus}
-              type="button"
-              onClick={() => toggleCaseStatus(caseStatus)}
-              aria-pressed={selectedCaseStatuses.includes(caseStatus)}
-              // R71: the pressed treatment keeps its lavender fill and drops
-              // `--crm-primary`, which the global constraint reserves for
-              // exactly one control in the whole product (Approve on a
-              // proposal card). `border-crm-steel` is what `ConflictPrompt`'s
-              // "Keep mine" already adopted for the same reason: a stronger
-              // rule than the resting state, in a colour that claims nothing.
-              className={`rounded-crm-control border px-2 py-1 text-[12px] ${
-                selectedCaseStatuses.includes(caseStatus)
-                  ? "border-crm-steel bg-crm-lavender text-crm-charcoal"
-                  : "border-crm-rule-box text-crm-steel"
-              }`}
-            >
-              {CASE_STATUS_LABELS[caseStatus]}
-            </button>
-          ))}
-
-          <label className="ml-4 flex items-center gap-2 text-[13px] font-medium text-crm-charcoal">
-            Partner
-            <select
-              value={selectedPartnerId ?? ""}
-              onChange={(changeEvent) => selectPartner(changeEvent.target.value || undefined)}
-              className="rounded-crm-control border border-crm-rule-box px-2 py-1 text-[12px] font-normal"
-            >
-              <option value="">All partners</option>
-              {(partnersQuery.data ?? []).map((partner) => (
-                <option key={partner.partnerId} value={partner.partnerId}>
-                  {partner.canonicalName}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="ml-4 flex items-center gap-2 text-[13px] font-medium text-crm-charcoal">
-            Search
-            <input
-              type="search"
-              value={clientLedgerFilters.search ?? ""}
-              onChange={(changeEvent) =>
-                setClientLedgerFilters((currentFilters) => ({
-                  ...currentFilters,
-                  search: changeEvent.target.value || undefined,
-                }))
-              }
-              placeholder="Search REF or partner"
-              className="rounded-crm-control border border-crm-rule-box px-2 py-1 text-[12px] font-normal"
-            />
-          </label>
+      <div className="flex h-full flex-col gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Ledger</h1>
+            <p className="mt-0.5 text-sm text-ink-soft">
+              {describeLedgerCount(visibleLedgerRows.length, ledgerLoad?.rows.length, ledgerRowsQuery.isLoading)}
+            </p>
+          </div>
+          <button type="button" onClick={() => setIsNewCaseDrawerOpen(true)} className={PRIMARY_BUTTON_CLASS}>
+            New case
+          </button>
         </div>
+        {isNewCaseDrawerOpen && <NewCaseDrawer onClose={() => setIsNewCaseDrawerOpen(false)} />}
 
-        {signedInUserEmail !== null && (
-          <ViewChips
-            userEmail={signedInUserEmail}
-            activeFilters={activeLedgerFilters}
-            activeSort={ledgerSort}
-            onApplyView={applyLedgerView}
-          />
-        )}
+        <div className={`${CARD_CLASS} flex flex-col gap-3 px-4 py-3`}>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`${FIELD_LABEL_CLASS} mr-1`}>Status</span>
+            {crm.CASE_STATUSES.map((caseStatus) => (
+              // Never `disabled` while a partner filter is active: a desk agent
+              // must always be able to click straight back into status
+              // filtering in one step. `toggleCaseStatus` already clears the
+              // partner selection, so disabling this button would be the only
+              // thing standing between a partner-filtered view and a status
+              // filter -- a dead end with no way out except the partner
+              // dropdown's own "All partners" option.
+              <button
+                key={caseStatus}
+                type="button"
+                onClick={() => toggleCaseStatus(caseStatus)}
+                aria-pressed={selectedCaseStatuses.includes(caseStatus)}
+                className={selectedCaseStatuses.includes(caseStatus) ? PILL_ON_CLASS : PILL_OFF_CLASS}
+              >
+                {CASE_STATUS_LABELS[caseStatus]}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            <label className="flex items-center gap-2 text-sm font-medium text-ink">
+              Partner
+              <select
+                value={selectedPartnerId ?? ""}
+                onChange={(changeEvent) => selectPartner(changeEvent.target.value || undefined)}
+                className={`${INPUT_CLASS} min-w-56 font-normal`}
+              >
+                <option value="">All partners</option>
+                {(partnersQuery.data ?? []).map((partner) => (
+                  <option key={partner.partnerId} value={partner.partnerId}>
+                    {partner.canonicalName}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex items-center gap-2 text-sm font-medium text-ink">
+              Search
+              <input
+                type="search"
+                value={clientLedgerFilters.search ?? ""}
+                onChange={(changeEvent) =>
+                  setClientLedgerFilters((currentFilters) => ({
+                    ...currentFilters,
+                    search: changeEvent.target.value || undefined,
+                  }))
+                }
+                placeholder="Search REF or partner"
+                className={`${INPUT_CLASS} min-w-64 font-normal`}
+              />
+            </label>
+
+            {signedInUserEmail !== null && (
+              <div className="flex items-center gap-2 lg:ml-auto">
+                <span className={FIELD_LABEL_CLASS}>Views</span>
+                <ViewChips
+                  userEmail={signedInUserEmail}
+                  activeFilters={activeLedgerFilters}
+                  activeSort={ledgerSort}
+                  onApplyView={applyLedgerView}
+                />
+              </div>
+            )}
+          </div>
+        </div>
 
         {isLedgerPartial && (
           <div
             role="status"
-            className="rounded-crm-control border border-dashed border-crm-steel bg-crm-yellow px-3 py-2 text-[13px] text-crm-charcoal"
+            className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"
           >
             {describePartialLedgerBanner(
               Boolean(ledgerLoad?.truncated),
@@ -236,9 +256,9 @@ export function LedgerPage() {
 
         <div className="min-h-0 flex-1">
           {ledgerRowsQuery.isLoading ? (
-            <p className="text-crm-steel">Loading the ledger…</p>
+            <p className="text-sm text-ink-soft">Loading the ledger…</p>
           ) : ledgerRowsQuery.isError ? (
-            <p className="text-crm-steel">
+            <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-900">
               The ledger could not be loaded: {String(ledgerRowsQuery.error)}
             </p>
           ) : (
@@ -253,6 +273,24 @@ export function LedgerPage() {
       </div>
     </CrmLayout>
   );
+}
+
+/**
+ * The line under the title. "Showing" is honest HERE because both numbers are
+ * the client's own: rows on screen after the search box and view filters, and
+ * rows the ledger LOADED. Neither claims to be the size of the whole ledger;
+ * `describePartialLedgerBanner` below owns that boundary.
+ */
+function describeLedgerCount(
+  visibleRowCount: number,
+  loadedRowCount: number | undefined,
+  isLoading: boolean,
+): string {
+  if (isLoading || loadedRowCount === undefined) return "Loading cases…";
+  if (visibleRowCount === loadedRowCount) {
+    return `${loadedRowCount.toLocaleString()} case${loadedRowCount === 1 ? "" : "s"}`;
+  }
+  return `Showing ${visibleRowCount.toLocaleString()} of ${loadedRowCount.toLocaleString()} loaded cases`;
 }
 
 /**

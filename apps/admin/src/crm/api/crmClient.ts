@@ -176,6 +176,26 @@ export interface AgentTurnResponse {
  */
 export type ApprovalResult = unknown;
 
+/** Body of POST /cases -- mirrors `CreateCaseBody` in @rgs/shared. */
+export interface CreateCaseInput {
+  caseRef: string;
+  caseType: crm.CaseType;
+  partnerId: string;
+  destinationCountry: string;
+  visaType?: crm.VisaType;
+  receivedDate: string;
+  applicants: Array<{ applicantRef: string; travellerId: string; passportNumber?: string }>;
+}
+
+export interface CreatePartnerInput {
+  canonicalName: string;
+}
+
+export interface UpsertTravellerInput {
+  fullName: string;
+  passportNumber?: string;
+}
+
 export const MAX_LEDGER_PAGES = 40;
 
 async function fetchLedgerPage(
@@ -274,6 +294,31 @@ async function listPartners(idToken: string): Promise<crm.Partner[]> {
 export const crmClient = {
   fetchLedgerPage,
   loadLedger,
+
+  createCase(idToken: string, input: CreateCaseInput): Promise<crm.CrmCase> {
+    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases`, { method: "POST", body: input, idToken });
+  },
+
+  createPartner(idToken: string, input: CreatePartnerInput): Promise<crm.Partner> {
+    return apiFetch<crm.Partner>(`${CRM_BASE}/partners`, { method: "POST", body: input, idToken });
+  },
+
+  upsertTraveller(idToken: string, input: UpsertTravellerInput): Promise<crm.CrmTraveller> {
+    return apiFetch<crm.CrmTraveller>(`${CRM_BASE}/travellers`, { method: "POST", body: input, idToken });
+  },
+
+  /** `undefined` when no traveller holds that passport; the server says 404. */
+  async findTravellerByPassport(idToken: string, passportNumber: string): Promise<crm.CrmTraveller | undefined> {
+    try {
+      return await apiFetch<crm.CrmTraveller>(
+        `${CRM_BASE}/travellers/by-passport/${encodeURIComponent(passportNumber)}`,
+        { idToken },
+      );
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.statusCode === 404) return undefined;
+      throw error;
+    }
+  },
 
   getCase(idToken: string, caseId: string): Promise<crm.CrmCase> {
     return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}`, { idToken });

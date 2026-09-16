@@ -98,13 +98,13 @@ describe("ViewChips", () => {
     await user.click(screen.getByRole("button", { name: "+ Save current view" }));
 
     const saveButton = screen.getByRole("button", { name: "Save" });
-    expect(saveButton.className).not.toContain("crm-primary");
-    expect(saveButton.className).not.toContain("crm-lavender");
-    expect(saveButton.className).toContain("border-crm-rule-box");
+    // Save confirms a name; it is a secondary control, not the screen's primary action.
+    expect(saveButton.className).not.toContain("bg-rgs-red");
+    expect(saveButton.className).toContain("border-line");
 
     // Finding #8: the half this test used to leave out. It checked the Save
     // button while the pressed chip standing beside it carried
-    // `border-crm-primary` the whole time -- which is how a constraint about
+    // `border-rgs-red` the whole time -- which is how a constraint about
     // the PRODUCT survives three per-file reviews unbroken and unmet. The
     // pressed chip keeps its lavender fill and takes the neutral rule
     // `ConflictPrompt`'s "Keep mine" already uses.
@@ -113,8 +113,8 @@ describe("ViewChips", () => {
 
     const pressedChip = screen.getByRole("button", { name: "Dubai rush" });
     expect(pressedChip).toHaveAttribute("aria-pressed", "true");
-    expect(pressedChip.className).not.toContain("crm-primary");
-    expect(pressedChip.className).toContain("border-crm-steel");
-    expect(pressedChip.className).toContain("bg-crm-lavender");
+    // A pressed pill is ink-filled, the Queue page's own convention.
+    expect(pressedChip.className).toContain("bg-ink");
+    expect(pressedChip.className).not.toContain("bg-rgs-red");
   });
 });

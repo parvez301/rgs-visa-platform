@@ -43,9 +43,9 @@ describe("ProposalCard", () => {
     expect(screen.getByText(/At embassy/)).toBeInTheDocument();
   });
 
-  it("puts the one purple control in the product on Approve, and nowhere else", () => {
+  it("makes Approve the card's one primary (red) control", () => {
     const { container } = render(<ProposalCard proposals={[proposalFor("set_custody", [])]} />);
-    const purpleElements = [...container.querySelectorAll("[class*='crm-primary']")];
+    const purpleElements = [...container.querySelectorAll("[class*='bg-rgs-red']")];
     expect(purpleElements).toHaveLength(1);
     expect(purpleElements[0]!.textContent).toMatch(/approve/i);
   });

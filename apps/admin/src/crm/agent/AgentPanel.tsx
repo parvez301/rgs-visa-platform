@@ -5,6 +5,7 @@ import { useAuth } from "../../lib/auth";
 import { crmClient, type AgentTurnResponse, type ProposalView } from "../api/crmClient";
 import { crmQueryKeys, useMemories, useProposals } from "../api/hooks";
 import { LEDGER_CACHE_KEY_PREFIX } from "../api/mutations";
+import { INPUT_CLASS, PRIMARY_BUTTON_CLASS } from "../components/controls";
 import { MemoryCitations } from "./MemoryCitations";
 import {
   ProposalCard,
@@ -66,16 +67,12 @@ export interface AgentPanelProps {
   initialResult?: AgentTurnResponse;
 }
 
-const PANEL_CONTROL_CLASS =
-  "rounded-crm-control border border-crm-rule-box bg-crm-canvas px-2 py-1 text-[13px] text-crm-charcoal disabled:opacity-60";
 
 /**
  * The persistent agent surface in `CrmLayout`'s right column (spec §6).
  *
  * Never a modal, never a takeover: it is a column beside the Ledger, and the
- * Ledger stays fully interactive while it is open. `--crm-primary` does not
- * appear in this file at all -- the single purple control in the product is
- * Approve, inside `ProposalCard`.
+ * Ledger stays fully interactive while it is open.
  */
 export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelProps) {
   const { idToken } = useAuth();
@@ -217,10 +214,10 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
   return (
     <aside
       aria-label="Agent"
-      className="crm-root flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 text-[14px] leading-[1.45]"
+      className="crm-root flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4 pb-20 text-sm"
     >
       <header className="flex flex-col gap-1">
-        <h2 className="text-[13px] font-medium text-crm-charcoal">Agent</h2>
+        <h2 className="text-base font-semibold text-ink">Agent</h2>
         {/*
           Truthful, and static on purpose: nothing in production writes
           `CrmUserPrefs`, so every user is at trustLevel 0 with autoApplyOptIn
@@ -228,24 +225,24 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
           indicator would be a number this build cannot obtain, dressed up as
           one it had.
         */}
-        <p className="text-[12px] text-crm-steel">
+        <p className="text-xs text-ink-soft">
           Trust level 0 · auto-apply is off, so every change waits for you.
         </p>
-        <p className="text-[12px] text-crm-steel">{describeSelection(selectedCaseIds)}</p>
+        <p className="text-xs text-ink-soft">{describeSelection(selectedCaseIds)}</p>
       </header>
 
       <ol className="flex flex-col gap-3">
         {session.turns.map((turn) => (
           <li key={turn.turnId} className="flex flex-col gap-1">
-            <p className="rounded-crm-badge bg-crm-surface px-2 py-1 text-[13px] text-crm-charcoal">
+            <p className="self-end rounded-2xl rounded-br-md bg-ink px-3 py-2 text-sm text-paper">
               {turn.userMessage}
             </p>
-            {turn.status === "pending" && <p className="text-[13px] text-crm-steel">Thinking…</p>}
+            {turn.status === "pending" && <p className="px-1 text-sm text-ink-soft">Thinking…</p>}
             {turn.result !== undefined && turn.result.reply.trim() !== "" && (
-              <p className="px-2 text-[13px] text-crm-charcoal">{turn.result.reply}</p>
+              <p className="rounded-2xl rounded-bl-md bg-mist px-3 py-2 text-sm text-ink">{turn.result.reply}</p>
             )}
             {turn.result?.stoppedAtIterationCap === true && (
-              <p role="status" className="px-2 text-[13px] text-crm-steel">
+              <p role="status" className="px-1 text-xs text-ink-soft">
                 {describeIterationCap()}
               </p>
             )}
@@ -253,7 +250,7 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
               // Never a bare error: the message that failed is still above it,
               // and the tools the agent had used this session are named below,
               // so a desk agent can see how far it got.
-              <p role="alert" className="px-2 text-[13px] text-crm-charcoal">
+              <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900">
                 This turn did not finish: {turn.failureMessage}
               </p>
             )}
@@ -262,18 +259,18 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
       </ol>
 
       {seededResult?.stoppedAtIterationCap === true && (
-        <p role="status" className="text-[13px] text-crm-steel">
+        <p role="status" className="text-xs text-ink-soft">
           {describeIterationCap()}
         </p>
       )}
 
       {session.toolNamesUsed.length > 0 && (
-        <section aria-label="What the agent has done this session" className="text-[13px]">
-          <h3 className="font-medium text-crm-charcoal">What the agent has done this session</h3>
+        <section aria-label="What the agent has done this session" className="text-sm">
+          <h3 className="font-semibold text-ink">What the agent has done this session</h3>
           <ul className="mt-1 flex flex-col gap-0.5">
             {session.toolNamesUsed.map((toolName) => (
-              <li key={toolName} className="flex flex-wrap items-center gap-1.5 text-crm-steel">
-                <code className="rounded-crm-chip bg-crm-surface px-1 text-[12px] text-crm-charcoal">
+              <li key={toolName} className="flex flex-wrap items-center gap-1.5 text-ink-soft">
+                <code className="rounded-md bg-mist px-1.5 text-xs text-ink">
                   {toolName}
                 </code>
                 <span>{describeToolKinds(session, toolName)}</span>
@@ -284,7 +281,7 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
       )}
 
       {unreadableProposalIds.length > 0 && (
-        <p role="status" className="text-[13px] text-crm-steel">
+        <p role="status" className="text-xs text-ink-soft">
           {unreadableProposalIds.length === 1
             ? "1 proposal could not be read and is missing from this list."
             : `${unreadableProposalIds.length} proposals could not be read and are missing from this list.`}
@@ -315,19 +312,19 @@ export function AgentPanel({ selectedCaseIds = [], initialResult }: AgentPanelPr
           void runTurn();
         }}
       >
-        <label className="flex flex-col gap-1 text-[13px] text-crm-steel">
+        <label className="flex flex-col gap-1 text-sm font-medium text-ink">
           Ask the agent
           <textarea
             value={draftMessage}
             onChange={(changeEvent) => setDraftMessage(changeEvent.target.value)}
             rows={3}
-            className="rounded-crm-control border border-crm-rule-box bg-crm-canvas px-2 py-1 text-[13px] text-crm-charcoal"
+            className={`${INPUT_CLASS} font-normal`}
           />
         </label>
         <button
           type="submit"
           disabled={draftMessage.trim() === "" || session.isTurnInFlight}
-          className={`w-fit self-end ${PANEL_CONTROL_CLASS}`}
+          className={`${PRIMARY_BUTTON_CLASS} w-fit self-end`}
         >
           {session.isTurnInFlight ? "Sending…" : "Send"}
         </button>

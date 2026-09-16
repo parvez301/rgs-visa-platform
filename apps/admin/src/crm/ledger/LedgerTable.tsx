@@ -358,17 +358,17 @@ export function LedgerTable({
   const gridTemplateColumns = LEDGER_COLUMNS.map((column) => `${column.width}px`).join(" ");
 
   return (
-    <div className="crm-root relative flex h-full flex-col border border-crm-rule-box rounded-crm-card overflow-hidden">
+    <div className="crm-root relative flex h-full flex-col overflow-hidden rounded-2xl border border-line bg-paper">
       <div
         data-testid="ledger-header"
-        className="sticky top-0 z-20 grid bg-crm-surface text-crm-steel text-[12px] uppercase tracking-wide"
+        className="mrz sticky top-0 z-20 grid border-b border-line bg-mist text-[10px] text-ink-soft"
         style={{ gridTemplateColumns, height: LEDGER_ROW_HEIGHT }}
       >
         {LEDGER_COLUMNS.map((column) => (
           <div
             key={column.key}
             data-column={column.key}
-            className={`flex items-center px-2 ${column.sticky ? "sticky left-0 z-30 bg-crm-surface" : ""}`}
+            className={`flex items-center px-3 ${column.sticky ? "sticky left-0 z-30 bg-mist" : ""}`}
           >
             {column.header}
           </div>
@@ -384,13 +384,22 @@ export function LedgerTable({
         onKeyDown={(event) => handleGridKeyDown(event.nativeEvent)}
       >
         {rows.length === 0 ? (
-          <p className="p-6 text-crm-steel">No cases match these filters.</p>
+          <p className="p-6 text-sm text-ink-soft">No cases match these filters.</p>
         ) : (
           <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index]!;
               const isRowSelected = gridState.selectedRowIndexes.includes(virtualRow.index);
               const isRowExpanded = gridState.expandedRowIndexes.includes(virtualRow.index);
+              // Zebra by ledger position, selection in the accent's palest
+              // tint. Applied to BOTH the positioned wrapper and the row so the
+              // sticky REF cell's `bg-inherit` resolves to a real colour and
+              // covers the columns scrolling under it.
+              const rowBackgroundClass = isRowSelected
+                ? "bg-red-50"
+                : virtualRow.index % 2 === 1
+                  ? "bg-mist/60"
+                  : "bg-paper";
               // Built once per row rather than once per cell: ten columns
               // would otherwise each do the same map lookup, and nine of them
               // ignore the answer.
@@ -417,7 +426,7 @@ export function LedgerTable({
                   key={row.caseId}
                   data-testid="ledger-row"
                   data-case-id={row.caseId}
-                  className="absolute left-0 w-full border-b border-crm-rule-row bg-crm-canvas"
+                  className={`absolute left-0 w-full border-b border-line ${rowBackgroundClass}`}
                   style={{
                     height: virtualRow.size,
                     transform: `translateY(${virtualRow.start}px)`,
@@ -427,7 +436,7 @@ export function LedgerTable({
                     role="row"
                     aria-selected={isRowSelected ? "true" : "false"}
                     aria-expanded={isRowExpanded}
-                    className="grid hover:bg-crm-surface"
+                    className={`grid ${rowBackgroundClass} ${isRowSelected ? "" : "hover:bg-mist"}`}
                     style={{ gridTemplateColumns, height: LEDGER_ROW_HEIGHT }}
                   >
                     {LEDGER_COLUMNS.map((column, columnIndex) => {
@@ -459,9 +468,9 @@ export function LedgerTable({
                               withShift: event.shiftKey,
                             });
                           }}
-                          className={`flex items-center gap-1.5 px-2 truncate ${
+                          className={`flex items-center gap-1.5 truncate px-3 text-sm outline-none ${
                             column.sticky ? "sticky left-0 z-10 bg-inherit font-medium" : ""
-                          }`}
+                          } ${isCellFocused ? "ring-2 ring-inset ring-rgs-red/50" : ""}`}
                         >
                           {editableColumn === undefined ? (
                             column.render(row, partnerNamesById[row.partnerId] ?? row.partnerId, cellContext)

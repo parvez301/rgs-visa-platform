@@ -7,6 +7,10 @@ import { BILLING_LABELS, CASE_STATUS_LABELS, VISA_TYPE_LABELS } from "../labels"
 // same options this cell does.
 import { allowedBillingStatusOptions, allowedCaseStatusOptions } from "../transitions";
 import type { LedgerEditColumn } from "../api/mutations";
+import { INPUT_CLASS } from "../components/controls";
+
+/** An editor open inside a 40px cell: the shared input look, sized to the row. */
+const CELL_EDITOR_CLASS = `${INPUT_CLASS} h-7 w-full py-0 text-xs`;
 
 interface EditableCellProps {
   column: LedgerEditColumn;
@@ -175,6 +179,7 @@ export function EditableCell({
         onChange={(event) => setDraftValue(event.target.value)}
         onBlur={() => commitDraft({ keepOpen: false })}
         onKeyDown={handleEditorKeyDown}
+        className={CELL_EDITOR_CLASS}
       />
     );
   }
@@ -190,6 +195,7 @@ export function EditableCell({
         onChange={(event) => setDraftValue(event.target.value)}
         onBlur={() => commitDraft({ keepOpen: false })}
         onKeyDown={handleEditorKeyDown}
+        className={CELL_EDITOR_CLASS}
       >
         {crm.VISA_TYPES.map((visaType) => (
           <option key={visaType} value={visaType}>
@@ -213,6 +219,7 @@ export function EditableCell({
       onChange={(event) => setDraftValue(event.target.value)}
       onBlur={() => commitDraft({ keepOpen: false })}
       onKeyDown={handleEditorKeyDown}
+      className={CELL_EDITOR_CLASS}
     >
       {allowedOptionValues.map((optionValue) => (
         <option key={optionValue} value={optionValue}>

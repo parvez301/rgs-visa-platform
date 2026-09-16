@@ -1,10 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
-import { useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { crm } from "@rgs/shared";
 import { CrmLayout } from "../CrmLayout";
 import { AgentPanel } from "../agent/AgentPanel";
 import { AxisChip } from "../components/Chip";
 import { ConflictPrompt } from "../components/ConflictPrompt";
+import { CARD_CLASS, FIELD_LABEL_CLASS, INPUT_CLASS } from "../components/controls";
 import {
   describeApplicantEditValue,
   useApplicantEdit,
@@ -35,8 +36,10 @@ import { Timeline } from "./Timeline";
 
 const NOT_RECORDED = "—";
 
-const CONTROL_CLASS =
-  "rounded-crm-control border border-crm-rule-box bg-crm-canvas px-2 py-1 text-[13px] disabled:text-crm-steel";
+const CONTROL_CLASS = `${INPUT_CLASS} py-1`;
+
+const LOAD_FAILURE_CLASS =
+  "rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900";
 
 /**
  * The Case screen (spec §5): the shared case fields ONCE at the top, the
@@ -58,8 +61,8 @@ export function CasePage() {
       // No case to inherit, so the panel is handed an empty selection rather
       // than a made-up one.
       <CrmLayout agentPanel={<AgentPanel />}>
-        <div className="crm-root h-full overflow-y-auto p-4">
-          <p role="alert" className="text-[14px] text-crm-charcoal">
+        <div className="crm-root h-full overflow-y-auto">
+          <p role="alert" className={LOAD_FAILURE_CLASS}>
             This link has no case reference in it, so there is no case to load.
           </p>
         </div>
@@ -93,18 +96,18 @@ function CaseScreen({ caseId }: { caseId: string }) {
   return (
     // R62: the Case screen's "selection" is the one case it is showing.
     <CrmLayout agentPanel={<AgentPanel selectedCaseIds={[caseId]} />}>
-      <div className="crm-root relative h-full overflow-y-auto p-4 text-[14px] leading-[1.45]">
+      <div className="crm-root relative h-full overflow-y-auto pb-20 text-sm">
+        <Link to="/crm" className="mb-3 inline-block text-sm font-medium text-rgs-red-deep hover:underline">
+          Back to the ledger
+        </Link>
         {caseQuery.isLoading ? (
-          <p className="text-crm-steel">Loading this case…</p>
+          <p className="text-sm text-ink-soft">Loading this case…</p>
         ) : caseQuery.isError || caseRecord === undefined ? (
           // Never an empty shell. A heading over blank fields and an empty
           // applicant table reads as a case with nothing on it, which is a
           // different -- and false -- claim from "this case could not be
           // read". The server's own words follow, not a paraphrase.
-          <p
-            role="alert"
-            className="rounded-crm-control border border-dashed border-crm-steel bg-crm-yellow px-3 py-2 text-crm-charcoal"
-          >
+          <p role="alert" className={LOAD_FAILURE_CLASS}>
             This case could not be loaded.{" "}
             {caseQuery.error === null || caseQuery.error === undefined
               ? "The server gave no reason."
@@ -137,12 +140,9 @@ function CaseScreen({ caseId }: { caseId: string }) {
 
             <CaseSection title="Timeline">
               {caseEventsQuery.isLoading ? (
-                <p className="text-crm-steel">Loading the timeline…</p>
+                <p className="text-sm text-ink-soft">Loading the timeline…</p>
               ) : caseEventsQuery.isError ? (
-                <p
-                  role="alert"
-                  className="rounded-crm-control border border-dashed border-crm-steel bg-crm-yellow px-3 py-2 text-crm-charcoal"
-                >
+                <p role="alert" className={LOAD_FAILURE_CLASS}>
                   The timeline could not be loaded, so this case's history is not shown. The case
                   itself is unaffected.
                 </p>
@@ -191,7 +191,7 @@ function readCaseColumnValue(caseRecord: crm.CrmCase, column: LedgerEditColumn):
 function CaseSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-[12px] uppercase tracking-wide text-crm-steel">{title}</h2>
+      <h2 className="text-base font-semibold text-ink">{title}</h2>
       {children}
     </section>
   );
@@ -200,8 +200,8 @@ function CaseSection({ title, children }: { title: string; children: ReactNode }
 function CaseField({ fieldKey, label, children }: { fieldKey: string; label: string; children: ReactNode }) {
   return (
     <div data-testid={`case-field-${fieldKey}`} className="flex flex-col gap-1">
-      <span className="text-[12px] uppercase tracking-wide text-crm-steel">{label}</span>
-      <span className="flex flex-wrap items-center gap-2 text-crm-charcoal">{children}</span>
+      <span className={FIELD_LABEL_CLASS}>{label}</span>
+      <span className="flex flex-wrap items-center gap-2 text-sm text-ink">{children}</span>
     </div>
   );
 }
@@ -230,14 +230,14 @@ function CaseHeader({
   const isVisaCase = caseRecord.caseType === "VISA";
 
   return (
-    <header className="flex flex-col gap-4 rounded-crm-card border border-crm-rule-box bg-crm-canvas p-4">
+    <header className={`${CARD_CLASS} flex flex-col gap-5 p-5`}>
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-[18px] font-medium text-crm-charcoal">{caseRecord.caseRef}</h1>
+        <h1 className="mrz text-2xl font-bold tracking-normal text-ink">{caseRecord.caseRef}</h1>
         <AxisChip axis="caseStatus" value={caseRecord.caseStatus} />
         <AxisChip axis="billing" value={caseRecord.billingStatus} />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
         <CaseField fieldKey="partner" label="Partner">
           {partnerName}
         </CaseField>
@@ -425,15 +425,15 @@ function ApplicantsTable({
 }) {
   return (
     <CaseSection title={`Applicants (${caseRecord.applicants.length})`}>
-      <div className="overflow-x-auto rounded-crm-card border border-crm-rule-box">
-        <table className="w-full border-collapse text-left">
+      <div className={`${CARD_CLASS} overflow-x-auto`}>
+        <table className="w-full border-collapse text-left text-sm">
           <thead>
-            <tr className="bg-crm-surface text-[12px] uppercase tracking-wide text-crm-steel">
-              <th className="px-3 py-2 font-normal">Applicant</th>
-              <th className="px-3 py-2 font-normal">Passport</th>
-              <th className="px-3 py-2 font-normal">Custody</th>
-              <th className="px-3 py-2 font-normal">Outcome</th>
-              <th className="px-3 py-2 font-normal">Courier</th>
+            <tr className="mrz border-b border-line bg-mist text-[10px] text-ink-soft">
+              <th className="px-4 py-2.5 font-medium">Applicant</th>
+              <th className="px-4 py-2.5 font-medium">Passport</th>
+              <th className="px-4 py-2.5 font-medium">Custody</th>
+              <th className="px-4 py-2.5 font-medium">Outcome</th>
+              <th className="px-4 py-2.5 font-medium">Courier</th>
             </tr>
           </thead>
           <tbody>
@@ -441,13 +441,17 @@ function ApplicantsTable({
               <tr
                 key={applicant.applicantRef}
                 data-testid="case-applicant-row"
-                className="border-t border-crm-rule-row"
+                className="border-t border-line"
               >
-                <td className="px-3 py-2 font-medium text-crm-charcoal">{applicant.applicantRef}</td>
-                <td className="px-3 py-2 text-crm-steel">
-                  {applicant.passportNumber ?? "No passport on file"}
+                <td className="px-4 py-2.5 font-medium text-ink">{applicant.applicantRef}</td>
+                <td className="px-4 py-2.5 text-ink-soft">
+                  {applicant.passportNumber === undefined ? (
+                    "No passport on file"
+                  ) : (
+                    <span className="mrz text-xs">{applicant.passportNumber}</span>
+                  )}
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-4 py-2.5">
                   <ApplicantAxisControl
                     axis="custody"
                     applicantRef={applicant.applicantRef}
@@ -466,7 +470,7 @@ function ApplicantsTable({
                     }
                   />
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-4 py-2.5">
                   <ApplicantAxisControl
                     axis="outcome"
                     applicantRef={applicant.applicantRef}
@@ -485,7 +489,7 @@ function ApplicantsTable({
                     }
                   />
                 </td>
-                <td className="px-3 py-2 text-crm-charcoal">{describeCourier(applicant)}</td>
+                <td className="px-4 py-2.5 text-ink">{describeCourier(applicant)}</td>
               </tr>
             ))}
           </tbody>
@@ -563,21 +567,21 @@ function describeCourier(applicant: crm.CaseApplicant): string {
 function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
   return (
     <CaseSection title="Line items">
-      <div className="overflow-x-auto rounded-crm-card border border-crm-rule-box">
-        <table className="w-full border-collapse text-left">
+      <div className={`${CARD_CLASS} overflow-x-auto`}>
+        <table className="w-full border-collapse text-left text-sm">
           <thead>
-            <tr className="bg-crm-surface text-[12px] uppercase tracking-wide text-crm-steel">
-              <th className="px-3 py-2 font-normal">Item</th>
-              <th className="px-3 py-2 font-normal">Kind</th>
-              <th className="px-3 py-2 font-normal">Quantity</th>
-              <th className="px-3 py-2 font-normal">Unit price</th>
-              <th className="px-3 py-2 font-normal">Line total</th>
+            <tr className="mrz border-b border-line bg-mist text-[10px] text-ink-soft">
+              <th className="px-4 py-2.5 font-medium">Item</th>
+              <th className="px-4 py-2.5 font-medium">Kind</th>
+              <th className="px-4 py-2.5 font-medium">Quantity</th>
+              <th className="px-4 py-2.5 font-medium">Unit price</th>
+              <th className="px-4 py-2.5 font-medium">Line total</th>
             </tr>
           </thead>
           <tbody>
             {caseRecord.lineItems.length === 0 ? (
-              <tr className="border-t border-crm-rule-row">
-                <td colSpan={5} className="px-3 py-2 text-crm-steel">
+              <tr className="border-t border-line">
+                <td colSpan={5} className="px-4 py-2.5 text-ink-soft">
                   No line items on this case.
                 </td>
               </tr>
@@ -586,13 +590,13 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
                 <tr
                   key={lineItem.code}
                   data-testid="case-line-item-row"
-                  className="border-t border-crm-rule-row"
+                  className="border-t border-line"
                 >
-                  <td className="px-3 py-2 text-crm-charcoal">{lineItem.label}</td>
-                  <td className="px-3 py-2 text-crm-steel">{LINE_ITEM_KIND_LABELS[lineItem.kind]}</td>
-                  <td className="px-3 py-2 text-crm-charcoal">{lineItem.quantity}</td>
-                  <td className="px-3 py-2 text-crm-charcoal">{formatInr(lineItem.amountInr)}</td>
-                  <td className="px-3 py-2 text-crm-charcoal">
+                  <td className="px-4 py-2.5 text-ink">{lineItem.label}</td>
+                  <td className="px-4 py-2.5 text-ink-soft">{LINE_ITEM_KIND_LABELS[lineItem.kind]}</td>
+                  <td className="px-4 py-2.5 text-ink">{lineItem.quantity}</td>
+                  <td className="px-4 py-2.5 text-ink">{formatInr(lineItem.amountInr)}</td>
+                  <td className="px-4 py-2.5 text-ink">
                     {formatInr(lineItem.amountInr * lineItem.quantity)}
                   </td>
                 </tr>
@@ -600,11 +604,11 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
             )}
           </tbody>
           <tfoot>
-            <tr className="border-t border-crm-rule-box bg-crm-surface">
-              <td colSpan={4} className="px-3 py-2 text-[12px] uppercase tracking-wide text-crm-steel">
+            <tr className="border-t border-line bg-mist">
+              <td colSpan={4} className={`${FIELD_LABEL_CLASS} px-4 py-2.5`}>
                 Case total
               </td>
-              <td data-testid="case-total" className="px-3 py-2 font-medium text-crm-charcoal">
+              <td data-testid="case-total" className="px-4 py-2.5 font-semibold text-ink">
                 {formatInr(caseRecord.totalInr)}
               </td>
             </tr>

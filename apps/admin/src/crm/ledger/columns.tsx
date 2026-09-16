@@ -6,8 +6,8 @@ import { AxisChip } from "../components/Chip";
 import { describeCaseType, describeCustodyRollUp, formatInr } from "../labels";
 import { ReviewMarker } from "./ReviewMarker";
 
-/** Exactly 32px. Spec §3: a desk agent must see ~30 cases without scrolling. */
-export const LEDGER_ROW_HEIGHT = 32;
+/** Exactly 40px: the Queue table's row height, chosen for readability over density (2026-09-16). About 18 rows on a laptop. */
+export const LEDGER_ROW_HEIGHT = 40;
 
 /**
  * Per-row data that is not part of the row itself, handed to `render` as a
@@ -86,7 +86,7 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
         <Link
           to={`/crm/cases/${row.caseId}`}
           tabIndex={-1}
-          className="text-crm-link hover:underline"
+          className="mrz text-xs font-semibold text-rgs-red-deep hover:underline"
         >
           {row.caseRef}
         </Link>

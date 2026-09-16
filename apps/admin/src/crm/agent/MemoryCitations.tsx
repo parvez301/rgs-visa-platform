@@ -36,20 +36,20 @@ export function MemoryCitations({
   failureMessage,
 }: MemoryCitationsProps) {
   return (
-    <section aria-label="What the agent remembers" className="text-[13px]">
-      <h3 className="font-medium text-crm-charcoal">What the agent remembers</h3>
-      <p className="mt-0.5 text-crm-steel">
+    <section aria-label="What the agent remembers" className="text-sm">
+      <h3 className="font-semibold text-ink">What the agent remembers</h3>
+      <p className="mt-0.5 text-ink-soft">
         The agent is given these on every turn. Delete one and it stops seeing it.
       </p>
 
-      {isLoading && <p className="mt-1 text-crm-steel">Loading what the agent remembers…</p>}
+      {isLoading && <p className="mt-1 text-ink-soft">Loading what the agent remembers…</p>}
 
       {!isLoading && memories.length === 0 && (
-        <p className="mt-1 text-crm-steel">The desk has not taught the agent anything yet.</p>
+        <p className="mt-1 text-ink-soft">The desk has not taught the agent anything yet.</p>
       )}
 
       {failureMessage !== undefined && (
-        <p role="alert" className="mt-1 text-crm-charcoal">
+        <p role="alert" className="mt-1 text-ink">
           {failureMessage}
         </p>
       )}
@@ -58,11 +58,11 @@ export function MemoryCitations({
         {memories.map((memory) => (
           <li
             key={`${memory.scope}#${memory.memoryKey}`}
-            className="flex items-start gap-2 rounded-crm-badge border border-crm-rule-row px-2 py-1"
+            className="flex items-start gap-2 rounded-xl border border-line px-3 py-2"
           >
             <span className="flex-1">
-              <span className="block text-crm-charcoal">{memory.text}</span>
-              <span className="block text-[12px] text-crm-steel">
+              <span className="block text-ink">{memory.text}</span>
+              <span className="block text-xs text-ink-soft">
                 Remembered by {describeEnumValue(memory.createdBy, MEMORY_AUTHOR_LABELS)} for{" "}
                 {describeMemoryScope(memory.scope)}
               </span>
@@ -74,7 +74,7 @@ export function MemoryCitations({
               aria-label={`Forget ${memory.memoryKey}`}
               disabled={forgettingMemoryKeys.includes(memory.memoryKey)}
               onClick={() => onForget(memory)}
-              className="shrink-0 rounded-crm-control border border-crm-rule-box px-1.5 text-crm-steel disabled:opacity-60"
+              className="shrink-0 rounded-full border border-line px-2 text-ink-soft transition-colors hover:text-rgs-red-deep disabled:opacity-60"
             >
               <span aria-hidden="true">×</span>
             </button>
@@ -85,7 +85,7 @@ export function MemoryCitations({
       {unreadableMemoryKeys.length > 0 && (
         // Named, never silently missing -- the rule every listing in this
         // codebase follows.
-        <p role="status" className="mt-1 text-crm-steel">
+        <p role="status" className="mt-1 text-ink-soft">
           {unreadableMemoryKeys.length === 1
             ? "1 remembered fact could not be read and is missing from this list."
             : `${unreadableMemoryKeys.length} remembered facts could not be read and are missing from this list.`}

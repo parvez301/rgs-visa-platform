@@ -28,6 +28,15 @@ export interface AgentPanelSession {
   /** Every tool the agent has used this session, oldest first, deduplicated. */
   toolNamesUsed: string[];
   isTurnInFlight: boolean;
+  /**
+   * Whether the agent column is open. Held here, not in `CrmLayout`, for the
+   * same reason the conversation is: the layout remounts on every route
+   * change, and a panel a desk agent opened on the Ledger must still be open
+   * when they click through to a case. Closed on first load -- the grid gets
+   * the room until the agent is asked for.
+   */
+  isPanelOpen: boolean;
+  setPanelOpen(isOpen: boolean): void;
   beginTurn(userMessage: string): string;
   completeTurn(turnId: string, userMessage: string, result: AgentTurnResponse): void;
   failTurn(turnId: string, failureMessage: string): void;
@@ -61,6 +70,7 @@ export function AgentPanelProvider({ children }: { children: ReactNode }) {
 function useAgentPanelSessionState(): AgentPanelSession {
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
   const [turns, setTurns] = useState<AgentTurnEntry[]>([]);
+  const [isPanelOpen, setPanelOpen] = useState(false);
 
   const beginTurn = useCallback((userMessage: string): string => {
     const turnId = `agent-turn-${nextTurnSequenceNumber++}`;
@@ -109,11 +119,13 @@ function useAgentPanelSessionState(): AgentPanelSession {
       lastResult: answeredTurns.at(-1)?.result,
       toolNamesUsed,
       isTurnInFlight: turns.some((turn) => turn.status === "pending"),
+      isPanelOpen,
+      setPanelOpen,
       beginTurn,
       completeTurn,
       failTurn,
     };
-  }, [transcript, turns, beginTurn, completeTurn, failTurn]);
+  }, [transcript, turns, isPanelOpen, beginTurn, completeTurn, failTurn]);
 
   return sessionValue;
 }
