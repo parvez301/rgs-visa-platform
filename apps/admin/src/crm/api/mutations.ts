@@ -215,18 +215,69 @@ export function rollbackOptimisticCaseWrite(
   queryClient.setQueryData(crmQueryKeys.case(caseId), context.caseSnapshot);
 }
 
+/**
+ * R76: the ledger is marked STALE, never refetched on the spot; the case is
+ * refetched actively.
+ *
+ * `listLedgerRows` (services/api/src/domain/crm/ledger.ts) reads GSI1 through
+ * `queryGsiPage`, and a DynamoDB GSI read is always eventually consistent --
+ * the plan's own `## Established facts` says so. Refetching the instant the PUT
+ * settles therefore races the index: the base-table write returns, the client
+ * immediately re-reads GSI1, and GSI1 may still be serving the pre-write
+ * projection. The refetch then overwrites the optimistic value with the stale
+ * one -- and because `hooks.ts` gives the ledger `staleTime: 5 * 60_000`,
+ * nothing asks again for five minutes. The desk agent watches their edit apply,
+ * revert, and stay reverted. The race is narrow (GSI propagation is usually
+ * sub-second against a 50-200ms round trip) but one-directional: it can only
+ * ever lose the newer value.
+ *
+ * `refetchType: "none"` marks every matching ledger entry invalidated without
+ * starting a fetch, so the next natural read -- a remount, a window focus, a
+ * filter change -- picks the ledger up once the index has caught up, and until
+ * then the optimistic patch (which holds exactly what the PUT wrote) stands.
+ * The case query keeps refetching actively on purpose: `getCase` is a
+ * strongly consistent GetItem on the base table, so it has no race to lose.
+ *
+ * No test can see this. `InMemoryTableClient` is strongly consistent by
+ * construction, so `queryGsiPage` there always reflects the preceding `put`
+ * (G5) -- this comment is the record of the decision, which is why it is this
+ * long. What `mutations.test.tsx` CAN pin, and does, is the mechanism: after a
+ * settled write the ledger entry is invalidated and no second ledger GET went
+ * out, while the case GET did.
+ */
 export function invalidateAfterCaseWriteSettles(queryClient: QueryClient, caseId: string): void {
-  void queryClient.invalidateQueries({ queryKey: LEDGER_CACHE_KEY_PREFIX });
+  void queryClient.invalidateQueries({ queryKey: LEDGER_CACHE_KEY_PREFIX, refetchType: "none" });
   void queryClient.invalidateQueries({ queryKey: crmQueryKeys.case(caseId) });
 }
 
 /**
- * Rule 4's one trigger: a 409 shows both values and asks, and every other
- * failure rolls back silently (rule 2). Shared with `useApplicantEdit` so the
- * two hooks can never disagree about which failures earn a prompt.
+ * Rule 4's one trigger: a 409 shows both values and asks. Shared with
+ * `useApplicantEdit` so the two hooks can never disagree about which failures
+ * earn a prompt.
  */
 export function readConflictMessage(error: Error): string | undefined {
   return error instanceof ApiRequestError && error.statusCode === 409 ? error.message : undefined;
+}
+
+/** What a non-`ApiRequestError` failure -- a dropped connection, a DNS failure -- says. */
+export const WRITE_DID_NOT_SAVE_MESSAGE =
+  "Your edit did not save. Check your connection and try again.";
+
+/**
+ * R77: what a write failure that is NOT a 409 tells the human.
+ *
+ * Plan rule 2 and spec line 333 both say "rollback on failure" and neither
+ * asks for a message, and the branch followed the letter: a 400 from a
+ * malformed body, a 403 from an expired token, a 500 or a dropped connection
+ * all produced an optimistic write, a rollback, and nothing at all -- the
+ * value flickered and reverted, four different causes looking identical.
+ * The server's own words where there are any (rule 4's reasoning about a 409
+ * applies just as well to a 400: the server is the one that knows why), and a
+ * fixed sentence naming the likeliest cause when the failure never reached a
+ * server to have words.
+ */
+export function describeFailedWriteMessage(error: Error): string {
+  return error instanceof ApiRequestError ? error.message : WRITE_DID_NOT_SAVE_MESSAGE;
 }
 
 /**
@@ -298,13 +349,47 @@ export function useLedgerEdit(): UseLedgerEditResult {
 
   function onErrorForEdit(error: Error, edit: LedgerEdit, context: OptimisticCaseWriteContext | undefined): void {
     rollbackOptimisticCaseWrite(queryClient, edit.caseId, context);
-    // Rule 4: a 409 shows both values and asks -- it never picks. Every
-    // other failure just rolls back silently (rule 2); only a genuine
-    // conflict earns the prompt.
+    // Rule 4: a 409 shows both values and asks -- it never picks. Only a
+    // genuine conflict earns the prompt, and the prompt is the whole message:
+    // a toast beside it would be a second, quieter answer to the same
+    // question.
     const conflictMessage = readConflictMessage(error);
     if (conflictMessage !== undefined) {
       setPendingConflict({ edit, serverMessage: conflictMessage });
     }
+    // Every OTHER failure is reported by `reportFailedWrite` below, from
+    // `commitEdit`'s own per-call `onError` rather than from here -- see that
+    // function for why this shared handler is the wrong place for it.
+  }
+
+  /**
+   * R77: a write failure that is not a 409 must not be silent.
+   *
+   * Before this, a 400 from a malformed body, a 403 from an expired token, a
+   * 500 and a dropped connection all looked identical to a desk agent: the
+   * value flickered and reverted, with no toast, no alert and nothing in the
+   * UI to say which of the four had happened. `showUndo(message)` with no undo
+   * callback is the message-only toast this branch already built for "this
+   * change cannot be undone from here" -- no new machinery.
+   *
+   * DELIBERATELY NOT in `onErrorForEdit`, which R77 names, and this is the one
+   * place this wave departs from a ruling (reported, not silent). That handler
+   * is shared verbatim with the inverse write `performUndo` drives, and an
+   * undo failure is ALREADY reported -- `UndoToast` renders "Undo failed:
+   * <the server's words>" on the toast that offered the undo, with a Retry
+   * button. Firing this from there would print the server's sentence twice for
+   * one failure and, on the network branch, would tell the human "Your edit
+   * did not save" about an edit that saved perfectly well and an UNDO that did
+   * not. A per-call `onError` beside the `onSuccess` that is already here
+   * scopes the message to a human's own commit -- including a "Keep mine"
+   * retry, which goes back through `commitEdit` -- and costs no machinery at
+   * all.
+   */
+  function reportFailedWrite(error: Error): void {
+    // The 409 already has the conflict prompt, which asks a question; a toast
+    // beside it would be a second, quieter answer to the same question.
+    if (readConflictMessage(error) !== undefined) return;
+    showUndo(describeFailedWriteMessage(error));
   }
 
   function onSettledForEdit(_data: crm.CrmCase | undefined, _error: Error | null, edit: LedgerEdit): void {
@@ -382,6 +467,7 @@ export function useLedgerEdit(): UseLedgerEditResult {
           showUndo(describeUndoImpossibleMessage(edit));
         }
       },
+      onError: reportFailedWrite,
     });
     await optimisticWriteApplied;
   }

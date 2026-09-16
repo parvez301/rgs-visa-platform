@@ -112,7 +112,19 @@ export function EditableCell({
 
   function commitDraft(options: { keepOpen: boolean }) {
     const currentValue = readLedgerColumnValue(column, row);
-    if (draftValue !== currentValue) {
+    // An EMPTY draft is not a write, exactly as `CasePage`'s
+    // `AppointmentDateControl` already decides for the same two axes. Neither
+    // `appointmentDate` nor `visaType` can be UNSET through
+    // `PUT /cases/{caseId}`: `crmApi.ts`'s `isoDateBody` rejects "" on its
+    // `^\d{4}-\d{2}-\d{2}$` regex and the visa enum has no empty member. That
+    // is a 400, not a 409, so before this guard clearing the date input and
+    // tabbing away sent a write the route refused, the optimistic patch rolled
+    // back, and the cell simply blinked empty and snapped back. (The two
+    // select-backed axes cannot produce an empty draft at all, so this costs
+    // them nothing.) A no-op that still CLOSES: the editor did its job, there
+    // was just nothing to send.
+    const isEmptyDraft = draftValue === "";
+    if (!isEmptyDraft && draftValue !== currentValue) {
       onCommit(draftValue);
     }
     if (!options.keepOpen) {

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
 import { ApiRequestError } from "../../src/lib/adminApi";
-import { crmQueryKeys } from "../../src/crm/api/hooks";
+import { crmQueryKeys, useCase, useLedgerRows } from "../../src/crm/api/hooks";
 import type { LedgerLoad } from "../../src/crm/api/crmClient";
 import { UndoToastProvider } from "../../src/crm/UndoToast";
 import { useLedgerEdit, type LedgerEdit, type UseLedgerEditResult } from "../../src/crm/api/mutations";
@@ -23,6 +23,13 @@ interface RequestLogEntry {
 interface DeferredResponse {
   resolve: (payload: unknown) => void;
   reject: (error: ApiRequestError) => void;
+  /**
+   * Rejects the `fetch` PROMISE itself rather than resolving it with a
+   * not-ok `Response` -- a dropped connection, a DNS failure, a CORS refusal.
+   * G4: no stub on this branch could produce one, which is why the only
+   * failure the suite had ever seen was an HTTP status.
+   */
+  failAtTheNetwork: (networkError: Error) => void;
 }
 
 function buildLedgerRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
@@ -89,7 +96,7 @@ function renderLedgerWithDeferredApi(options: { rowCount?: number } = {}) {
         url: String(url),
         body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
       });
-      return new Promise((resolvePromise) => {
+      return new Promise((resolvePromise, rejectPromise) => {
         pendingDeferreds.push({
           resolve: (payload) => resolvePromise({ ok: true, status: 200, json: async () => payload }),
           reject: (error) =>
@@ -98,6 +105,7 @@ function renderLedgerWithDeferredApi(options: { rowCount?: number } = {}) {
               status: error.statusCode,
               json: async () => ({ code: error.code, message: error.message }),
             }),
+          failAtTheNetwork: (networkError) => rejectPromise(networkError),
         });
       });
     }),
@@ -113,6 +121,12 @@ function renderLedgerWithDeferredApi(options: { rowCount?: number } = {}) {
     const deferred = pendingDeferreds.shift();
     if (deferred === undefined) throw new Error("No pending request to reject");
     deferred.reject(error);
+  }
+
+  function failRequestAtTheNetwork(networkError: Error): void {
+    const deferred = pendingDeferreds.shift();
+    if (deferred === undefined) throw new Error("No pending request to fail");
+    deferred.failAtTheNetwork(networkError);
   }
 
   const queryClient = new QueryClient({
@@ -141,7 +155,7 @@ function renderLedgerWithDeferredApi(options: { rowCount?: number } = {}) {
     });
   }
 
-  return { queryClient, requestLog, resolveRequest, rejectRequest, commitEdit };
+  return { queryClient, requestLog, resolveRequest, rejectRequest, failRequestAtTheNetwork, commitEdit };
 }
 
 function cachedRow(queryClient: QueryClient, caseId: string, queryKey: QueryKey = DEFAULT_LEDGER_QUERY_KEY): crm.LedgerRow {
@@ -155,6 +169,88 @@ function cachedRows(queryClient: QueryClient, queryKey: QueryKey = DEFAULT_LEDGE
   const ledgerLoad = queryClient.getQueryData<LedgerLoad>(queryKey);
   if (ledgerLoad === undefined) throw new Error(`no ledger cache entry at ${JSON.stringify(queryKey)}`);
   return ledgerLoad.rows;
+}
+
+/**
+ * A second harness, for R76 only: the one with LIVE queries.
+ *
+ * Every other test in this file seeds the ledger cache with `setQueryData`,
+ * which leaves the query INACTIVE -- no observers -- and an inactive query is
+ * not refetched by `invalidateQueries` at any `refetchType`. A refetch
+ * assertion against that harness could therefore never fail, whichever way the
+ * code went. So this one mounts the real `useLedgerRows` and `useCase`
+ * alongside `useLedgerEdit`, answers their GETs from a URL-routed stub, and
+ * counts what actually went out.
+ */
+function LiveLedgerQueriesHarness({ onReady }: { onReady: (api: UseLedgerEditResult) => void }) {
+  useLedgerRows([], undefined);
+  useCase("case_1");
+  onReady(useLedgerEdit());
+  return null;
+}
+
+function renderLedgerEditWithLiveQueries() {
+  const requestLog: RequestLogEntry[] = [];
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit = {}) => {
+      const requestUrl = String(url);
+      const requestMethod = init.method ?? "GET";
+      requestLog.push({
+        method: requestMethod,
+        url: requestUrl,
+        body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
+      });
+      if (requestMethod === "GET" && requestUrl.includes("/cases/ledger")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            rows: [buildLedgerRow()],
+            unreadableCaseIds: [],
+            appliedQuery: { statuses: [], limit: 500 },
+          }),
+        };
+      }
+      // The case GET and the axis PUT both answer with the case record; only
+      // the request COUNTS matter here, never the payloads.
+      return { ok: true, status: 200, json: async () => ({ caseId: "case_1", caseStatus: "IN_PROGRESS" }) };
+    }),
+  );
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+
+  let ledgerEditApi: UseLedgerEditResult | undefined;
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <UndoToastProvider>
+        <LiveLedgerQueriesHarness
+          onReady={(api) => {
+            ledgerEditApi = api;
+          }}
+        />
+      </UndoToastProvider>
+    </QueryClientProvider>,
+  );
+
+  function countGetsMatching(urlFragment: string): number {
+    return requestLog.filter(
+      (entry) => entry.method === "GET" && entry.url.includes(urlFragment),
+    ).length;
+  }
+
+  async function commitEdit(edit: LedgerEdit): Promise<void> {
+    if (ledgerEditApi === undefined) throw new Error("useLedgerEdit has not rendered yet");
+    await act(async () => {
+      await ledgerEditApi!.commitEdit(edit);
+    });
+  }
+
+  return { queryClient, requestLog, countGetsMatching, commitEdit };
 }
 
 beforeEach(() => {
@@ -376,6 +472,65 @@ describe("useLedgerEdit", () => {
     expect(screen.getByRole("button", { name: /retry undo/i })).toBeInTheDocument();
   });
 
+  it("R77: shows the server's own words when a write fails with something other than a 409", async () => {
+    // Finding #4 / G4. A 400 from a malformed body, a 403 from an expired
+    // token and a 500 all used to look identical to a desk agent: the value
+    // flickered and reverted, and `mutations.test.tsx`'s own 500 test asserted
+    // the CACHE rolled back and nothing about what the human was told, because
+    // nothing was told. The 400 is not hypothetical -- an empty
+    // `appointmentDate` produces exactly this (finding #3).
+    const { commitEdit, rejectRequest, queryClient } = renderLedgerWithDeferredApi();
+
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await act(async () => {
+      rejectRequest(new ApiRequestError(400, "BAD_REQUEST", "appointmentDate must look like 2026-03-09"));
+    });
+
+    // The server's own words, not a paraphrase -- rule 4's reasoning about a
+    // 409 applies just as well to a 400: the server is the one that knows why.
+    expect(await screen.findByText("appointmentDate must look like 2026-03-09")).toBeInTheDocument();
+    // And the rollback still happened -- the message is in ADDITION to rule 2,
+    // never instead of it.
+    await waitFor(() => expect(cachedRow(queryClient, "case_1").caseStatus).toBe("NEW"));
+  });
+
+  it("R77: says the edit did not save when the request never reached a server at all", async () => {
+    // The branch that has no server words to borrow. G4 again: every fetch
+    // stub on this branch resolved with `{ ok, status, json }`, so a dropped
+    // connection -- the failure a desk agent on hotel wifi actually hits --
+    // could not be produced at all until `failRequestAtTheNetwork` existed.
+    const { commitEdit, failRequestAtTheNetwork } = renderLedgerWithDeferredApi();
+
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await act(async () => {
+      failRequestAtTheNetwork(new TypeError("Failed to fetch"));
+    });
+
+    expect(
+      await screen.findByText("Your edit did not save. Check your connection and try again."),
+    ).toBeInTheDocument();
+    // Never the raw exception: "Failed to fetch" is a browser's words about a
+    // promise, not a sentence for a desk agent.
+    expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+  });
+
+  it("R77: a 409 still gets the conflict prompt and no toast beside it", async () => {
+    // The prompt asks a question. A toast next to it would be a second,
+    // quieter answer to the same question, and rule 4 gives the human exactly
+    // one place to decide.
+    const { commitEdit, rejectRequest } = renderLedgerWithDeferredApi();
+
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "CLOSED" });
+    await act(async () => {
+      rejectRequest(new ApiRequestError(409, "CONFLICT", "Cannot move a case from SUBMITTED to CLOSED"));
+    });
+
+    await screen.findByRole("alertdialog");
+    // `UndoToast` renders one `role="status"` per toast, so an empty list is
+    // "no toast on screen" and not merely "no toast with these words".
+    expect(screen.queryAllByRole("status")).toHaveLength(0);
+  });
+
   it("suppresses 'Retry undo' when the undo itself hits a 409, leaving the conflict prompt as the only recovery UI", async () => {
     // Fix round 1, F4. `onErrorForEdit` is shared, unmodified, by every axis
     // mutation including the one `performUndo` drives -- so a 409 here opens
@@ -398,5 +553,38 @@ describe("useLedgerEdit", () => {
 
     await screen.findByRole("alertdialog");
     expect(screen.queryByRole("button", { name: /retry undo/i })).not.toBeInTheDocument();
+  });
+
+  it("R76: marks the ledger stale after a write without re-reading the GSI, while the case is refetched", async () => {
+    // Finding #7. `listLedgerRows` reads GSI1, and a GSI read is always
+    // eventually consistent -- so a refetch fired the instant the PUT settles
+    // can be answered with the PRE-write projection and overwrite the
+    // optimistic value, which then sticks for the ledger's five-minute
+    // `staleTime`. `getCase` is a strongly consistent GetItem, so it has no
+    // race to lose and keeps refetching actively.
+    //
+    // G5 is explicit that no test can observe the race itself
+    // (`InMemoryTableClient` is strongly consistent), so what is pinned here is
+    // the MECHANISM: invalidated, but no second ledger GET.
+    const { queryClient, countGetsMatching, commitEdit } = renderLedgerEditWithLiveQueries();
+
+    // Both queries really are live and really did fetch -- without this the
+    // "no second GET" assertion below would also hold for a harness whose
+    // queries never ran at all.
+    await waitFor(() => {
+      expect(countGetsMatching("/cases/ledger")).toBe(1);
+      expect(countGetsMatching("/crm/cases/case_1")).toBe(1);
+    });
+
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+
+    // The case query IS refetched, which is what proves `onSettled` ran at all.
+    await waitFor(() => expect(countGetsMatching("/crm/cases/case_1")).toBe(2));
+
+    // No second ledger GET: the index is never re-read on the write's own
+    // heels, which is the whole of R76.
+    expect(countGetsMatching("/cases/ledger")).toBe(1);
+    // Marked stale all the same, so the next natural read picks it up.
+    expect(queryClient.getQueryState(DEFAULT_LEDGER_QUERY_KEY)?.isInvalidated).toBe(true);
   });
 });

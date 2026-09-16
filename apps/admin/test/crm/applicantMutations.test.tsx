@@ -42,6 +42,8 @@ interface RequestLogEntry {
 interface DeferredResponse {
   resolve: (payload: unknown) => void;
   reject: (error: ApiRequestError) => void;
+  /** Rejects the `fetch` PROMISE itself -- a dropped connection, not an HTTP status (G4). */
+  failAtTheNetwork: (networkError: Error) => void;
 }
 
 function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
@@ -104,7 +106,7 @@ function renderApplicantEditWithDeferredApi(seededCase: crm.CrmCase = buildCase(
         url: String(url),
         body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
       });
-      return new Promise((resolvePromise) => {
+      return new Promise((resolvePromise, rejectPromise) => {
         pendingDeferreds.push({
           resolve: (payload) => resolvePromise({ ok: true, status: 200, json: async () => payload }),
           reject: (error) =>
@@ -113,6 +115,7 @@ function renderApplicantEditWithDeferredApi(seededCase: crm.CrmCase = buildCase(
               status: error.statusCode,
               json: async () => ({ code: error.code, message: error.message }),
             }),
+          failAtTheNetwork: (networkError) => rejectPromise(networkError),
         });
       });
     }),
@@ -128,6 +131,12 @@ function renderApplicantEditWithDeferredApi(seededCase: crm.CrmCase = buildCase(
     const deferred = pendingDeferreds.shift();
     if (deferred === undefined) throw new Error("No pending request to reject");
     deferred.reject(error);
+  }
+
+  function failRequestAtTheNetwork(networkError: Error): void {
+    const deferred = pendingDeferreds.shift();
+    if (deferred === undefined) throw new Error("No pending request to fail");
+    deferred.failAtTheNetwork(networkError);
   }
 
   const queryClient = new QueryClient({
@@ -156,7 +165,7 @@ function renderApplicantEditWithDeferredApi(seededCase: crm.CrmCase = buildCase(
     });
   }
 
-  return { queryClient, requestLog, resolveRequest, rejectRequest, commitEdit };
+  return { queryClient, requestLog, resolveRequest, rejectRequest, failRequestAtTheNetwork, commitEdit };
 }
 
 function cachedApplicant(
@@ -361,5 +370,48 @@ describe("useApplicantEdit", () => {
 
     expect(await screen.findByText(/cannot be undone/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /undo/i })).not.toBeInTheDocument();
+  });
+
+  it("R77: shows the server's own words when a write fails with something other than a 409", async () => {
+    // The applicant half of finding #4. `onErrorForEdit` here is the same
+    // shape as `useLedgerEdit`'s and had the same silence: "puts the old
+    // custody back when the request fails" asserts the CACHE and nothing about
+    // what the human is told.
+    const { commitEdit, rejectRequest, queryClient } = renderApplicantEditWithDeferredApi();
+
+    await commitEdit(CUSTODY_EDIT);
+    await act(async () => {
+      rejectRequest(new ApiRequestError(403, "FORBIDDEN", "Your session has expired"));
+    });
+
+    expect(await screen.findByText("Your session has expired")).toBeInTheDocument();
+    await waitFor(() => expect(cachedApplicant(queryClient, "case_1", "A2").custody).toBe("WITH_RGS"));
+  });
+
+  it("R77: says the edit did not save when the request never reached a server at all", async () => {
+    const { commitEdit, failRequestAtTheNetwork } = renderApplicantEditWithDeferredApi();
+
+    await commitEdit(CUSTODY_EDIT);
+    await act(async () => {
+      failRequestAtTheNetwork(new TypeError("Failed to fetch"));
+    });
+
+    expect(
+      await screen.findByText("Your edit did not save. Check your connection and try again."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+  });
+
+  it("R77: a 409 still gets the conflict prompt and no toast beside it", async () => {
+    const { commitEdit, rejectRequest } = renderApplicantEditWithDeferredApi();
+
+    await commitEdit(CUSTODY_EDIT);
+    await act(async () => {
+      rejectRequest(new ApiRequestError(409, "CONFLICT", "Cannot move custody from RETURNED to AT_EMBASSY"));
+    });
+
+    await screen.findByRole("alertdialog");
+    // One `role="status"` per toast, so an empty list is "no toast at all".
+    expect(screen.queryAllByRole("status")).toHaveLength(0);
   });
 });

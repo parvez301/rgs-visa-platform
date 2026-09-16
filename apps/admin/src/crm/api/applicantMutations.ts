@@ -7,6 +7,7 @@ import { CUSTODY_LABELS, OUTCOME_LABELS } from "../labels";
 import { crmClient } from "./crmClient";
 import {
   applyOptimisticCaseWriteAndSnapshot,
+  describeFailedWriteMessage,
   invalidateAfterCaseWriteSettles,
   readConflictMessage,
   rollbackOptimisticCaseWrite,
@@ -141,6 +142,17 @@ export function useApplicantEdit(): UseApplicantEditResult {
     if (conflictMessage !== undefined) {
       setPendingConflict({ edit, serverMessage: conflictMessage });
     }
+    // Every other failure is reported by `reportFailedWrite` below, from
+    // `commitEdit`'s own per-call `onError`, for the reasons `useLedgerEdit`'s
+    // copy of that function sets out at length -- this handler is shared with
+    // the inverse write `performUndo` drives, and a failed undo already has
+    // its own words on the toast that offered it.
+  }
+
+  /** R77, and the same shape as `useLedgerEdit`'s: a non-409 write failure is never silent. */
+  function reportFailedWrite(error: Error): void {
+    if (readConflictMessage(error) !== undefined) return;
+    showUndo(describeFailedWriteMessage(error));
   }
 
   function onSettledForEdit(
@@ -199,6 +211,7 @@ export function useApplicantEdit(): UseApplicantEditResult {
           showUndo(describeUndoImpossibleMessage(edit));
         }
       },
+      onError: reportFailedWrite,
     });
     await optimisticWriteApplied;
   }

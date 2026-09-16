@@ -129,6 +129,43 @@ describe("EditableCell", () => {
     expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
 
+  it("writes nothing when the appointment date is cleared, because the PUT body cannot unset it", async () => {
+    // The twin of `CasePage.test.tsx`'s test of the same name. G3: this file's
+    // only `appointmentDate` test asserted the input's TYPE and never committed
+    // one, and every commit test here used `caseStatus` -- so `commitDraft("")`
+    // -> `updateCaseDetails({ appointmentDate: "" })` -> `isoDateBody` 400 ->
+    // silent rollback had no coverage at either end.
+    const onCommit = vi.fn();
+    const onCloseEditor = vi.fn();
+    const row = buildRow({ appointmentDate: "2026-02-01" });
+    const { container } = render(
+      <EditableCell
+        column="appointmentDate"
+        row={row}
+        onCommit={onCommit}
+        isEditing
+        onCloseEditor={onCloseEditor}
+      />,
+    );
+
+    const dateInput = screen.getByDisplayValue("2026-02-01");
+    fireEvent.change(dateInput, { target: { value: "" } });
+    // The draft really was cleared -- without this the assertion below is about
+    // an input that never changed, which no guard is needed to keep quiet.
+    expect(dateInput).toHaveValue("");
+
+    fireEvent.blur(dateInput);
+
+    expect(onCommit).not.toHaveBeenCalled();
+    // A no-op, not a stuck editor: the cell closes and hands the grid its
+    // `editing` state back, or the arrow keys stay dead afterwards.
+    expect(onCloseEditor).toHaveBeenCalledOnce();
+    expect(container.querySelector("input")).toBeNull();
+    // And the row's own stored value is what is on screen again, so nothing
+    // claims the date was cleared.
+    expect(container.textContent).toContain("2026-02-01");
+  });
+
   it("disables the visaType select, with a reason, when the case is not a VISA case", () => {
     // CrmCaseSchema refuses a visaType on a non-VISA case -- offering the
     // control here would let a desk agent trigger a 400 that reads as a
