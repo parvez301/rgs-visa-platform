@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider, type UseQueryResult } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -177,7 +177,7 @@ describe("LedgerPage — the partial-ledger banner", () => {
     stubPartners();
     // Explicitly clean on BOTH axes now that the banner has a third reason to
     // appear: a summary with no unreadable items must still produce silence.
-    stubReviewSummary([{ caseRef: "RGS-1001", fieldItemIds: ["rev_1"], mergeItemIds: [] }], []);
+    stubReviewSummary([{ caseRef: "RGS-1001", openReasons: [], fieldItemIds: ["rev_1"], mergeItemIds: [] }], []);
 
     renderLedgerPage();
 
@@ -371,7 +371,7 @@ describe("LedgerPage — review markers on the row (spec §7)", () => {
     stubPartners();
     // Joined on `caseRef` (R66): the summary is built from review items, which
     // name a workbook ref and never a caseId.
-    stubReviewSummary([{ caseRef: "RGS-1002", fieldItemIds: ["rev_1"], mergeItemIds: ["rev_9"] }]);
+    stubReviewSummary([{ caseRef: "RGS-1002", openReasons: [], fieldItemIds: ["rev_1"], mergeItemIds: ["rev_9"] }]);
 
     const { container } = renderLedgerPage();
 
@@ -391,5 +391,42 @@ describe("LedgerPage — review markers on the row (spec §7)", () => {
     // row it rendered.
     const cleanRefCell = mountedCell(container, "case_0001", "caseRef");
     expect(within(cleanRefCell).queryByRole("button")).not.toBeInTheDocument();
+  });
+});
+
+describe("LedgerPage — the issue filter", () => {
+  it("narrows the grid to the loaded cases carrying one open reason, badged or not, and counts them in the option", () => {
+    stubLedgerLoad({
+      truncated: false,
+      unreadableCaseIds: [],
+      rows: [
+        buildLedgerRow({ caseId: "case_0001", caseRef: "RGS-1001" }),
+        buildLedgerRow({ caseId: "case_0002", caseRef: "RGS-1002" }),
+        buildLedgerRow({ caseId: "case_0003", caseRef: "RGS-1003" }),
+      ],
+    });
+    stubPartners();
+    stubReviewSummary([
+      { caseRef: "RGS-1001", openReasons: ["UNMAPPED_PARTNER"], fieldItemIds: ["rev_1"], mergeItemIds: [] },
+      // A guess: open, not badged (no item ids), but still filterable.
+      { caseRef: "RGS-1002", openReasons: ["PROPOSED_GROUP"], fieldItemIds: [], mergeItemIds: [] },
+    ]);
+
+    renderLedgerPage();
+    const issueSelect = screen.getByLabelText("Issue") as HTMLSelectElement;
+    expect(screen.getByRole("option", { name: "With an open issue (2)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Without open issues (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "May belong with another case (1)" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Country not recognised/ })).toBeNull();
+
+    fireEvent.change(issueSelect, { target: { value: "PROPOSED_GROUP" } });
+    expect(screen.getByText("RGS-1002")).toBeInTheDocument();
+    expect(screen.queryByText("RGS-1001")).toBeNull();
+    expect(screen.queryByText("RGS-1003")).toBeNull();
+    expect(screen.getByText("Showing 1 of 3 loaded cases")).toBeInTheDocument();
+
+    fireEvent.change(issueSelect, { target: { value: "__no_issue__" } });
+    expect(screen.getByText("RGS-1003")).toBeInTheDocument();
+    expect(screen.queryByText("RGS-1001")).toBeNull();
   });
 });

@@ -112,6 +112,8 @@ export interface UpdateCaseDetailsBody {
 /** Mirrors `OpenReviewSummaryEntry` (services/api/src/domain/crm/reviewQueue.ts). */
 export interface OpenReviewSummaryEntry {
   caseRef: string;
+  /** Every reason with an open item on the case, badged or not; the Ledger's issue filter reads this. */
+  openReasons: crm.ReviewReason[];
   /** Items about one cell: a value that could not be read or mapped. */
   fieldItemIds: string[];
   /** Items about two rows: PROPOSED_GROUP, DUPLICATE_REF. */

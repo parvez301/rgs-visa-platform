@@ -15,7 +15,7 @@ import {
   PRIMARY_BUTTON_CLASS,
   SECONDARY_BUTTON_CLASS,
 } from "../components/controls";
-import { CASE_STATUS_LABELS } from "../labels";
+import { CASE_STATUS_LABELS, REVIEW_REASON_LABELS } from "../labels";
 import { NewCaseDrawer } from "../newCase/NewCaseDrawer";
 import { applyFilters, applySort, type LedgerFilters, type LedgerSort } from "./filters";
 import { LedgerTable } from "./LedgerTable";
@@ -41,6 +41,23 @@ const NO_CLIENT_FILTERS: ClientOnlyLedgerFilters = {};
  * the filter bar never shows an agent a status chip that the server is
  * silently ignoring underneath a partner filter.
  */
+const ALL_CASES = "";
+const WITH_ANY_ISSUE = "__any_issue__";
+const WITHOUT_ISSUES = "__no_issue__";
+type IssueFilter = typeof ALL_CASES | typeof WITH_ANY_ISSUE | typeof WITHOUT_ISSUES | crm.ReviewReason;
+
+/** Exported for the filter's own test; the page is otherwise the only caller. */
+export function rowMatchesIssueFilter(
+  reviewEntry: OpenReviewSummaryEntry | undefined,
+  issueFilter: IssueFilter,
+): boolean {
+  const openReasons = reviewEntry?.openReasons ?? [];
+  if (issueFilter === ALL_CASES) return true;
+  if (issueFilter === WITH_ANY_ISSUE) return openReasons.length > 0;
+  if (issueFilter === WITHOUT_ISSUES) return openReasons.length === 0;
+  return openReasons.includes(issueFilter);
+}
+
 export function LedgerPage() {
   const { email: signedInUserEmail } = useAuth();
   const [selectedCaseStatuses, setSelectedCaseStatuses] = useState<crm.CaseStatus[]>([]);
@@ -48,6 +65,12 @@ export function LedgerPage() {
   const [clientLedgerFilters, setClientLedgerFilters] = useState<ClientOnlyLedgerFilters>(NO_CLIENT_FILTERS);
   const [ledgerSort, setLedgerSort] = useState<LedgerSort>(DEFAULT_LEDGER_SORT);
   const [isNewCaseDrawerOpen, setIsNewCaseDrawerOpen] = useState(false);
+  /**
+   * Client-side, over the rows already loaded: the summary knows every open
+   * reason per REF, so no second server round-trip is needed to ask "show me
+   * every case whose partner the import could not place".
+   */
+  const [selectedIssueFilter, setSelectedIssueFilter] = useState<IssueFilter>(ALL_CASES);
   /**
    * R62: the grid's selection, lifted here so `CrmLayout`'s right column can
    * hand it to the agent. `useCallback` with `[]` deps keeps the identity
@@ -151,10 +174,27 @@ export function LedgerPage() {
 
   const visibleLedgerRows = useMemo(() => {
     const loadedRows = ledgerLoad?.rows ?? [];
-    const filteredRows = applyFilters(loadedRows, activeLedgerFilters, partnerNamesById);
+    const filteredRows = applyFilters(loadedRows, activeLedgerFilters, partnerNamesById).filter((row) =>
+      rowMatchesIssueFilter(reviewEntriesByCaseRef.get(row.caseRef), selectedIssueFilter),
+    );
     return applySort(filteredRows, ledgerSort);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ledgerLoad?.rows, clientLedgerFilters, ledgerSort, partnerNamesById]);
+  }, [ledgerLoad?.rows, clientLedgerFilters, ledgerSort, partnerNamesById, reviewEntriesByCaseRef, selectedIssueFilter]);
+
+  /** How many LOADED cases each issue option would show; drawn into the option labels. */
+  const issueCaseCounts = useMemo(() => {
+    const countByReason = new Map<crm.ReviewReason, number>();
+    let withIssueCount = 0;
+    for (const row of ledgerLoad?.rows ?? []) {
+      const reviewEntry = reviewEntriesByCaseRef.get(row.caseRef);
+      if (reviewEntry === undefined || reviewEntry.openReasons.length === 0) continue;
+      withIssueCount += 1;
+      for (const reason of reviewEntry.openReasons) {
+        countByReason.set(reason, (countByReason.get(reason) ?? 0) + 1);
+      }
+    }
+    return { countByReason, withIssueCount, withoutIssueCount: (ledgerLoad?.rows.length ?? 0) - withIssueCount };
+  }, [ledgerLoad?.rows, reviewEntriesByCaseRef]);
 
   return (
     <CrmLayout agentPanel={<AgentPanel selectedCaseIds={selectedCaseIds} />}>
@@ -231,6 +271,28 @@ export function LedgerPage() {
                 placeholder="Search REF or partner"
                 className={`${INPUT_CLASS} min-w-64 font-normal`}
               />
+            </label>
+
+            <label className="flex items-center gap-2 text-sm font-medium text-ink">
+              Issue
+              <select
+                value={selectedIssueFilter}
+                onChange={(changeEvent) => setSelectedIssueFilter(changeEvent.target.value as IssueFilter)}
+                className={`${INPUT_CLASS} min-w-56 font-normal`}
+              >
+                <option value={ALL_CASES}>All cases</option>
+                <option value={WITH_ANY_ISSUE}>With an open issue ({issueCaseCounts.withIssueCount.toLocaleString()})</option>
+                <option value={WITHOUT_ISSUES}>
+                  Without open issues ({issueCaseCounts.withoutIssueCount.toLocaleString()})
+                </option>
+                {crm.REVIEW_REASONS.filter(
+                  (reason) => (issueCaseCounts.countByReason.get(reason) ?? 0) > 0 || reason === selectedIssueFilter,
+                ).map((reason) => (
+                  <option key={reason} value={reason}>
+                    {REVIEW_REASON_LABELS[reason]} ({(issueCaseCounts.countByReason.get(reason) ?? 0).toLocaleString()})
+                  </option>
+                ))}
+              </select>
             </label>
 
             {signedInUserEmail !== null && (

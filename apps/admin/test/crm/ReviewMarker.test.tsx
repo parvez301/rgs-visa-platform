@@ -14,13 +14,13 @@ describe("ReviewMarker", () => {
     // whether or not the grid's focus is on it -- what roves with the focus is
     // only whether Tab can REACH the chip, which LedgerTable.test.tsx asserts
     // against a real grid.
-    render(<ReviewMarker caseRef="RGS-1001" entry={{ caseRef: "RGS-1001", fieldItemIds: ["rev_1", "rev_2"], mergeItemIds: [] }} isFocusedRow={false} />);
+    render(<ReviewMarker caseRef="RGS-1001" entry={{ caseRef: "RGS-1001", openReasons: [], fieldItemIds: ["rev_1", "rev_2"], mergeItemIds: [] }} isFocusedRow={false} />);
     expect(screen.getByRole("button", { name: /2 import problems/i })).toBeInTheDocument();
   });
 
   it("marks a merge candidate differently from a field problem", () => {
-    const { container: fieldMarker } = render(<ReviewMarker caseRef="RGS-1001" entry={{ caseRef: "RGS-1001", fieldItemIds: ["rev_1"], mergeItemIds: [] }} isFocusedRow={false} />);
-    const { container: mergeMarker } = render(<ReviewMarker caseRef="RGS-1002" entry={{ caseRef: "RGS-1002", fieldItemIds: [], mergeItemIds: ["rev_9"] }} isFocusedRow={false} />);
+    const { container: fieldMarker } = render(<ReviewMarker caseRef="RGS-1001" entry={{ caseRef: "RGS-1001", openReasons: [], fieldItemIds: ["rev_1"], mergeItemIds: [] }} isFocusedRow={false} />);
+    const { container: mergeMarker } = render(<ReviewMarker caseRef="RGS-1002" entry={{ caseRef: "RGS-1002", openReasons: [], fieldItemIds: [], mergeItemIds: ["rev_9"] }} isFocusedRow={false} />);
 
     expect(mergeMarker.textContent).toMatch(/may be a duplicate/i);
     expect(mergeMarker.firstElementChild?.className).not.toBe(fieldMarker.firstElementChild?.className);

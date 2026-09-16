@@ -236,9 +236,16 @@ export const OPEN_REVIEW_SUMMARY_ATTRIBUTES: readonly string[] = [
 
 export interface OpenReviewSummaryEntry {
   caseRef: string;
+  /**
+   * Every reason with an open item on this case, guesses included, so the
+   * Ledger can FILTER by any of them. The two id lists below carry only the
+   * reasons the Ledger BADGES (LEDGER_MARKER_REASONS); a case whose only open
+   * items are guesses has an entry here with both lists empty.
+   */
+  openReasons: crm.ReviewReason[];
   /** Items about one cell: a value that could not be read or mapped. */
   fieldItemIds: string[];
-  /** Items about two rows: PROPOSED_GROUP, DUPLICATE_REF. */
+  /** Items about two rows: DUPLICATE_REF. */
   mergeItemIds: string[];
 }
 
@@ -292,10 +299,17 @@ export async function summariseOpenReviewItems(
     }
 
     const { reviewItemId, caseRef, reason } = parsedRow.data;
-    // Still OPEN, still on the review screen -- just not drawn on the grid.
-    // See LEDGER_MARKER_REASONS for the measured reason.
+    const entry = entriesByCaseRef.get(caseRef) ?? {
+      caseRef,
+      openReasons: [],
+      fieldItemIds: [],
+      mergeItemIds: [],
+    };
+    if (!entry.openReasons.includes(reason)) entry.openReasons.push(reason);
+    entriesByCaseRef.set(caseRef, entry);
+    // Still OPEN, still filterable, still on the review screen -- just not
+    // drawn on the grid. See LEDGER_MARKER_REASONS for the measured reason.
     if (!crm.isLedgerMarkerReason(reason)) continue;
-    const entry = entriesByCaseRef.get(caseRef) ?? { caseRef, fieldItemIds: [], mergeItemIds: [] };
     if (crm.isMergeReviewReason(reason)) {
       entry.mergeItemIds.push(reviewItemId);
     } else {

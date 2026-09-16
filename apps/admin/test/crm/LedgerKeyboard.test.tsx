@@ -124,7 +124,7 @@ function RouterLocationProbe() {
  * starts -- so the chip R74 makes tabbable is the chip these tests reach.
  */
 const FIRST_ROW_HAS_ONE_REVIEW_ITEM: ReadonlyMap<string, OpenReviewSummaryEntry> = new Map([
-  ["RGS-1000", { caseRef: "RGS-1000", fieldItemIds: ["rev_1"], mergeItemIds: [] }],
+  ["RGS-1000", { caseRef: "RGS-1000", openReasons: [], fieldItemIds: ["rev_1"], mergeItemIds: [] }],
 ]);
 
 /**

@@ -31,8 +31,8 @@ const partnerNames = { partner_1: "Skyline Travels" };
  * only one chip exists to be it.
  */
 const TWO_MARKED_ROWS: ReadonlyMap<string, OpenReviewSummaryEntry> = new Map([
-  ["RGS-1000", { caseRef: "RGS-1000", fieldItemIds: ["rev_1"], mergeItemIds: [] }],
-  ["RGS-1001", { caseRef: "RGS-1001", fieldItemIds: ["rev_2"], mergeItemIds: [] }],
+  ["RGS-1000", { caseRef: "RGS-1000", openReasons: [], fieldItemIds: ["rev_1"], mergeItemIds: [] }],
+  ["RGS-1001", { caseRef: "RGS-1001", openReasons: [], fieldItemIds: ["rev_2"], mergeItemIds: [] }],
 ]);
 
 function getGridElement(container: HTMLElement): HTMLElement {

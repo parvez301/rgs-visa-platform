@@ -469,6 +469,7 @@ describe("summariseOpenReviewItems", () => {
     const firstEntry = summary.entries.find((entry) => entry.caseRef === "RGS-1001");
     expect(firstEntry?.fieldItemIds).toEqual([unmapped.reviewItemId]);
     expect(firstEntry?.mergeItemIds).toEqual([merge.reviewItemId]);
+    expect(firstEntry?.openReasons).toEqual(["UNMAPPED_STATUS", "DUPLICATE_REF"]);
     expect(summary.entries.map((entry) => entry.caseRef).sort()).toEqual(["RGS-1001", "RGS-1002"]);
   });
 
@@ -495,8 +496,17 @@ describe("summariseOpenReviewItems", () => {
 
     const summary = await summariseOpenReviewItems(context, "rgs");
 
-    expect(summary.entries.map((entry) => entry.caseRef)).toEqual(["RGS-2002"]);
-    expect(summary.entries[0]?.mergeItemIds).toEqual([flagged.reviewItemId]);
+    const guessedEntry = summary.entries.find((entry) => entry.caseRef === "RGS-2001");
+    // Present, so the Ledger can filter on the guesses; empty, so it draws nothing.
+    expect(guessedEntry).toEqual({
+      caseRef: "RGS-2001",
+      openReasons: ["PROPOSED_GROUP", "SUSPECT_PHONE", "MISSING_REQUIRED_FIELD"],
+      fieldItemIds: [],
+      mergeItemIds: [],
+    });
+    const flaggedEntry = summary.entries.find((entry) => entry.caseRef === "RGS-2002");
+    expect(flaggedEntry?.mergeItemIds).toEqual([flagged.reviewItemId]);
+    expect(flaggedEntry?.openReasons).toEqual(["DUPLICATE_REF"]);
     // Still open: hidden from the grid is not the same as resolved.
     const openQueue = await listReviewItems(context, "rgs", "OPEN");
     expect(openQueue.reviewItems).toHaveLength(4);
