@@ -88,11 +88,11 @@ describe("ViewChips", () => {
     expect(pressedChipNames()).toEqual([]);
   });
 
-  it("keeps the product's one accent colour off the Save button (fix round 1, F3)", async () => {
+  it("keeps the product's one accent colour off the Save button AND off the pressed chip (R71)", async () => {
     // Global constraint: `--crm-primary` marks exactly one control in the
-    // product -- Approve on an agent proposal card -- and explicitly not
-    // Save. A className assertion because the constraint IS about the
-    // treatment: there is nothing else on screen to read it off.
+    // product -- Approve on an agent proposal card. A className assertion
+    // because the constraint IS about the treatment: there is nothing else on
+    // screen to read it off.
     const user = userEvent.setup();
     renderViewChips();
     await user.click(screen.getByRole("button", { name: "+ Save current view" }));
@@ -101,5 +101,20 @@ describe("ViewChips", () => {
     expect(saveButton.className).not.toContain("crm-primary");
     expect(saveButton.className).not.toContain("crm-lavender");
     expect(saveButton.className).toContain("border-crm-rule-box");
+
+    // Finding #8: the half this test used to leave out. It checked the Save
+    // button while the pressed chip standing beside it carried
+    // `border-crm-primary` the whole time -- which is how a constraint about
+    // the PRODUCT survives three per-file reviews unbroken and unmet. The
+    // pressed chip keeps its lavender fill and takes the neutral rule
+    // `ConflictPrompt`'s "Keep mine" already uses.
+    await user.type(screen.getByLabelText("Name this view"), "Dubai rush");
+    await user.click(saveButton);
+
+    const pressedChip = screen.getByRole("button", { name: "Dubai rush" });
+    expect(pressedChip).toHaveAttribute("aria-pressed", "true");
+    expect(pressedChip.className).not.toContain("crm-primary");
+    expect(pressedChip.className).toContain("border-crm-steel");
+    expect(pressedChip.className).toContain("bg-crm-lavender");
   });
 });

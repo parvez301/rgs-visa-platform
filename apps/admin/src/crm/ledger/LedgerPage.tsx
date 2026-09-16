@@ -162,9 +162,15 @@ export function LedgerPage() {
               type="button"
               onClick={() => toggleCaseStatus(caseStatus)}
               aria-pressed={selectedCaseStatuses.includes(caseStatus)}
+              // R71: the pressed treatment keeps its lavender fill and drops
+              // `--crm-primary`, which the global constraint reserves for
+              // exactly one control in the whole product (Approve on a
+              // proposal card). `border-crm-steel` is what `ConflictPrompt`'s
+              // "Keep mine" already adopted for the same reason: a stronger
+              // rule than the resting state, in a colour that claims nothing.
               className={`rounded-crm-control border px-2 py-1 text-[12px] ${
                 selectedCaseStatuses.includes(caseStatus)
-                  ? "border-crm-primary bg-crm-lavender text-crm-charcoal"
+                  ? "border-crm-steel bg-crm-lavender text-crm-charcoal"
                   : "border-crm-rule-box text-crm-steel"
               }`}
             >

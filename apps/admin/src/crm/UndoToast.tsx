@@ -184,7 +184,12 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
                 type="button"
                 onClick={() => void handleUndoClick(toast)}
                 disabled={toast.status === "undoing"}
-                className="shrink-0 font-medium text-crm-primary underline disabled:opacity-60"
+                // R71: neutral text with the underline doing the work. Undo is
+                // a real action and must read as one, but `--crm-primary` is
+                // reserved for the single Approve button in the product, and a
+                // toast that appears after every committed edit is the last
+                // place that reservation should leak.
+                className="shrink-0 font-medium text-crm-charcoal underline disabled:opacity-60"
               >
                 {toast.status === "undoing" ? "Undoing…" : toast.status === "failed" ? "Retry undo" : "Undo"}
               </button>

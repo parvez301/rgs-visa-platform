@@ -257,17 +257,31 @@ async function listPartners(idToken: string): Promise<crm.Partner[]> {
   return listing.records;
 }
 
+/**
+ * R80: every interpolated PATH SEGMENT below goes through
+ * `encodeURIComponent`.
+ *
+ * Most of these are server-generated ids and were safe by luck. One is not:
+ * `forgetMemory`'s `memoryKey` is free text -- `CrmMemorySchema` declares it
+ * `z.string().min(1)` and the agent's own `remember` tool authors it -- so a
+ * key containing "/" adds a path segment and `Router.match`'s segment-count
+ * guard drops the route, and a "#" truncates the URL at the fragment. Either
+ * way the Forget button 404s in deployed API Gateway and never in a test,
+ * where every fixture key is `billing_cutoff`. Encoding all of them rather
+ * than the one that is provably unsafe is the cheaper rule to keep: the next
+ * free-text segment does not have to be noticed.
+ */
 export const crmClient = {
   fetchLedgerPage,
   loadLedger,
 
   getCase(idToken: string, caseId: string): Promise<crm.CrmCase> {
-    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${caseId}`, { idToken });
+    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}`, { idToken });
   },
 
   async listCaseEvents(idToken: string, caseId: string): Promise<CrmEventView[]> {
     const { events } = await apiFetch<{ events: CrmEventView[] }>(
-      `${CRM_BASE}/cases/${caseId}/events`,
+      `${CRM_BASE}/cases/${encodeURIComponent(caseId)}/events`,
       { idToken },
     );
     return events;
@@ -278,7 +292,7 @@ export const crmClient = {
     caseId: string,
     input: UpdateCaseDetailsBody,
   ): Promise<crm.CrmCase> {
-    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${caseId}`, {
+    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}`, {
       method: "PUT",
       body: input,
       idToken,
@@ -286,7 +300,7 @@ export const crmClient = {
   },
 
   setCaseStatus(idToken: string, caseId: string, toStatus: crm.CaseStatus): Promise<crm.CrmCase> {
-    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${caseId}/status`, {
+    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}/status`, {
       method: "PUT",
       body: { toStatus },
       idToken,
@@ -298,7 +312,7 @@ export const crmClient = {
     caseId: string,
     toBillingStatus: crm.BillingStatus,
   ): Promise<crm.CrmCase> {
-    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${caseId}/billing`, {
+    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}/billing`, {
       method: "PUT",
       body: { toBillingStatus },
       idToken,
@@ -312,7 +326,7 @@ export const crmClient = {
     toCustody: crm.CustodyStatus,
   ): Promise<crm.CrmCase> {
     return apiFetch<crm.CrmCase>(
-      `${CRM_BASE}/cases/${caseId}/applicants/${applicantRef}/custody`,
+      `${CRM_BASE}/cases/${encodeURIComponent(caseId)}/applicants/${encodeURIComponent(applicantRef)}/custody`,
       { method: "PUT", body: { toCustody }, idToken },
     );
   },
@@ -324,7 +338,7 @@ export const crmClient = {
     toOutcome: crm.ApplicantOutcome,
   ): Promise<crm.CrmCase> {
     return apiFetch<crm.CrmCase>(
-      `${CRM_BASE}/cases/${caseId}/applicants/${applicantRef}/outcome`,
+      `${CRM_BASE}/cases/${encodeURIComponent(caseId)}/applicants/${encodeURIComponent(applicantRef)}/outcome`,
       { method: "PUT", body: { toOutcome }, idToken },
     );
   },
@@ -338,7 +352,7 @@ export const crmClient = {
   },
 
   getReviewItem(idToken: string, reviewItemId: string): Promise<crm.ReviewItem> {
-    return apiFetch<crm.ReviewItem>(`${CRM_BASE}/review/${reviewItemId}`, { idToken });
+    return apiFetch<crm.ReviewItem>(`${CRM_BASE}/review/${encodeURIComponent(reviewItemId)}`, { idToken });
   },
 
   resolveReviewItem(
@@ -346,7 +360,7 @@ export const crmClient = {
     reviewItemId: string,
     resolution: { reviewStatus: "APPLIED" | "DISMISSED"; resolvedValue?: string },
   ): Promise<crm.ReviewItem> {
-    return apiFetch<crm.ReviewItem>(`${CRM_BASE}/review/${reviewItemId}/resolve`, {
+    return apiFetch<crm.ReviewItem>(`${CRM_BASE}/review/${encodeURIComponent(reviewItemId)}/resolve`, {
       method: "PUT",
       body: resolution,
       idToken,
@@ -375,7 +389,7 @@ export const crmClient = {
     proposalId: string,
     editedInput?: Record<string, unknown>,
   ): Promise<ApprovalResult> {
-    return apiFetch<ApprovalResult>(`${CRM_BASE}/agent/proposals/${proposalId}/approve`, {
+    return apiFetch<ApprovalResult>(`${CRM_BASE}/agent/proposals/${encodeURIComponent(proposalId)}/approve`, {
       method: "PUT",
       body: { editedInput },
       idToken,
@@ -383,7 +397,7 @@ export const crmClient = {
   },
 
   discardProposal(idToken: string, proposalId: string, reason: string): Promise<ProposalView> {
-    return apiFetch<ProposalView>(`${CRM_BASE}/agent/proposals/${proposalId}/discard`, {
+    return apiFetch<ProposalView>(`${CRM_BASE}/agent/proposals/${encodeURIComponent(proposalId)}/discard`, {
       method: "PUT",
       body: { reason },
       idToken,
@@ -408,7 +422,7 @@ export const crmClient = {
   ): Promise<{ forgotten: boolean }> {
     const queryParams = new URLSearchParams({ scope });
     if (partnerId !== undefined) queryParams.set("partnerId", partnerId);
-    return apiFetch(`${CRM_BASE}/agent/memories/${memoryKey}?${queryParams.toString()}`, {
+    return apiFetch(`${CRM_BASE}/agent/memories/${encodeURIComponent(memoryKey)}?${queryParams.toString()}`, {
       method: "DELETE",
       idToken,
     });

@@ -98,9 +98,15 @@ export function ViewChips({ userEmail, activeFilters, activeSort, onApplyView }:
               data-testid="view-chip"
               aria-pressed={isActiveView}
               onClick={() => selectView(view)}
+              // R71, and the same treatment the status chips beside this row
+              // now carry: the pressed chip keeps its lavender fill and takes
+              // `border-crm-steel`. `--crm-primary` marks exactly one control
+              // in the product, and a filter chip is not it -- the Save button
+              // below has said so since fix round 1's F3, while the chip
+              // beside it quietly carried the colour anyway.
               className={`${isBuiltIn ? "rounded-crm-control" : "rounded-l-crm-control"} border px-2 py-1 text-[12px] ${
                 isActiveView
-                  ? "border-crm-primary bg-crm-lavender text-crm-charcoal"
+                  ? "border-crm-steel bg-crm-lavender text-crm-charcoal"
                   : "border-crm-rule-box text-crm-steel"
               }`}
             >

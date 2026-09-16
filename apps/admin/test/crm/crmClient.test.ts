@@ -285,6 +285,31 @@ describe("crmClient write methods", () => {
   });
 });
 
+describe("crmClient.forgetMemory", () => {
+  it("encodes the memory key into one path segment, so a key with a slash still reaches its route (R80)", async () => {
+    // Finding #9. `memoryKey` is the one free-text segment in this client --
+    // `CrmMemorySchema` declares it `z.string().min(1)` and the agent's own
+    // `remember` tool authors it. Unencoded, "billing/cutoff#1" adds a path
+    // segment (which `Router.match`'s segment-count guard drops) and truncates
+    // the rest at the "#", so the Forget button 404s in deployed API Gateway
+    // and never in a test, where every fixture key is `billing_cutoff`.
+    const recorded = stubFetch([{ forgotten: true }]);
+
+    await crmClient.forgetMemory("token-1", "billing/cutoff#1", "ORG");
+
+    const requestedUrl = recorded[0]!.url;
+    expect(requestedUrl).toContain("/agent/memories/billing%2Fcutoff%231");
+    // Named separately, because each is a different failure: an extra segment
+    // is a route miss, and a fragment is a silently truncated URL.
+    expect(requestedUrl).not.toContain("/agent/memories/billing/cutoff");
+    expect(requestedUrl).not.toContain("#");
+    // The query string still has to arrive -- the route reads `scope` from it,
+    // and encoding the segment must not have swallowed the "?".
+    expect(requestedUrl).toContain("?scope=ORG");
+    expect(recorded[0]!.method).toBe("DELETE");
+  });
+});
+
 describe("crmClient.listMemories", () => {
   // F5: `recallMemories` (memory.ts) returns `{ memories, unreadableMemoryKeys }`
   // and the client's own type used to narrow that down to `{ memories }`,
