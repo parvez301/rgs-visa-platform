@@ -292,6 +292,9 @@ export async function summariseOpenReviewItems(
     }
 
     const { reviewItemId, caseRef, reason } = parsedRow.data;
+    // Still OPEN, still on the review screen -- just not drawn on the grid.
+    // See LEDGER_MARKER_REASONS for the measured reason.
+    if (!crm.isLedgerMarkerReason(reason)) continue;
     const entry = entriesByCaseRef.get(caseRef) ?? { caseRef, fieldItemIds: [], mergeItemIds: [] };
     if (crm.isMergeReviewReason(reason)) {
       entry.mergeItemIds.push(reviewItemId);

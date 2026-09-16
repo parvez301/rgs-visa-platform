@@ -196,6 +196,33 @@ export interface UpsertTravellerInput {
   passportNumber?: string;
 }
 
+/** One raw-value group of the open review queue (server: reviewGroups.ts). */
+export interface ReviewGroup {
+  reason: crm.ReviewReason;
+  fieldName: string;
+  rawValue: string;
+  itemCount: number;
+  proposedValue?: string;
+  sampleCaseRefs: string[];
+}
+
+export interface ResolveReviewGroupInput {
+  reason: crm.ReviewReason;
+  fieldName: string;
+  rawValue: string;
+  reviewStatus: "APPLIED" | "DISMISSED";
+  resolvedValue?: string;
+  limit?: number;
+}
+
+export interface ReviewGroupResolution {
+  matchedCount: number;
+  resolvedCount: number;
+  appliedCount: number;
+  remainingCount: number;
+  failures: Array<{ reviewItemId: string; caseRef: string; message: string }>;
+}
+
 export const MAX_LEDGER_PAGES = 40;
 
 async function fetchLedgerPage(
@@ -394,6 +421,18 @@ export const crmClient = {
     idToken: string,
   ): Promise<{ entries: OpenReviewSummaryEntry[]; unreadableReviewItemIds: string[] }> {
     return apiFetch(`${CRM_BASE}/review/summary`, { idToken });
+  },
+
+  listReviewGroups(idToken: string): Promise<{ groups: ReviewGroup[]; unreadableReviewItemIds: string[] }> {
+    return apiFetch(`${CRM_BASE}/review/groups`, { idToken });
+  },
+
+  resolveReviewGroup(idToken: string, input: ResolveReviewGroupInput): Promise<ReviewGroupResolution> {
+    return apiFetch<ReviewGroupResolution>(`${CRM_BASE}/review/groups/resolve`, {
+      method: "POST",
+      body: input,
+      idToken,
+    });
   },
 
   getReviewItem(idToken: string, reviewItemId: string): Promise<crm.ReviewItem> {

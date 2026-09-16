@@ -10,6 +10,7 @@ import { ConfigPage } from "./pages/ConfigPage";
 import { LeadsPage } from "./pages/LeadsPage";
 import { CasePage } from "./crm/case/CasePage";
 import { LedgerPage } from "./crm/ledger/LedgerPage";
+import { ReviewPage } from "./crm/review/ReviewPage";
 import { NoticesPage } from "./pages/NoticesPage";
 import { QueuePage } from "./pages/QueuePage";
 import { UserActivityPage } from "./pages/UserActivityPage";
@@ -96,6 +97,14 @@ createRoot(document.getElementById("root")!).render(
             element={
               <RequireAuth>
                 <LedgerPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/crm/review"
+            element={
+              <RequireAuth>
+                <ReviewPage />
               </RequireAuth>
             }
           />

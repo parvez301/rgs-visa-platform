@@ -21,6 +21,7 @@ export const crmQueryKeys = {
   caseEvents: (caseId: string) => ["crm", "case", caseId, "events"] as const,
   partners: () => ["crm", "partners"] as const,
   reviewSummary: () => ["crm", "review", "summary"] as const,
+  reviewGroups: () => ["crm", "review", "groups"] as const,
   reviewItem: (reviewItemId: string) => ["crm", "review", reviewItemId] as const,
   proposals: () => ["crm", "proposals"] as const,
   memories: (scope: string, partnerId: string | undefined) =>
@@ -72,6 +73,15 @@ export function useReviewSummary() {
   return useQuery({
     queryKey: crmQueryKeys.reviewSummary(),
     queryFn: () => crmClient.fetchReviewSummary(idToken!),
+    enabled: idToken !== null,
+  });
+}
+
+export function useReviewGroups() {
+  const { idToken } = useAuth();
+  return useQuery({
+    queryKey: crmQueryKeys.reviewGroups(),
+    queryFn: () => crmClient.listReviewGroups(idToken!),
     enabled: idToken !== null,
   });
 }

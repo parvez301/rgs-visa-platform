@@ -900,6 +900,56 @@ describe("crm admin routes", () => {
     expect(read.payload.sourceRow).toBe(42);
   });
 
+  it("answers /review/groups with grouped open items, not a 404 for review item \"groups\"", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    await recordReviewItem(context, "rgs", {
+      reason: "UNMAPPED_COUNTRY",
+      sourceSheet: "Mini CRM",
+      sourceRow: 1,
+      caseRef: "38001",
+      fieldName: "Country",
+      rawValue: "Dubai",
+    });
+    const response = await call(router, "GET", "/api/v1/admin/crm/review/groups");
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.groups).toEqual([
+      { reason: "UNMAPPED_COUNTRY", fieldName: "Country", rawValue: "Dubai", itemCount: 1, sampleCaseRefs: ["38001"] },
+    ]);
+  });
+
+  it("POST /review/groups/resolve dismisses a group and reports the chunk", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    await recordReviewItem(context, "rgs", {
+      reason: "SUSPECT_PHONE",
+      sourceSheet: "Mini CRM",
+      sourceRow: 1,
+      caseRef: "38001",
+      fieldName: "Phone",
+      rawValue: "12",
+    });
+    const response = await call(router, "POST", "/api/v1/admin/crm/review/groups/resolve", {
+      reason: "SUSPECT_PHONE",
+      fieldName: "Phone",
+      rawValue: "12",
+      reviewStatus: "DISMISSED",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toEqual({ matchedCount: 1, resolvedCount: 1, appliedCount: 0, remainingCount: 0, failures: [] });
+  });
+
+  it("POST /review/groups/resolve rejects an unknown reason as a 400", async () => {
+    const router = buildRouter(buildTestContext());
+    const response = await call(router, "POST", "/api/v1/admin/crm/review/groups/resolve", {
+      reason: "NOT_A_REASON",
+      fieldName: "Phone",
+      rawValue: "12",
+      reviewStatus: "DISMISSED",
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
   it("returns 404 for an unknown review item", async () => {
     const context = buildTestContext();
     const router = buildRouter(context);

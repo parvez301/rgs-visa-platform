@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { crm } from "@rgs/shared";
+import { Link } from "react-router";
 import { useAuth } from "../../lib/auth";
 import { CrmLayout } from "../CrmLayout";
 import { AgentPanel } from "../agent/AgentPanel";
@@ -12,6 +13,7 @@ import {
   PILL_OFF_CLASS,
   PILL_ON_CLASS,
   PRIMARY_BUTTON_CLASS,
+  SECONDARY_BUTTON_CLASS,
 } from "../components/controls";
 import { CASE_STATUS_LABELS } from "../labels";
 import { NewCaseDrawer } from "../newCase/NewCaseDrawer";
@@ -164,9 +166,14 @@ export function LedgerPage() {
               {describeLedgerCount(visibleLedgerRows.length, ledgerLoad?.rows.length, ledgerRowsQuery.isLoading)}
             </p>
           </div>
-          <button type="button" onClick={() => setIsNewCaseDrawerOpen(true)} className={PRIMARY_BUTTON_CLASS}>
-            New case
-          </button>
+          <div className="flex items-center gap-2">
+            <Link to="/crm/review" className={SECONDARY_BUTTON_CLASS}>
+              Review queue
+            </Link>
+            <button type="button" onClick={() => setIsNewCaseDrawerOpen(true)} className={PRIMARY_BUTTON_CLASS}>
+              New case
+            </button>
+          </div>
         </div>
         {isNewCaseDrawerOpen && <NewCaseDrawer onClose={() => setIsNewCaseDrawerOpen(false)} />}
 

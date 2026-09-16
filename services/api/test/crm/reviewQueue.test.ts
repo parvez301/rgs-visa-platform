@@ -448,7 +448,7 @@ describe("summariseOpenReviewItems", () => {
       rawValue: "pend.",
     });
     const merge = await recordReviewItem(context, "rgs", {
-      reason: "PROPOSED_GROUP",
+      reason: "DUPLICATE_REF",
       sourceSheet: "2026",
       sourceRow: 13,
       caseRef: "RGS-1001",
@@ -470,6 +470,36 @@ describe("summariseOpenReviewItems", () => {
     expect(firstEntry?.fieldItemIds).toEqual([unmapped.reviewItemId]);
     expect(firstEntry?.mergeItemIds).toEqual([merge.reviewItemId]);
     expect(summary.entries.map((entry) => entry.caseRef).sort()).toEqual(["RGS-1001", "RGS-1002"]);
+  });
+
+  it("leaves the importer's guesses off the grid: PROPOSED_GROUP, SUSPECT_PHONE and MISSING_REQUIRED_FIELD stay OPEN but draw no marker", async () => {
+    const context = buildTestContext();
+    for (const reason of ["PROPOSED_GROUP", "SUSPECT_PHONE", "MISSING_REQUIRED_FIELD"] as const) {
+      await recordReviewItem(context, "rgs", {
+        reason,
+        sourceSheet: "2026",
+        sourceRow: 12,
+        caseRef: "RGS-2001",
+        fieldName: "REF NO",
+        rawValue: "RGS-2001",
+      });
+    }
+    const flagged = await recordReviewItem(context, "rgs", {
+      reason: "DUPLICATE_REF",
+      sourceSheet: "2026",
+      sourceRow: 13,
+      caseRef: "RGS-2002",
+      fieldName: "REF NO",
+      rawValue: "RGS-2002",
+    });
+
+    const summary = await summariseOpenReviewItems(context, "rgs");
+
+    expect(summary.entries.map((entry) => entry.caseRef)).toEqual(["RGS-2002"]);
+    expect(summary.entries[0]?.mergeItemIds).toEqual([flagged.reviewItemId]);
+    // Still open: hidden from the grid is not the same as resolved.
+    const openQueue = await listReviewItems(context, "rgs", "OPEN");
+    expect(openQueue.reviewItems).toHaveLength(4);
   });
 
   it("forgets a resolved item, because a cleaned row must lose its marker", async () => {

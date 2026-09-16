@@ -63,6 +63,50 @@ export function isMergeReviewReason(reason: ReviewReason): boolean {
   return MERGE_REVIEW_REASONS.includes(reason);
 }
 
+/**
+ * The reasons a human must act on FROM THE ROW, and therefore the only ones the
+ * Ledger badges. Measured on the real import (2026-09-16): 3,957 open items on
+ * 2,661 of 7,156 cases, and 2,662 of those were PROPOSED_GROUP, SUSPECT_PHONE
+ * or MISSING_REQUIRED_FIELD -- the importer's guesses and its "the sheet had
+ * nothing here" notes. Badging them made 37% of rows look broken and buried
+ * the 58 real duplicate refs. Those three stay OPEN and stay on the review
+ * screen; they just do not draw on the grid.
+ */
+export const LEDGER_MARKER_REASONS: readonly ReviewReason[] = [
+  "UNMAPPED_STATUS",
+  "UNMAPPED_ENTRIES",
+  "UNMAPPED_VISA_TYPE",
+  "UNMAPPED_COUNTRY",
+  "UNMAPPED_PARTNER",
+  "UNPARSEABLE_DATE",
+  "COLUMN_SHIFT_JUNK",
+  "DUPLICATE_REF",
+  "UNREADABLE_STORED_CASE",
+  "UNCONFIRMED_PAYMENT",
+];
+
+export function isLedgerMarkerReason(reason: ReviewReason): boolean {
+  return LEDGER_MARKER_REASONS.includes(reason);
+}
+
+/**
+ * Reasons whose resolution names a value the case should now hold. Everything
+ * else (a proposed group, a suspect phone, a missing cell) has nothing to
+ * write back and can only be dismissed.
+ */
+export const APPLIABLE_REVIEW_REASONS: readonly ReviewReason[] = [
+  "UNMAPPED_STATUS",
+  "UNMAPPED_ENTRIES",
+  "UNMAPPED_VISA_TYPE",
+  "UNMAPPED_COUNTRY",
+  "UNMAPPED_PARTNER",
+  "UNPARSEABLE_DATE",
+];
+
+export function isAppliableReviewReason(reason: ReviewReason): boolean {
+  return APPLIABLE_REVIEW_REASONS.includes(reason);
+}
+
 export const REVIEW_STATUSES = ["OPEN", "APPLIED", "DISMISSED"] as const;
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 

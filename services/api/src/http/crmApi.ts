@@ -21,6 +21,11 @@ import {
   MAX_LEDGER_PAGE_LIMIT,
   listLedgerRows,
 } from "../domain/crm/ledger";
+import {
+  listOpenReviewGroups,
+  resolveReviewGroup,
+  type ResolveReviewGroupInput,
+} from "../domain/crm/reviewGroups";
 import { createPartner, listPartners } from "../domain/crm/partners";
 import {
   getReviewItemOrThrow,
@@ -106,6 +111,16 @@ const OutcomeBody = z.object({ toOutcome: z.enum(crm.APPLICANT_OUTCOMES) });
 const ResolveReviewItemBody = z.object({
   reviewStatus: z.enum(["APPLIED", "DISMISSED"]),
   resolvedValue: z.string().min(1).optional(),
+});
+
+/** One raw-value group of the review queue, and what to do with all of it. */
+const ResolveReviewGroupBody = z.object({
+  reason: z.enum(crm.REVIEW_REASONS),
+  fieldName: z.string().min(1),
+  rawValue: z.string(),
+  reviewStatus: z.enum(["APPLIED", "DISMISSED"]),
+  resolvedValue: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(200).default(50),
 });
 
 /**
@@ -354,6 +369,17 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
     .add("GET", "/api/v1/admin/crm/review/summary", async (requestContext) => {
       requireAdmin(requestContext);
       return summariseOpenReviewItems(context, tenantId);
+    })
+    // Same six-segment collision as /review/summary; must also stay before
+    // "/api/v1/admin/crm/review/{reviewItemId}".
+    .add("GET", "/api/v1/admin/crm/review/groups", async (requestContext) => {
+      requireAdmin(requestContext);
+      return listOpenReviewGroups(context, tenantId);
+    })
+    .add("POST", "/api/v1/admin/crm/review/groups/resolve", async (requestContext) => {
+      requireAdmin(requestContext);
+      const input: ResolveReviewGroupInput = parseBody(ResolveReviewGroupBody, requestContext.body);
+      return resolveReviewGroup(context, tenantId, input, requestContext.callerEmail);
     })
     .add("GET", "/api/v1/admin/crm/review/{reviewItemId}", async (requestContext) => {
       requireAdmin(requestContext);
