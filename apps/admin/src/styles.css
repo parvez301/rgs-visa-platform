@@ -1,4 +1,12 @@
 @import "tailwindcss";
+/*
+ * The CRM palette MUST be imported here, not from a component. Tailwind 4 only
+ * generates utilities for @theme variables declared in the stylesheet it
+ * compiles; imported from CrmLayout.tsx, every bg-crm-… and text-crm-… class was
+ * silently dropped from the build (staging, 2026-09-16: transparent popovers,
+ * unfilled chips, no banner colour).
+ */
+@import "./crm/theme.css";
 
 @theme {
   --color-rgs-red: #ef3250;

@@ -1,6 +1,5 @@
 import { useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { AdminShell } from "../components/AdminShell";
-import "./theme.css";
 
 const MIN_AGENT_PANEL_WIDTH = 280;
 const MAX_AGENT_PANEL_WIDTH = 560;
