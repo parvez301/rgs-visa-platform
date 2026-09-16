@@ -260,7 +260,7 @@ export function readConflictMessage(error: Error): string | undefined {
 }
 
 /** What a non-`ApiRequestError` failure -- a dropped connection, a DNS failure -- says. */
-export const WRITE_DID_NOT_SAVE_MESSAGE =
+const WRITE_DID_NOT_SAVE_MESSAGE =
   "Your edit did not save. Check your connection and try again.";
 
 /**
