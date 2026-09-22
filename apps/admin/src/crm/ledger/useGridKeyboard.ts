@@ -28,6 +28,7 @@ export type GridAction =
   | { kind: "toggleSelection" }
   | { kind: "extendSelection"; direction: "up" | "down" }
   | { kind: "clickSelect"; rowIndex: number; columnIndex: number; withShift: boolean }
+  | { kind: "clearSelection" }
   /**
    * The rows this state addresses have been replaced -- a client-side filter,
    * a search keystroke, a view chip, a sort. Carries the case ids on either
@@ -222,6 +223,9 @@ export function gridReducer(previousState: GridState, action: GridAction, bounds
         selectedRowIndexes,
       };
     }
+
+    case "clearSelection":
+      return { ...previousState, selectedRowIndexes: [] };
 
     case "rowsReplaced": {
       // A refetch that returns the same cases in the same order must not

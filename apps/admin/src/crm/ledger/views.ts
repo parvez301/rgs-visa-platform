@@ -10,9 +10,9 @@ export interface LedgerView {
 }
 
 /**
- * The default sort for the two built-in views the brief does not name a
- * sort for ("Awaiting payment", "Everything"). "Live work" has an explicit
- * one (`receivedDate` desc); these two get the same ordering rather than an
+ * The default sort for the built-in views the brief does not name a sort for
+ * ("Awaiting payment", "Unbilled", "Everything"). "Live work" has an explicit
+ * one (`receivedDate` desc); these get the same ordering rather than an
  * arbitrary different one, so a desk agent moving between built-in views
  * does not also have to re-learn a new sort each time.
  */
@@ -20,9 +20,15 @@ const DEFAULT_BUILT_IN_SORT: LedgerSort = { column: "receivedDate", direction: "
 
 const LIVE_WORK_VIEW_ID = "built-in-live-work";
 const AWAITING_PAYMENT_VIEW_ID = "built-in-awaiting-payment";
+const UNBILLED_VIEW_ID = "built-in-unbilled";
 const EVERYTHING_VIEW_ID = "built-in-everything";
 
-const BUILT_IN_VIEW_IDS: readonly string[] = [LIVE_WORK_VIEW_ID, AWAITING_PAYMENT_VIEW_ID, EVERYTHING_VIEW_ID];
+const BUILT_IN_VIEW_IDS: readonly string[] = [
+  LIVE_WORK_VIEW_ID,
+  AWAITING_PAYMENT_VIEW_ID,
+  UNBILLED_VIEW_ID,
+  EVERYTHING_VIEW_ID,
+];
 
 /** Exported so `ViewChips` can decide whether to offer a delete affordance at all. */
 export function isBuiltInLedgerViewId(viewId: string): boolean {
@@ -30,11 +36,12 @@ export function isBuiltInLedgerViewId(viewId: string): boolean {
 }
 
 /**
- * The three views a desk agent lands on before anyone has saved anything
- * (brief, "Three built-in views ship, and cannot be deleted"). Built fresh
- * on every call rather than read from storage -- they are not data, they
- * are the product's own fixed defaults, so there is nothing to round-trip
- * through `localStorage` and nothing there can ever go stale or get lost.
+ * The views a desk agent lands on before anyone has saved anything
+ * (brief, "Three built-in views ship, and cannot be deleted" -- Unbilled was
+ * added later for the outstanding-collections slice). Built fresh on every
+ * call rather than read from storage -- they are not data, they are the
+ * product's own fixed defaults, so there is nothing to round-trip through
+ * `localStorage` and nothing there can ever go stale or get lost.
  */
 export function builtInLedgerViews(): LedgerView[] {
   return [
@@ -50,6 +57,12 @@ export function builtInLedgerViews(): LedgerView[] {
       // All nine statuses (brief: "all statuses"): a case can be owed money
       // in any state, including a closed one.
       filters: { statuses: [...crm.CASE_STATUSES], billingStatuses: ["BILL_SENT", "PART_PAID"] },
+      sort: DEFAULT_BUILT_IN_SORT,
+    },
+    {
+      viewId: UNBILLED_VIEW_ID,
+      name: "Unbilled",
+      filters: { statuses: [...crm.CASE_STATUSES], billingStatuses: ["UNBILLED"] },
       sort: DEFAULT_BUILT_IN_SORT,
     },
     {

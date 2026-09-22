@@ -18,6 +18,7 @@ import {
 import { CASE_STATUS_LABELS, REVIEW_REASON_LABELS } from "../labels";
 import { NewCaseDrawer } from "../newCase/NewCaseDrawer";
 import { applyFilters, applySort, type LedgerFilters, type LedgerSort } from "./filters";
+import { BulkActionsBar } from "./BulkActionsBar";
 import { LedgerTable } from "./LedgerTable";
 import { ViewChips } from "./ViewChips";
 
@@ -78,6 +79,7 @@ export function LedgerPage() {
    * change rather than on every render of this page.
    */
   const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
+  const [selectionClearToken, setSelectionClearToken] = useState(0);
   const reportSelectedCaseIds = useCallback((nextSelectedCaseIds: string[]) => {
     setSelectedCaseIds((currentSelectedCaseIds) =>
       currentSelectedCaseIds.length === nextSelectedCaseIds.length &&
@@ -86,6 +88,11 @@ export function LedgerPage() {
         : nextSelectedCaseIds,
     );
   }, []);
+
+  function clearLedgerSelection(): void {
+    setSelectedCaseIds([]);
+    setSelectionClearToken((currentToken) => currentToken + 1);
+  }
 
   const ledgerRowsQuery = useLedgerRows(selectedCaseStatuses, selectedPartnerId);
   const partnersQuery = usePartners();
@@ -268,7 +275,7 @@ export function LedgerPage() {
                     search: changeEvent.target.value || undefined,
                   }))
                 }
-                placeholder="Search REF or partner"
+                placeholder="Search REF, partner, name, or passport"
                 className={`${INPUT_CLASS} min-w-64 font-normal`}
               />
             </label>
@@ -309,6 +316,11 @@ export function LedgerPage() {
           </div>
         </div>
 
+        <BulkActionsBar
+          selectedCaseIds={selectedCaseIds}
+          onClearSelection={clearLedgerSelection}
+        />
+
         {isLedgerPartial && (
           <div
             role="status"
@@ -336,6 +348,7 @@ export function LedgerPage() {
               partnerNamesById={partnerNamesById}
               onSelectionChange={reportSelectedCaseIds}
               reviewEntriesByCaseRef={reviewEntriesByCaseRef}
+              selectionClearToken={selectionClearToken}
             />
           )}
         </div>

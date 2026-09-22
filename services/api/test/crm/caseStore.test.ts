@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildTestContext } from "../helpers";
 import { readCase, readCaseOrThrow, writeCase } from "../../src/domain/crm/caseStore";
 import { changeApplicantCustody } from "../../src/domain/crm/cases";
+import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { CorruptRecordError } from "../../src/lib/errors";
 import {
   APPLICANT_SORT_KEY_PREFIX,
@@ -67,6 +68,39 @@ describe("caseStore", () => {
     expect(loaded!.applicants[0]!.applicantRef).toBe("31377");
     expect(loaded!.caseRef).toBe("31377");
     expect(loaded!.destinationCountry).toBe("BH");
+  });
+
+  it("stamps searchText from traveller names and passports onto the META item", async () => {
+    const context = buildTestContext();
+    const asha = await upsertTraveller(context, "rgs", {
+      fullName: "Asha Rao",
+      passportNumber: "M1234567",
+    });
+    const ravi = await upsertTraveller(context, "rgs", { fullName: "Ravi Singh" });
+    await writeCase(
+      context,
+      buildCase({
+        applicants: [
+          {
+            applicantRef: "31377",
+            travellerId: asha.travellerId,
+            passportNumber: "IGNORED_WHEN_TRAVELLER_HAS_ONE",
+            custody: "NOT_HELD",
+            outcome: "PENDING",
+          },
+          {
+            applicantRef: "31378",
+            travellerId: ravi.travellerId,
+            passportNumber: "A9988776",
+            custody: "NOT_HELD",
+            outcome: "PENDING",
+          },
+        ],
+      }),
+    );
+
+    const metaItem = await context.table.get(casePartitionKey("rgs", "case_1"), META_SORT_KEY);
+    expect(metaItem?.["searchText"]).toBe("asha rao m1234567 ravi singh a9988776");
   });
 
   it("round-trips without losing or inventing a field", async () => {

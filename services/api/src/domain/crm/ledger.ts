@@ -48,6 +48,7 @@ export const LEDGER_PROJECTED_ATTRIBUTES: readonly string[] = [
   "totalInr",
   "updatedAt",
   "applicantSummary",
+  "searchText",
 ];
 
 export const DEFAULT_LEDGER_PAGE_LIMIT = 500;

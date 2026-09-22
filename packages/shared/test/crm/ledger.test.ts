@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LedgerRowSchema, summariseApplicants } from "../../src/crm/ledger";
+import { buildLedgerSearchText, LedgerRowSchema, summariseApplicants } from "../../src/crm/ledger";
 
 describe("summariseApplicants", () => {
   it("counts each custody and outcome value that actually occurs", () => {
@@ -29,6 +29,24 @@ describe("summariseApplicants", () => {
   });
 });
 
+describe("buildLedgerSearchText", () => {
+  it("lowercases and joins names and passports, dropping blanks and duplicates", () => {
+    expect(
+      buildLedgerSearchText([
+        { fullName: "Asha Rao", passportNumber: "M1234567" },
+        { fullName: "  Asha Rao  ", passportNumber: "m1234567" },
+        { fullName: "Ravi", passportNumber: undefined },
+        { fullName: "   ", passportNumber: "" },
+      ]),
+    ).toBe("asha rao m1234567 ravi");
+  });
+
+  it("returns undefined when nothing searchable is present", () => {
+    expect(buildLedgerSearchText([{ fullName: "  ", passportNumber: undefined }])).toBeUndefined();
+    expect(buildLedgerSearchText([])).toBeUndefined();
+  });
+});
+
 describe("LedgerRowSchema", () => {
   const validRow = {
     caseId: "case_1",
@@ -47,6 +65,12 @@ describe("LedgerRowSchema", () => {
 
   it("parses a projected META item", () => {
     expect(LedgerRowSchema.parse(validRow).caseRef).toBe("RGS-1001");
+  });
+
+  it("accepts optional searchText for name and passport matching", () => {
+    expect(LedgerRowSchema.parse({ ...validRow, searchText: "asha rao m1234567" }).searchText).toBe(
+      "asha rao m1234567",
+    );
   });
 
   it("accepts a row with no applicantSummary, because 7,156 stored cases predate it", () => {

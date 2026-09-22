@@ -10,6 +10,7 @@ import {
   caseStatusGsi1Pk,
   partnerCasesGsi2Pk,
 } from "./keys";
+import { resolveLedgerSearchText } from "./ledgerSearchText";
 
 /**
  * The domain shape (CrmCase, with applicants[] embedded) and the storage shape
@@ -20,6 +21,7 @@ import {
 export async function writeCase(context: AppContext, crmCase: crm.CrmCase): Promise<void> {
   const partitionKey = casePartitionKey(crmCase.tenantId, crmCase.caseId);
   const { applicants, ...caseBody } = crmCase;
+  const searchText = await resolveLedgerSearchText(context, crmCase.tenantId, applicants);
 
   await context.table.put({
     PK: partitionKey,
@@ -41,6 +43,10 @@ export async function writeCase(context: AppContext, crmCase: crm.CrmCase): Prom
     // stays exactly what it was, and the Ledger projection (Plan 5 Task 3) is
     // the only reader.
     applicantSummary: crm.summariseApplicants(applicants),
+    // Same discipline as applicantSummary: computed here, never accepted from
+    // a caller-built case body. Omitted when empty so PutItem clears a stale
+    // haystack rather than leaving the previous names/passports behind.
+    ...(searchText !== undefined ? { searchText } : {}),
   });
 
   for (const [applicantIndex, caseApplicant] of applicants.entries()) {

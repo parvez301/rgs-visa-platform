@@ -32,6 +32,11 @@ interface LedgerTableProps {
    * simply shows none.
    */
   reviewEntriesByCaseRef?: ReadonlyMap<string, OpenReviewSummaryEntry>;
+  /**
+   * Increment to clear the grid selection from outside (bulk-actions "Clear
+   * selection"). The token itself is opaque; only a change matters.
+   */
+  selectionClearToken?: number;
 }
 
 /**
@@ -86,6 +91,7 @@ export function LedgerTable({
   partnerNamesById,
   onSelectionChange,
   reviewEntriesByCaseRef,
+  selectionClearToken = 0,
 }: LedgerTableProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -99,6 +105,12 @@ export function LedgerTable({
     editableColumnIndexes: EDITABLE_LEDGER_COLUMN_INDEXES,
   });
   const navigate = useNavigate();
+  const previousSelectionClearTokenRef = useRef(selectionClearToken);
+  useEffect(() => {
+    if (previousSelectionClearTokenRef.current === selectionClearToken) return;
+    previousSelectionClearTokenRef.current = selectionClearToken;
+    dispatchGridAction({ kind: "clearSelection" });
+  }, [selectionClearToken, dispatchGridAction]);
 
   /**
    * R65 (fix round 1, F6): Enter on the focused REF cell opens that case.

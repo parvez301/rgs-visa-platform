@@ -22,8 +22,13 @@ function buildView(overrides: Partial<LedgerView> = {}): LedgerView {
 }
 
 describe("builtInLedgerViews", () => {
-  it("ships exactly the three named views, in order, and none deletable", () => {
-    expect(builtInLedgerViews().map((view) => view.name)).toEqual(["Live work", "Awaiting payment", "Everything"]);
+  it("ships exactly the four named views, in order, and none deletable", () => {
+    expect(builtInLedgerViews().map((view) => view.name)).toEqual([
+      "Live work",
+      "Awaiting payment",
+      "Unbilled",
+      "Everything",
+    ]);
   });
 
   it("sorts 'Live work' by receivedDate desc and scopes it to LIVE_CASE_STATUSES", () => {
@@ -38,6 +43,12 @@ describe("builtInLedgerViews", () => {
     const awaitingPayment = builtInLedgerViews().find((view) => view.name === "Awaiting payment");
     expect(awaitingPayment?.filters.statuses).toHaveLength(9);
     expect(awaitingPayment?.filters.billingStatuses?.sort()).toEqual(["BILL_SENT", "PART_PAID"].sort());
+  });
+
+  it("'Unbilled' covers all statuses and filters to UNBILLED only", () => {
+    const unbilled = builtInLedgerViews().find((view) => view.name === "Unbilled");
+    expect(unbilled?.filters.statuses).toHaveLength(9);
+    expect(unbilled?.filters.billingStatuses).toEqual(["UNBILLED"]);
   });
 
   it("'Everything' covers all nine statuses", () => {
@@ -77,6 +88,7 @@ describe("views", () => {
     expect(loadViews("ops@rgs.test").map((view) => view.name)).toEqual([
       "Live work",
       "Awaiting payment",
+      "Unbilled",
       "Everything",
     ]);
   });
@@ -87,6 +99,7 @@ describe("views", () => {
     expect(loadViews("ops@rgs.test").map((view) => view.name)).toEqual([
       "Live work",
       "Awaiting payment",
+      "Unbilled",
       "Everything",
     ]);
   });
@@ -100,7 +113,7 @@ describe("views", () => {
     const loaded = loadViews("ops@rgs.test");
 
     expect(loaded.some((view) => view.viewId === "custom-good")).toBe(true);
-    expect(loaded).toHaveLength(4); // 3 built-ins + the one plausible entry.
+    expect(loaded).toHaveLength(5); // 4 built-ins + the one plausible entry.
   });
 
   it("refuses to delete a built-in view", () => {

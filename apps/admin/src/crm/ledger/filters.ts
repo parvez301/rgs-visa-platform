@@ -51,14 +51,13 @@ export interface LedgerSort {
  * membership checks over columns already sitting on every loaded row -- no
  * fetch, no roll-up, no partial data to worry about.
  *
- * The text search (R45): a `LedgerRow` carries no traveller name -- the
- * columns are case-level, and the name lives on applicant/traveller records
- * this function never sees. It matches `caseRef` and the partner's
- * canonical name only. `partnerNamesById` is a third parameter, not part of
- * `LedgerFilters`, because a name lookup is live reference data (`usePartners`),
- * not filter state a saved view should freeze into `localStorage` -- a
- * partner renamed after a view was saved must resolve through the CURRENT
- * name map, not a stale one baked into the view.
+ * The text search (R45): matches `caseRef`, the partner's canonical name, and
+ * the denormalised `searchText` (applicant names + passports) when present.
+ * `partnerNamesById` is a third parameter, not part of `LedgerFilters`,
+ * because a name lookup is live reference data (`usePartners`), not filter
+ * state a saved view should freeze into `localStorage` -- a partner renamed
+ * after a view was saved must resolve through the CURRENT name map, not a
+ * stale one baked into the view.
  */
 export function applyFilters(
   rows: crm.LedgerRow[],
@@ -86,7 +85,9 @@ export function applyFilters(
       const partnerName = partnerNamesById[row.partnerId] ?? "";
       const matchesCaseRef = row.caseRef.toLowerCase().includes(normalizedSearchTerm);
       const matchesPartnerName = partnerName.toLowerCase().includes(normalizedSearchTerm);
-      if (!matchesCaseRef && !matchesPartnerName) return false;
+      const matchesSearchText =
+        row.searchText !== undefined && row.searchText.includes(normalizedSearchTerm);
+      if (!matchesCaseRef && !matchesPartnerName && !matchesSearchText) return false;
     }
     return true;
   });

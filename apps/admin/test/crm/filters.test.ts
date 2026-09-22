@@ -41,6 +41,21 @@ describe("applyFilters", () => {
     expect(filtered.map((row) => row.caseId)).toEqual(["case_a"]);
   });
 
+  it("matches a denormalised applicant name or passport on searchText", () => {
+    const rows = [
+      buildRow({ caseId: "case_asha", searchText: "asha rao m1234567" }),
+      buildRow({ caseId: "case_other", searchText: "ravi singh a9988776" }),
+      buildRow({ caseId: "case_no_search" }),
+    ];
+
+    expect(applyFilters(rows, { ...emptyFilters, search: "Asha" }).map((row) => row.caseId)).toEqual([
+      "case_asha",
+    ]);
+    expect(applyFilters(rows, { ...emptyFilters, search: "m1234567" }).map((row) => row.caseId)).toEqual([
+      "case_asha",
+    ]);
+  });
+
   it("filters by destination country and case type together", () => {
     const rows = [
       buildRow({ caseId: "case_ae_visa", destinationCountry: "AE", caseType: "VISA" }),

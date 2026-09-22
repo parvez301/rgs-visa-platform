@@ -74,6 +74,28 @@ export function summariseApplicants(
   return { count: applicants.length, custody: custodyCounts, outcome: outcomeCounts };
 }
 
+/**
+ * The Ledger's client-side text search haystack: lowercased applicant names
+ * and passport numbers, space-joined, duplicates dropped. `undefined` when
+ * nothing searchable is present so META items written before this field
+ * existed and cases with no resolvable travellers stay indistinguishable
+ * from "no search text" rather than carrying an empty string the filter
+ * would have to special-case.
+ */
+export function buildLedgerSearchText(
+  applicants: readonly { fullName?: string; passportNumber?: string }[],
+): string | undefined {
+  const tokens: string[] = [];
+  for (const applicant of applicants) {
+    const fullName = applicant.fullName?.trim().toLowerCase();
+    if (fullName !== undefined && fullName.length > 0) tokens.push(fullName);
+    const passportNumber = applicant.passportNumber?.trim().toLowerCase();
+    if (passportNumber !== undefined && passportNumber.length > 0) tokens.push(passportNumber);
+  }
+  if (tokens.length === 0) return undefined;
+  return [...new Set(tokens)].join(" ");
+}
+
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
 
 /**
@@ -104,5 +126,10 @@ export const LedgerRowSchema = z.object({
   totalInr: z.number().int().nonnegative(),
   updatedAt: z.string().datetime(),
   applicantSummary: ApplicantSummarySchema.optional(),
+  /**
+   * Optional: cases written before name/passport search existed, and cases
+   * whose travellers could not be resolved at write time, carry none.
+   */
+  searchText: z.string().min(1).optional(),
 });
 export type LedgerRow = z.infer<typeof LedgerRowSchema>;

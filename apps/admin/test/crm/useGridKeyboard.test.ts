@@ -87,6 +87,7 @@ describe("gridReducer", () => {
     const selected = gridReducer(initialState, { kind: "toggleSelection" }, bounds);
     expect(selected.selectedRowIndexes).toEqual([0]);
     expect(gridReducer(selected, { kind: "toggleSelection" }, bounds).selectedRowIndexes).toEqual([]);
+    expect(gridReducer(selected, { kind: "clearSelection" }, bounds).selectedRowIndexes).toEqual([]);
 
     const extended = gridReducer(selected, { kind: "extendSelection", direction: "down" }, bounds);
     expect(extended.selectedRowIndexes).toEqual([0, 1]);
