@@ -93,7 +93,7 @@ export interface CrmEventView {
 }
 
 /**
- * The six fields `PUT /cases/{caseId}` accepts (crmApi.ts's own
+ * The plain fields `PUT /cases/{caseId}` accepts (crmApi.ts's own
  * `UpdateCaseDetailsBody`, mirrored here at the wire level). Deliberately
  * NOT every field on `crm.CrmCase`: `caseStatus`, per-applicant `custody`,
  * per-applicant `outcome` and `billingStatus` each have their own route and
@@ -107,6 +107,7 @@ export interface UpdateCaseDetailsBody {
   submissionDate?: string;
   appointmentDate?: string;
   expectedCollectionDate?: string;
+  remarks?: string;
 }
 
 /** Mirrors `OpenReviewSummaryEntry` (services/api/src/domain/crm/reviewQueue.ts). */
@@ -185,7 +186,10 @@ export interface CreateCaseInput {
   partnerId: string;
   destinationCountry: string;
   visaType?: crm.VisaType;
+  entryType?: crm.EntryType;
   receivedDate: string;
+  expectedCollectionDate?: string;
+  remarks?: string;
   applicants: Array<{ applicantRef: string; travellerId: string; passportNumber?: string }>;
 }
 

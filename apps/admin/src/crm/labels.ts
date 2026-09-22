@@ -271,7 +271,7 @@ export const MEMORY_AUTHOR_LABELS: Record<"agent" | "human", string> = {
 };
 
 /**
- * The six field names `updateCaseDetails` can put in a `CASE_UPDATED` event's
+ * The field names `updateCaseDetails` can put in a `CASE_UPDATED` event's
  * comma-joined `changedFields` (services/api/src/domain/crm/cases.ts:152-174),
  * as the words a sentence about them uses. Lower case: these are read mid
  * sentence ("Changed appointment date and visa type"), never as a heading.
@@ -283,6 +283,7 @@ export const CASE_FIELD_LABELS: Record<string, string> = {
   submissionDate: "submission date",
   appointmentDate: "appointment date",
   expectedCollectionDate: "expected collection date",
+  remarks: "remarks",
 };
 
 /**

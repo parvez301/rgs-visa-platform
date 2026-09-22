@@ -69,6 +69,27 @@ describe("updateCaseDetails", () => {
     expect(updated.billingStatus).toBe(seeded.billingStatus);
   });
 
+  it("stores remarks and names them when they change", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+
+    const updated = await updateCaseDetails(
+      context,
+      TENANT_ID,
+      seeded.caseId,
+      { remarks: "Collect from VFS after 4pm" },
+      ACTOR,
+    );
+
+    expect(updated.remarks).toBe("Collect from VFS after 4pm");
+    expect(updated.billingStatus).toBe(seeded.billingStatus);
+    expect(updated.caseStatus).toBe(seeded.caseStatus);
+
+    const events = await listCaseEvents(context, TENANT_ID, seeded.caseId);
+    const updateEvent = events.find((event) => event.eventType === "CASE_UPDATED");
+    expect(updateEvent?.meta["changedFields"]).toBe("remarks");
+  });
+
   it("records a CASE_UPDATED event naming exactly which fields moved", async () => {
     const context = buildTestContext();
     const seeded = await seedOneCase(context);

@@ -218,6 +218,15 @@ describe("CasePage", () => {
     expect(screen.getByTestId("case-total").textContent).toContain("₹11,500");
   });
 
+  it("shows the entry type and remarks captured when the case was opened", async () => {
+    renderCasePage({
+      caseRecord: buildCase({ entryType: "MULTIPLE", remarks: "Passport copy is faint" }),
+    });
+
+    expect(await screen.findByTestId("case-field-entryType")).toHaveTextContent("Multiple entry");
+    expect(screen.getByTestId("case-field-remarks")).toHaveTextContent("Passport copy is faint");
+  });
+
   it("edits one applicant's custody without touching its sibling", async () => {
     const user = userEvent.setup();
     const { requestLog } = renderCasePage({ caseRecord: buildCase() });

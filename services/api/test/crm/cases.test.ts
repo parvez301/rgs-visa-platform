@@ -125,6 +125,34 @@ describe("crm cases", () => {
     expect(created.totalInr).toBe(0);
   });
 
+  it("stores an optional collection date and remarks, and still opens New and Unbilled", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const travellerId = await seedTraveller(context, "Asha Rao");
+    const created = await createCase(
+      context,
+      "rgs",
+      {
+        caseRef: "RGS-1",
+        caseType: "VISA",
+        partnerId,
+        destinationCountry: "AE",
+        visaType: "TOURIST",
+        entryType: "MULTIPLE",
+        receivedDate: "2026-09-16",
+        expectedCollectionDate: "2026-09-20",
+        remarks: "Passport copy is faint",
+        applicants: [{ applicantRef: "A1", travellerId }],
+      },
+      "ops@rgs.test",
+    );
+    expect(created.caseStatus).toBe("NEW");
+    expect(created.billingStatus).toBe("UNBILLED");
+    expect(created.entryType).toBe("MULTIPLE");
+    expect(created.expectedCollectionDate).toBe("2026-09-20");
+    expect(created.remarks).toBe("Passport copy is faint");
+  });
+
   it("records a creation event", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));

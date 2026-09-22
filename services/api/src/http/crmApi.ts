@@ -61,6 +61,8 @@ const CreateCaseBody = z.object({
   entryType: z.enum(crm.ENTRY_TYPES).optional(),
   processing: z.enum(crm.PROCESSING_SPEEDS).optional(),
   receivedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  expectedCollectionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  remarks: z.string().trim().min(1).max(2000).optional(),
   applicants: z
     .array(
       z.object({
@@ -82,7 +84,7 @@ const UpsertTravellerBody = z.object({
 const isoDateBody = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
 
 /**
- * The six fields `updateCaseDetails` is allowed to touch, written out by name.
+ * The plain fields `updateCaseDetails` is allowed to touch, written out by name.
  * NOT a passthrough of the request body: `caseStatus`, per-applicant `custody`,
  * per-applicant `outcome` and `billingStatus` each have a state machine and
  * their own route, and a general "update any field" body is one forgotten key
@@ -96,6 +98,7 @@ const UpdateCaseDetailsBody = z.object({
   submissionDate: isoDateBody.optional(),
   appointmentDate: isoDateBody.optional(),
   expectedCollectionDate: isoDateBody.optional(),
+  remarks: z.string().trim().min(1).max(2000).optional(),
 });
 
 const CaseStatusBody = z.object({ toStatus: z.enum(crm.CASE_STATUSES) });

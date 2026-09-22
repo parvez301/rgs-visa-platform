@@ -175,6 +175,47 @@ describe("NewCaseDrawer", () => {
     expect(screen.queryByText("Landed on the case page")).toBeNull();
   });
 
+  it("sends collection date, entry type, and remarks when filled, and hides entry type off a visa case", async () => {
+    const { requestLog } = renderDrawer();
+    await fillTheCommonFields();
+    fireEvent.change(screen.getByLabelText("Partner"), { target: { value: "partner_1" } });
+    fireEvent.change(screen.getByLabelText("Collection date"), { target: { value: "2026-09-20" } });
+    fireEvent.change(screen.getByLabelText("Entry type"), { target: { value: "MULTIPLE" } });
+    fireEvent.change(screen.getByLabelText("Remarks"), { target: { value: "  Passport copy is faint  " } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create case" }));
+    await screen.findByText("Landed on the case page");
+
+    const caseWrite = requestLog.find((request) => request.method === "POST" && request.url.endsWith("/cases"));
+    expect(caseWrite!.body).toMatchObject({
+      caseType: "VISA",
+      entryType: "MULTIPLE",
+      expectedCollectionDate: "2026-09-20",
+      remarks: "Passport copy is faint",
+      receivedDate: "2026-09-16",
+    });
+    expect(caseWrite!.body).not.toHaveProperty("billingStatus");
+    expect(caseWrite!.body).not.toHaveProperty("caseStatus");
+  });
+
+  it("omits blank optional fields and hides entry type when the case is not a visa", async () => {
+    const { requestLog } = renderDrawer();
+    await fillTheCommonFields();
+    fireEvent.change(screen.getByLabelText("Partner"), { target: { value: "partner_1" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "ATTESTATION" } });
+    expect(screen.queryByLabelText("Entry type")).toBeNull();
+    expect(screen.queryByLabelText("Visa type")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create case" }));
+    await screen.findByText("Landed on the case page");
+
+    const caseWrite = requestLog.find((request) => request.method === "POST" && request.url.endsWith("/cases"));
+    expect(caseWrite!.body).not.toHaveProperty("entryType");
+    expect(caseWrite!.body).not.toHaveProperty("expectedCollectionDate");
+    expect(caseWrite!.body).not.toHaveProperty("remarks");
+    expect(caseWrite!.body).not.toHaveProperty("visaType");
+  });
+
   it("closes on Escape", () => {
     const { onClose } = renderDrawer();
     fireEvent.keyDown(document, { key: "Escape" });

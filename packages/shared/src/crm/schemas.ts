@@ -112,6 +112,7 @@ export const CrmCaseSchema = z
     appointmentDate: isoDate.optional(),
     expectedCollectionDate: isoDate.optional(),
     courierDate: isoDate.optional(),
+    remarks: z.string().trim().min(1).max(2000).optional(),
     lineItems: z.array(LineItemSchema).default([]),
     totalInr: z.number().int().nonnegative().default(0),
     applicants: z.array(CaseApplicantSchema).min(1, "a case needs at least one applicant"),

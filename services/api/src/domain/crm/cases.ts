@@ -31,6 +31,8 @@ export interface CreateCaseInput {
   entryType?: crm.EntryType;
   processing?: crm.ProcessingSpeed;
   receivedDate: string;
+  expectedCollectionDate?: string;
+  remarks?: string;
   applicants: CreateCaseApplicantInput[];
 }
 
@@ -65,6 +67,10 @@ export async function createCase(
       caseStatus: "NEW",
       billingStatus: "UNBILLED",
       receivedDate: input.receivedDate,
+      ...(input.expectedCollectionDate !== undefined
+        ? { expectedCollectionDate: input.expectedCollectionDate }
+        : {}),
+      ...(input.remarks !== undefined ? { remarks: input.remarks } : {}),
       lineItems: [],
       totalInr: 0,
       watchdogOverrides: {},
@@ -125,17 +131,18 @@ export interface UpdateCaseDetailsInput {
   submissionDate?: string;
   appointmentDate?: string;
   expectedCollectionDate?: string;
+  remarks?: string;
 }
 
 /**
- * Updates the six plain-field, non-state-machine details on a case.
+ * Updates the plain-field, non-state-machine details on a case.
  *
  * The update is built one named field at a time -- never by spreading `input`
  * onto the case and deleting the axes it must not touch -- because a
  * delete-list is one forgotten key away from letting `caseStatus` or
- * `billingStatus` move through this route. Picking the six names explicitly
+ * `billingStatus` move through this route. Picking each name explicitly
  * means a caller cannot smuggle either axis through no matter what extra
- * properties its input object carries.
+ * properties its input object carries. `remarks` is one of those named fields.
  */
 export async function updateCaseDetails(
   context: AppContext,
@@ -171,6 +178,9 @@ export async function updateCaseDetails(
   ) {
     changedFieldNames.push("expectedCollectionDate");
   }
+  if (input.remarks !== undefined && input.remarks !== currentCase.remarks) {
+    changedFieldNames.push("remarks");
+  }
 
   // Nothing moved -- an empty input, or every supplied value already matches
   // what's stored. Returning the case as-is, before the parse/write/event
@@ -196,6 +206,7 @@ export async function updateCaseDetails(
       ...(input.expectedCollectionDate !== undefined
         ? { expectedCollectionDate: input.expectedCollectionDate }
         : {}),
+      ...(input.remarks !== undefined ? { remarks: input.remarks } : {}),
       updatedAt: context.now().toISOString(),
     });
   } catch (error) {

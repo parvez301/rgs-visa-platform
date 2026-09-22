@@ -14,7 +14,7 @@ import {
   PRIMARY_BUTTON_CLASS,
   SECONDARY_BUTTON_CLASS,
 } from "../components/controls";
-import { CASE_TYPE_LABELS, VISA_TYPE_LABELS } from "../labels";
+import { CASE_TYPE_LABELS, ENTRY_TYPE_LABELS, VISA_TYPE_LABELS } from "../labels";
 
 /** The `<select>` value that means "type a partner the ledger has not seen". */
 const NEW_PARTNER_CHOICE = "__new_partner__";
@@ -65,7 +65,10 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
   const [newPartnerName, setNewPartnerName] = useState("");
   const [destinationCountry, setDestinationCountry] = useState("");
   const [visaType, setVisaType] = useState<crm.VisaType | "">("");
+  const [entryType, setEntryType] = useState<crm.EntryType | "">("");
   const [receivedDate, setReceivedDate] = useState(todayIsoDate);
+  const [expectedCollectionDate, setExpectedCollectionDate] = useState("");
+  const [remarks, setRemarks] = useState("");
   const [applicantDrafts, setApplicantDrafts] = useState<ApplicantDraft[]>([EMPTY_APPLICANT]);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
 
@@ -104,13 +107,17 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
         });
       }
 
+      const trimmedRemarks = remarks.trim();
       return crmClient.createCase(idToken!, {
         caseRef: caseRef.trim(),
         caseType,
         partnerId,
         destinationCountry,
         ...(caseType === "VISA" && visaType !== "" ? { visaType } : {}),
+        ...(caseType === "VISA" && entryType !== "" ? { entryType } : {}),
         receivedDate,
+        ...(expectedCollectionDate !== "" ? { expectedCollectionDate } : {}),
+        ...(trimmedRemarks !== "" ? { remarks: trimmedRemarks } : {}),
         applicants,
       });
     },
@@ -132,6 +139,9 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
     }
     if (destinationCountry === "") return "Choose the destination country.";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedDate)) return "Enter the received date as a full date.";
+    if (expectedCollectionDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedCollectionDate)) {
+      return "Enter the collection date as a full date.";
+    }
     const nameMissingIndex = applicantDrafts.findIndex((applicantDraft) => applicantDraft.fullName.trim() === "");
     if (nameMissingIndex !== -1) return `Applicant ${nameMissingIndex + 1} needs a name.`;
     return null;
@@ -269,12 +279,52 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
             )}
           </div>
 
-          <label className="flex flex-col gap-1 sm:w-1/2">
-            <span className={FIELD_LABEL_CLASS}>Received</span>
-            <input
-              type="date"
-              value={receivedDate}
-              onChange={(changeEvent) => setReceivedDate(changeEvent.target.value)}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className={FIELD_LABEL_CLASS}>Received</span>
+              <input
+                type="date"
+                value={receivedDate}
+                onChange={(changeEvent) => setReceivedDate(changeEvent.target.value)}
+                className={FIELD_CLASS}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className={FIELD_LABEL_CLASS}>Collection date</span>
+              <input
+                type="date"
+                value={expectedCollectionDate}
+                onChange={(changeEvent) => setExpectedCollectionDate(changeEvent.target.value)}
+                className={FIELD_CLASS}
+              />
+            </label>
+          </div>
+
+          {caseType === "VISA" && (
+            <label className="flex flex-col gap-1 sm:w-1/2">
+              <span className={FIELD_LABEL_CLASS}>Entry type</span>
+              <select
+                value={entryType}
+                onChange={(changeEvent) => setEntryType(changeEvent.target.value as crm.EntryType | "")}
+                className={FIELD_CLASS}
+              >
+                <option value="">Not set</option>
+                {crm.ENTRY_TYPES.map((entryTypeOption) => (
+                  <option key={entryTypeOption} value={entryTypeOption}>
+                    {ENTRY_TYPE_LABELS[entryTypeOption]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <label className="flex flex-col gap-1">
+            <span className={FIELD_LABEL_CLASS}>Remarks</span>
+            <textarea
+              value={remarks}
+              onChange={(changeEvent) => setRemarks(changeEvent.target.value)}
+              rows={3}
+              placeholder="Optional"
               className={FIELD_CLASS}
             />
           </label>

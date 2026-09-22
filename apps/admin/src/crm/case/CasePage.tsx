@@ -19,6 +19,7 @@ import {
   CASE_STATUS_LABELS,
   COURIER_LABELS,
   CUSTODY_LABELS,
+  ENTRY_TYPE_LABELS,
   LINE_ITEM_KIND_LABELS,
   OUTCOME_LABELS,
   VISA_TYPE_LABELS,
@@ -330,10 +331,16 @@ function CaseHeader({
         <CaseField fieldKey="expectedCollectionDate" label="Expected collection">
           {caseRecord.expectedCollectionDate ?? NOT_RECORDED}
         </CaseField>
+        <CaseField fieldKey="entryType" label="Entry type">
+          {caseRecord.entryType === undefined ? NOT_RECORDED : ENTRY_TYPE_LABELS[caseRecord.entryType]}
+        </CaseField>
         <CaseField fieldKey="courierDate" label="Couriered">
           {caseRecord.courierDate ?? NOT_RECORDED}
         </CaseField>
       </div>
+      <CaseField fieldKey="remarks" label="Remarks">
+        <span className="whitespace-pre-wrap">{caseRecord.remarks ?? NOT_RECORDED}</span>
+      </CaseField>
     </header>
   );
 }
