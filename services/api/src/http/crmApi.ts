@@ -19,6 +19,7 @@ import {
   setCaseDocumentCheckState,
 } from "../domain/crm/caseDocumentChecklist";
 import { generateCaseInvoice } from "../domain/crm/caseInvoice";
+import { runAppointmentReminders } from "../domain/crm/appointmentReminders";
 import { listCaseEvents } from "../domain/crm/crmEvents";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
 import {
@@ -350,6 +351,16 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
         context,
         tenantId,
         requestContext.pathParams["caseId"]!,
+        requestContext.callerEmail,
+      );
+    })
+    .add("POST", "/api/v1/admin/crm/appointment-reminders/run", async (requestContext) => {
+      requireAdmin(requestContext);
+      const todayIso = context.now().toISOString().slice(0, 10);
+      return runAppointmentReminders(
+        context,
+        tenantId,
+        todayIso,
         requestContext.callerEmail,
       );
     })

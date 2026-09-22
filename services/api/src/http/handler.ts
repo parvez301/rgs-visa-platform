@@ -7,6 +7,8 @@ import { BestEffortEmailSender, SesEmailSender } from "../lib/email";
 import { llmProviderConfigFromEnvironment } from "../agent/providers/config";
 import { createLlmProvider } from "../agent/providers/index";
 import type { LlmProvider } from "../agent/providers/types";
+import { runAppointmentReminders } from "../domain/crm/appointmentReminders";
+import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
 import { buildAdminRouter } from "./adminApi";
 import { buildUserRouter } from "./userApi";
 
@@ -96,4 +98,18 @@ export async function adminApiHandler(
 ): Promise<APIGatewayProxyResultV2> {
   cachedAdminRouter ??= buildAdminRouter(buildProductionContext());
   return cachedAdminRouter.dispatch(event);
+}
+
+/**
+ * EventBridge daily target: email partners for appointments 24–48h out.
+ * Shares production context with the API Lambdas (same table / SES).
+ */
+export async function appointmentRemindersHandler(): Promise<{
+  scanned: number;
+  reminded: number;
+  skipped: number;
+}> {
+  const context = buildProductionContext();
+  const todayIso = context.now().toISOString().slice(0, 10);
+  return runAppointmentReminders(context, DEFAULT_TENANT_ID, todayIso);
 }

@@ -10,6 +10,8 @@ import {
   aws_cloudfront_origins as cloudfrontOrigins,
   aws_cognito as cognito,
   aws_dynamodb as dynamodb,
+  aws_events as events,
+  aws_events_targets as eventsTargets,
   aws_iam as iam,
   aws_lambda as lambda,
   aws_lambda_nodejs as lambdaNodejs,
@@ -138,6 +140,28 @@ export class RgsPlatformStack extends cdk.Stack {
         new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
       );
     }
+
+    // Daily appointment reminders (24–48h window) — same entry file, own handler.
+    const appointmentRemindersFunction = new lambdaNodejs.NodejsFunction(
+      this,
+      "AppointmentRemindersFunction",
+      {
+        ...sharedLambdaProps,
+        functionName: `rgs-appointment-reminders-${stage}`,
+        handler: "appointmentRemindersHandler",
+        timeout: cdk.Duration.minutes(5),
+      } as lambdaNodejs.NodejsFunctionProps,
+    );
+    platformTable.grantReadWriteData(appointmentRemindersFunction);
+    appointmentRemindersFunction.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+    );
+    new events.Rule(this, "AppointmentRemindersSchedule", {
+      ruleName: `rgs-appointment-reminders-${stage}`,
+      description: "Email partners for CRM appointments 1–2 days out",
+      schedule: events.Schedule.cron({ minute: "0", hour: "3" }),
+      targets: [new eventsTargets.LambdaFunction(appointmentRemindersFunction)],
+    });
 
     // ---------- HTTP API ----------
     const httpApi = new apigwv2.HttpApi(this, "HttpApi", {

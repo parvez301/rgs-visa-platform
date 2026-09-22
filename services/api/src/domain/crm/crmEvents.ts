@@ -20,7 +20,8 @@ export type CrmEventType =
   | "MEMORY_REMEMBERED"
   | "DOCUMENT_CHECKLIST_CHANGED"
   | "INVOICE_GENERATED"
-  | "PARTNER_NOTIFIED";
+  | "PARTNER_NOTIFIED"
+  | "APPOINTMENT_REMINDER_SENT";
 
 export interface CrmEvent {
   eventId: string;

@@ -178,7 +178,9 @@ export async function updateCaseDetails(
   if (input.submissionDate !== undefined && input.submissionDate !== currentCase.submissionDate) {
     changedFieldNames.push("submissionDate");
   }
-  if (input.appointmentDate !== undefined && input.appointmentDate !== currentCase.appointmentDate) {
+  const appointmentDateChanging =
+    input.appointmentDate !== undefined && input.appointmentDate !== currentCase.appointmentDate;
+  if (appointmentDateChanging) {
     changedFieldNames.push("appointmentDate");
   }
   if (
@@ -205,8 +207,11 @@ export async function updateCaseDetails(
   // bare 500 instead of a 400 naming the problem. Same guard as createCase.
   let updatedCase: crm.CrmCase;
   try {
+    const caseForParse = appointmentDateChanging
+      ? (({ appointmentReminderSentFor: _cleared, ...rest }) => rest)(currentCase)
+      : currentCase;
     updatedCase = crm.CrmCaseSchema.parse({
-      ...currentCase,
+      ...caseForParse,
       ...(input.visaType !== undefined ? { visaType: input.visaType } : {}),
       ...(input.entryType !== undefined ? { entryType: input.entryType } : {}),
       ...(input.processing !== undefined ? { processing: input.processing } : {}),

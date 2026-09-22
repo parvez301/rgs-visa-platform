@@ -117,6 +117,11 @@ export const CrmCaseSchema = z
     receivedDate: isoDate,
     submissionDate: isoDate.optional(),
     appointmentDate: isoDate.optional(),
+    /**
+     * ISO date already emailed for the appointment reminder job. Cleared when
+     * `appointmentDate` changes so a rescheduled appointment can remind again.
+     */
+    appointmentReminderSentFor: isoDate.optional(),
     expectedCollectionDate: isoDate.optional(),
     courierDate: isoDate.optional(),
     remarks: z.string().trim().min(1).max(2000).optional(),
