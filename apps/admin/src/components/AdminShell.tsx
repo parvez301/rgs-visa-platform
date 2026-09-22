@@ -13,22 +13,24 @@ const NAV_LINKS = [
 
 /**
  * `contentWidth`: the visa-platform pages read best in a 1152px column; the
- * CRM is a grid of ten columns beside an agent panel and needs the whole
- * viewport. The header follows the same width so the nav lines up with the
- * content under it either way.
+ * CRM needs more room for its grid + agent panel but not the raw viewport --
+ * edge-to-edge on ultrawide stretches filters and thins row cells. `wide`
+ * caps around 1440px and centers the sheet.
  */
 export function AdminShell({
   children,
   contentWidth = "default",
 }: {
   children: ReactNode;
-  contentWidth?: "default" | "full";
+  contentWidth?: "default" | "wide" | "full";
 }) {
   const { email, signOut } = useAuth();
-  const widthClass = contentWidth === "full" ? "max-w-none" : "max-w-6xl";
+  const widthClass =
+    contentWidth === "full" ? "max-w-none" : contentWidth === "wide" ? "max-w-[90rem]" : "max-w-6xl";
+  const isCrmWide = contentWidth === "wide";
 
   return (
-    <div className="min-h-screen">
+    <div className={`min-h-screen ${isCrmWide ? "bg-mist" : ""}`}>
       <header className="bg-ink text-paper">
         <div className={`mx-auto flex ${widthClass} items-center justify-between gap-4 px-6 py-4`}>
           <Link to="/" className="flex items-center gap-3">
@@ -65,7 +67,13 @@ export function AdminShell({
           </nav>
         </div>
       </header>
-      <main className={`mx-auto ${widthClass} px-6 ${contentWidth === "full" ? "py-6" : "py-8"}`}>{children}</main>
+      <main
+        className={`mx-auto ${widthClass} px-6 ${
+          contentWidth === "default" ? "py-8" : "py-6"
+        } ${isCrmWide ? "rounded-t-2xl bg-paper shadow-sm shadow-ink/5" : ""}`}
+      >
+        {children}
+      </main>
     </div>
   );
 }

@@ -19,19 +19,20 @@ interface CrmLayoutProps {
 }
 
 /**
- * The CRM screen's chrome: the admin header above a full-width
+ * The CRM screen's chrome: the admin header above a capped-width
  * `[main | agent panel]` grid, split by a draggable vertical rule.
  *
  * Spec §6: resizable, collapsible, NEVER a modal. Nothing here sets
  * `role="dialog"`, `aria-modal` or `inert`, and the main column stays fully
  * interactive whatever the panel is doing.
  *
- * The panel starts CLOSED and is opened from a floating button pinned to the
- * bottom-right corner of the viewport (the owner's placement, 2026-09-16).
- * Open/closed lives in `AgentPanelProvider`, above the routes, so a panel
- * opened on the Ledger is still open on the case a desk agent clicks through
- * to. The button is always on screen, so the panel can never become
- * unreachable.
+ * Width is `wide` (~1440px), not full-bleed: ultrawide full-width stretched
+ * the Ledger into thin cells and a sparse filter bar. The panel starts CLOSED
+ * and is opened from a floating button pinned to the bottom-right corner of
+ * the viewport (the owner's placement, 2026-09-16). Open/closed lives in
+ * `AgentPanelProvider`, above the routes, so a panel opened on the Ledger is
+ * still open on the case a desk agent clicks through to. The button is always
+ * on screen, so the panel can never become unreachable.
  */
 export function CrmLayout({ children, agentPanel }: CrmLayoutProps) {
   const { isPanelOpen, setPanelOpen } = useAgentPanelSession();
@@ -58,7 +59,7 @@ export function CrmLayout({ children, agentPanel }: CrmLayoutProps) {
   }
 
   return (
-    <AdminShell contentWidth="full">
+    <AdminShell contentWidth="wide">
       <div
         className="crm-root relative grid h-[calc(100vh-112px)] min-h-[480px]"
         style={{
