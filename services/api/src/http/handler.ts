@@ -76,7 +76,14 @@ export function buildProductionContext(): AppContext {
       writeRetryOptionsFromEnvironment(process.env),
     ),
     documents: new S3DocumentStore(documentsBucket),
-    email: new BestEffortEmailSender(new SesEmailSender(senderAddress)),
+    email: new BestEffortEmailSender(
+      SesEmailSender.fromOptions({
+        fromAddress: senderAddress,
+        region: process.env["SES_REGION"],
+        roleArn: process.env["SES_ROLE_ARN"],
+        externalId: process.env["SES_EXTERNAL_ID"],
+      }),
+    ),
     adminNotificationAddress,
     now: () => new Date(),
     ...(llmProvider !== undefined ? { llm: llmProvider } : {}),

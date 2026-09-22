@@ -115,8 +115,15 @@ export class RgsPlatformStack extends cdk.Stack {
       environment: {
         TABLE_NAME: platformTable.tableName,
         DOCUMENTS_BUCKET: documentsBucket.bucketName,
-        EMAIL_SENDER: "no-reply@raysglobalservices.com",
+        // From-domain must be SES-verified. raysglobalservices.com DNS still
+        // points at GoDaddy (SES verify Failed). hireloop.xyz is verified in
+        // the cloud account (us-east-1, production SES access). Lambdas assume
+        // SES_ROLE_ARN to send there until the GoDaddy NS cutover.
+        EMAIL_SENDER: "no-reply@hireloop.xyz",
         ADMIN_NOTIFICATION_EMAIL: "info@raysglobalservices.com",
+        SES_REGION: "us-east-1",
+        SES_ROLE_ARN: "arn:aws:iam::781517218736:role/RgsCrmSesSendRole",
+        SES_EXTERNAL_ID: "rgs-crm-ses-send",
         NODE_OPTIONS: "--enable-source-maps",
       },
     };
@@ -133,11 +140,18 @@ export class RgsPlatformStack extends cdk.Stack {
       handler: "adminApiHandler",
     } as lambdaNodejs.NodejsFunctionProps);
 
+    const sesAssumeRoleArn = "arn:aws:iam::781517218736:role/RgsCrmSesSendRole";
     for (const apiFunction of [userApiFunction, adminApiFunction]) {
       platformTable.grantReadWriteData(apiFunction);
       documentsBucket.grantReadWrite(apiFunction);
       apiFunction.addToRolePolicy(
         new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+      );
+      apiFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["sts:AssumeRole"],
+          resources: [sesAssumeRoleArn],
+        }),
       );
     }
 
@@ -155,6 +169,12 @@ export class RgsPlatformStack extends cdk.Stack {
     platformTable.grantReadWriteData(appointmentRemindersFunction);
     appointmentRemindersFunction.addToRolePolicy(
       new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+    );
+    appointmentRemindersFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["sts:AssumeRole"],
+        resources: [sesAssumeRoleArn],
+      }),
     );
     new events.Rule(this, "AppointmentRemindersSchedule", {
       ruleName: `rgs-appointment-reminders-${stage}`,
