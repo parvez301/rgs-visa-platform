@@ -1,6 +1,13 @@
 import { crm } from "@rgs/shared";
 
 /**
+ * Sentinel for built-in "today" views. Resolved to the desk agent's local
+ * calendar date at filter-apply time so a chip clicked after midnight still
+ * means today, not the date frozen when the views list was first loaded.
+ */
+export const LEDGER_FILTER_TODAY = "__TODAY__";
+
+/**
  * The client-side filter state a desk agent can apply on top of whatever the
  * server already returned (Task 13; spec §2.1's fixed split is in the module
  * comment on `applyFilters` below).
@@ -13,6 +20,10 @@ import { crm } from "@rgs/shared";
  * `LedgerRow` already loaded, so filtering by it needs no extra fetch --
  * exactly the reasoning spec §2.1 gives for running `destinationCountry` and
  * `caseType` client-side.
+ *
+ * `appointmentDateOn` / `expectedCollectionDateOn` are exact YYYY-MM-DD
+ * matches (or `LEDGER_FILTER_TODAY`). Same client-side reason: both dates
+ * ride on the projected row after the ops-dashboard tranche.
  */
 export interface LedgerFilters {
   statuses: crm.CaseStatus[];
@@ -21,6 +32,8 @@ export interface LedgerFilters {
   caseType?: crm.CaseType;
   search?: string;
   billingStatuses?: crm.BillingStatus[];
+  appointmentDateOn?: string;
+  expectedCollectionDateOn?: string;
 }
 
 /**
@@ -33,6 +46,23 @@ export interface LedgerFilters {
 export interface LedgerSort {
   column: "receivedDate" | "appointmentDate" | "totalInr" | "caseRef";
   direction: "asc" | "desc";
+}
+
+/** Local calendar YYYY-MM-DD for the desk agent's browser timezone. */
+export function localTodayIso(now: Date = new Date()): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function resolveDateOnFilter(
+  filterValue: string | undefined,
+  todayIso: string,
+): string | undefined {
+  if (filterValue === undefined) return undefined;
+  if (filterValue === LEDGER_FILTER_TODAY) return todayIso;
+  return filterValue;
 }
 
 /**
@@ -63,9 +93,12 @@ export function applyFilters(
   rows: crm.LedgerRow[],
   filters: LedgerFilters,
   partnerNamesById: Record<string, string> = {},
+  todayIso: string = localTodayIso(),
 ): crm.LedgerRow[] {
   const normalizedSearchTerm = filters.search?.trim().toLowerCase();
   const hasSearchTerm = normalizedSearchTerm !== undefined && normalizedSearchTerm.length > 0;
+  const appointmentDateOn = resolveDateOnFilter(filters.appointmentDateOn, todayIso);
+  const expectedCollectionDateOn = resolveDateOnFilter(filters.expectedCollectionDateOn, todayIso);
 
   return rows.filter((row) => {
     if (filters.destinationCountry !== undefined && row.destinationCountry !== filters.destinationCountry) {
@@ -78,6 +111,15 @@ export function applyFilters(
       filters.billingStatuses !== undefined &&
       filters.billingStatuses.length > 0 &&
       !filters.billingStatuses.includes(row.billingStatus)
+    ) {
+      return false;
+    }
+    if (appointmentDateOn !== undefined && row.appointmentDate !== appointmentDateOn) {
+      return false;
+    }
+    if (
+      expectedCollectionDateOn !== undefined &&
+      row.expectedCollectionDate !== expectedCollectionDateOn
     ) {
       return false;
     }

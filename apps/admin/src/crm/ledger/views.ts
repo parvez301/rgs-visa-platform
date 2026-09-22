@@ -1,5 +1,6 @@
 import { crm } from "@rgs/shared";
 import type { LedgerFilters, LedgerSort } from "./filters";
+import { LEDGER_FILTER_TODAY } from "./filters";
 
 /** Task 13's "Produces" interface, verbatim. */
 export interface LedgerView {
@@ -19,12 +20,16 @@ export interface LedgerView {
 const DEFAULT_BUILT_IN_SORT: LedgerSort = { column: "receivedDate", direction: "desc" };
 
 const LIVE_WORK_VIEW_ID = "built-in-live-work";
+const COLLECT_TODAY_VIEW_ID = "built-in-collect-today";
+const APPOINTMENTS_TODAY_VIEW_ID = "built-in-appointments-today";
 const AWAITING_PAYMENT_VIEW_ID = "built-in-awaiting-payment";
 const UNBILLED_VIEW_ID = "built-in-unbilled";
 const EVERYTHING_VIEW_ID = "built-in-everything";
 
 const BUILT_IN_VIEW_IDS: readonly string[] = [
   LIVE_WORK_VIEW_ID,
+  COLLECT_TODAY_VIEW_ID,
+  APPOINTMENTS_TODAY_VIEW_ID,
   AWAITING_PAYMENT_VIEW_ID,
   UNBILLED_VIEW_ID,
   EVERYTHING_VIEW_ID,
@@ -35,13 +40,28 @@ export function isBuiltInLedgerViewId(viewId: string): boolean {
   return BUILT_IN_VIEW_IDS.includes(viewId);
 }
 
+export function collectTodayViewId(): string {
+  return COLLECT_TODAY_VIEW_ID;
+}
+
+export function appointmentsTodayViewId(): string {
+  return APPOINTMENTS_TODAY_VIEW_ID;
+}
+
+export function liveWorkViewId(): string {
+  return LIVE_WORK_VIEW_ID;
+}
+
 /**
  * The views a desk agent lands on before anyone has saved anything
- * (brief, "Three built-in views ship, and cannot be deleted" -- Unbilled was
- * added later for the outstanding-collections slice). Built fresh on every
- * call rather than read from storage -- they are not data, they are the
- * product's own fixed defaults, so there is nothing to round-trip through
- * `localStorage` and nothing there can ever go stale or get lost.
+ * (brief, "Three built-in views ship, and cannot be deleted" -- Unbilled and
+ * the two today-ops views were added later). Built fresh on every call rather
+ * than read from storage -- they are not data, they are the product's own
+ * fixed defaults, so there is nothing to round-trip through `localStorage`
+ * and nothing there can ever go stale or get lost.
+ *
+ * Today filters use `LEDGER_FILTER_TODAY` so apply-time resolves the desk
+ * agent's local calendar, not a date frozen when the chip list mounted.
  */
 export function builtInLedgerViews(): LedgerView[] {
   return [
@@ -50,6 +70,24 @@ export function builtInLedgerViews(): LedgerView[] {
       name: "Live work",
       filters: { statuses: [...crm.LIVE_CASE_STATUSES] },
       sort: { column: "receivedDate", direction: "desc" },
+    },
+    {
+      viewId: COLLECT_TODAY_VIEW_ID,
+      name: "Collect today",
+      filters: {
+        statuses: [...crm.LIVE_CASE_STATUSES],
+        expectedCollectionDateOn: LEDGER_FILTER_TODAY,
+      },
+      sort: DEFAULT_BUILT_IN_SORT,
+    },
+    {
+      viewId: APPOINTMENTS_TODAY_VIEW_ID,
+      name: "Appointments today",
+      filters: {
+        statuses: [...crm.LIVE_CASE_STATUSES],
+        appointmentDateOn: LEDGER_FILTER_TODAY,
+      },
+      sort: { column: "appointmentDate", direction: "asc" },
     },
     {
       viewId: AWAITING_PAYMENT_VIEW_ID,
@@ -165,4 +203,9 @@ export function deleteView(userEmail: string, viewId: string): void {
   } catch {
     // Nothing to do: the write failed, the in-memory list is still correct.
   }
+}
+
+/** Look up a built-in by id for the ops strip one-click apply. */
+export function findBuiltInLedgerView(viewId: string): LedgerView | undefined {
+  return builtInLedgerViews().find((view) => view.viewId === viewId);
 }

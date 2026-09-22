@@ -57,6 +57,28 @@ describe("listLedgerRows", () => {
     expect(LEDGER_PROJECTED_ATTRIBUTES).not.toContain("lineItems");
   });
 
+  it("projects expectedCollectionDate when the case carries one", async () => {
+    const context = buildTestContext();
+    await seedCases(context, [
+      buildCase({
+        caseId: "case_collect",
+        expectedCollectionDate: "2026-09-22",
+        appointmentDate: "2026-09-20",
+      }),
+    ]);
+
+    const page = await listLedgerRows(context, TENANT_ID, {
+      statuses: [...crm.CASE_STATUSES],
+      limit: DEFAULT_LEDGER_PAGE_LIMIT,
+    });
+
+    expect(page.rows[0]).toMatchObject({
+      caseId: "case_collect",
+      expectedCollectionDate: "2026-09-22",
+      appointmentDate: "2026-09-20",
+    });
+  });
+
   it("carries the applicant roll-up through", async () => {
     const context = buildTestContext();
     await seedCases(context, [

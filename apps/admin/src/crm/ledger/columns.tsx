@@ -134,5 +134,11 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
     editable: "appointmentDate",
     render: (row) => row.appointmentDate ?? "—",
   },
+  {
+    key: "expectedCollectionDate",
+    header: "Collect",
+    width: 110,
+    render: (row) => row.expectedCollectionDate ?? "—",
+  },
   { key: "totalInr", header: "Total", width: 110, render: (row) => formatInr(row.totalInr) },
 ];

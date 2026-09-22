@@ -123,6 +123,7 @@ export const LedgerRowSchema = z.object({
   billingStatus: z.enum(BILLING_STATUSES),
   receivedDate: isoDate,
   appointmentDate: isoDate.optional(),
+  expectedCollectionDate: isoDate.optional(),
   totalInr: z.number().int().nonnegative(),
   updatedAt: z.string().datetime(),
   applicantSummary: ApplicantSummarySchema.optional(),

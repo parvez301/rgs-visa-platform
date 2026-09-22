@@ -81,6 +81,32 @@ describe("applyFilters", () => {
     expect(filtered.map((row) => row.caseId).sort()).toEqual(["case_part", "case_sent"]);
   });
 
+  it("filters by appointmentDateOn and expectedCollectionDateOn, resolving __TODAY__", () => {
+    const rows = [
+      buildRow({ caseId: "case_appt_today", appointmentDate: "2026-09-22" }),
+      buildRow({ caseId: "case_collect_today", expectedCollectionDate: "2026-09-22" }),
+      buildRow({
+        caseId: "case_other_day",
+        appointmentDate: "2026-09-23",
+        expectedCollectionDate: "2026-09-23",
+      }),
+    ];
+
+    expect(
+      applyFilters(rows, { ...emptyFilters, appointmentDateOn: "__TODAY__" }, {}, "2026-09-22").map(
+        (row) => row.caseId,
+      ),
+    ).toEqual(["case_appt_today"]);
+    expect(
+      applyFilters(
+        rows,
+        { ...emptyFilters, expectedCollectionDateOn: "2026-09-22" },
+        {},
+        "2026-09-22",
+      ).map((row) => row.caseId),
+    ).toEqual(["case_collect_today"]);
+  });
+
   it("returns every row for an empty filter set rather than none", () => {
     const rows = [buildRow({ caseId: "case_a" }), buildRow({ caseId: "case_b" }), buildRow({ caseId: "case_c" })];
 

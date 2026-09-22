@@ -17,9 +17,16 @@ import {
 } from "../components/controls";
 import { CASE_STATUS_LABELS, REVIEW_REASON_LABELS } from "../labels";
 import { NewCaseDrawer } from "../newCase/NewCaseDrawer";
-import { applyFilters, applySort, type LedgerFilters, type LedgerSort } from "./filters";
+import { applyFilters, applySort, localTodayIso, type LedgerFilters, type LedgerSort } from "./filters";
 import { BulkActionsBar } from "./BulkActionsBar";
 import { LedgerTable } from "./LedgerTable";
+import { countOpsDashboard } from "./opsDashboard";
+import {
+  appointmentsTodayViewId,
+  collectTodayViewId,
+  findBuiltInLedgerView,
+  liveWorkViewId,
+} from "./views";
 import { ViewChips } from "./ViewChips";
 
 const DEFAULT_LEDGER_SORT: LedgerSort = { column: "receivedDate", direction: "desc" };
@@ -154,6 +161,8 @@ export function LedgerPage() {
       caseType: viewFilters.caseType,
       search: viewFilters.search,
       billingStatuses: viewFilters.billingStatuses,
+      appointmentDateOn: viewFilters.appointmentDateOn,
+      expectedCollectionDateOn: viewFilters.expectedCollectionDateOn,
     });
     setLedgerSort(viewSort);
   }
@@ -203,6 +212,19 @@ export function LedgerPage() {
     return { countByReason, withIssueCount, withoutIssueCount: (ledgerLoad?.rows.length ?? 0) - withIssueCount };
   }, [ledgerLoad?.rows, reviewEntriesByCaseRef]);
 
+  const todayIso = localTodayIso();
+  const opsCounts = useMemo(
+    () => countOpsDashboard(ledgerLoad?.rows ?? [], todayIso),
+    [ledgerLoad?.rows, todayIso],
+  );
+  const openReviewCaseCount = reviewSummaryQuery.data?.entries.length ?? 0;
+
+  function applyBuiltInViewById(viewId: string) {
+    const builtInView = findBuiltInLedgerView(viewId);
+    if (builtInView === undefined) return;
+    applyLedgerView(builtInView.filters, builtInView.sort);
+  }
+
   return (
     <CrmLayout agentPanel={<AgentPanel selectedCaseIds={selectedCaseIds} />}>
       <div className="flex h-full flex-col gap-4">
@@ -222,6 +244,38 @@ export function LedgerPage() {
             </button>
           </div>
         </div>
+
+        <div
+          className={`${CARD_CLASS} flex flex-wrap items-center gap-2 px-4 py-2.5`}
+          aria-label="Today's work"
+        >
+          <span className={`${FIELD_LABEL_CLASS} mr-1`}>Today</span>
+          <button
+            type="button"
+            onClick={() => applyBuiltInViewById(collectTodayViewId())}
+            className={PILL_OFF_CLASS}
+          >
+            Collect {opsCounts.collectToday.toLocaleString()}
+          </button>
+          <button
+            type="button"
+            onClick={() => applyBuiltInViewById(appointmentsTodayViewId())}
+            className={PILL_OFF_CLASS}
+          >
+            Appointments {opsCounts.appointmentsToday.toLocaleString()}
+          </button>
+          <button
+            type="button"
+            onClick={() => applyBuiltInViewById(liveWorkViewId())}
+            className={PILL_OFF_CLASS}
+          >
+            Pending {opsCounts.pendingLive.toLocaleString()}
+          </button>
+          <Link to="/crm/review" className={PILL_OFF_CLASS}>
+            Open review {openReviewCaseCount.toLocaleString()}
+          </Link>
+        </div>
+
         {isNewCaseDrawerOpen && <NewCaseDrawer onClose={() => setIsNewCaseDrawerOpen(false)} />}
 
         <div className={`${CARD_CLASS} flex flex-col gap-3 px-4 py-3`}>

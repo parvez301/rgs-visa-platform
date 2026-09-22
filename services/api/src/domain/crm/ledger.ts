@@ -45,6 +45,7 @@ export const LEDGER_PROJECTED_ATTRIBUTES: readonly string[] = [
   "billingStatus",
   "receivedDate",
   "appointmentDate",
+  "expectedCollectionDate",
   "totalInr",
   "updatedAt",
   "applicantSummary",

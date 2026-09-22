@@ -43,12 +43,15 @@ function pressedChipNames(): string[] {
 }
 
 describe("ViewChips", () => {
-  it("ships the three built-in views and offers no delete affordance for them", () => {
+  it("ships the built-in views and offers no delete affordance for them", () => {
     renderViewChips();
 
     expect(screen.getAllByTestId("view-chip").map((chip) => chip.textContent)).toEqual([
       "Live work",
+      "Collect today",
+      "Appointments today",
       "Awaiting payment",
+      "Unbilled",
       "Everything",
     ]);
     expect(screen.queryByRole("button", { name: /^Delete the/ })).not.toBeInTheDocument();
