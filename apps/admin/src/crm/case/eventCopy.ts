@@ -44,6 +44,7 @@ export interface CrmEventCopy {
  * | CUSTODY_CHANGED           | applicantRef, fromCustody, toCustody                  | crm/cases.ts:273          |
  * | APPLICANT_OUTCOME_CHANGED | applicantRef, fromOutcome, toOutcome                  | crm/cases.ts:321          |
  * | DOCUMENT_CHECKLIST_CHANGED| documentLabel, fromState, toState OR action=stamped | caseDocumentChecklist.ts |
+ * | INVOICE_GENERATED         | fileName, totalInr, lineItemCount                   | caseInvoice.ts           |
  * | LINE_ITEM_ADDED           | lineItemCode, quantity, amountInr (UNIT), lineTotalInr | crm/lineItems.ts:79       |
  * | MEMORY_REMEMBERED         | scope, memoryKey, createdBy                           | crm/memory.ts:179         |
  * | PROPOSAL_APPROVED         | proposalId, toolName, edited, changed, autoApplied     | agent/approval.ts:546     |
@@ -250,6 +251,15 @@ export function describeCrmEvent(event: CrmEventView): CrmEventCopy {
         isAutoApplied: false,
       };
     }
+
+    case "INVOICE_GENERATED":
+      return {
+        title: `Invoice downloaded by ${actorEmail}`,
+        detail: `${readMetaString(meta, "fileName") ?? "invoice.pdf"} · ${formatInr(
+          readMetaNumber(meta, "totalInr") ?? 0,
+        )}`,
+        isAutoApplied: false,
+      };
 
     case "CASE_UPDATED":
       return {

@@ -82,7 +82,8 @@ export type CrmEventType =
   | "PROPOSAL_APPROVED"
   | "PROPOSAL_DISCARDED"
   | "MEMORY_REMEMBERED"
-  | "DOCUMENT_CHECKLIST_CHANGED";
+  | "DOCUMENT_CHECKLIST_CHANGED"
+  | "INVOICE_GENERATED";
 
 export interface CrmEventView {
   eventId: string;
@@ -416,6 +417,13 @@ export const crmClient = {
       body: { label, state },
       idToken,
     });
+  },
+
+  downloadCaseInvoice(
+    idToken: string,
+    caseId: string,
+  ): Promise<{ fileName: string; contentType: string; pdfBase64: string }> {
+    return apiFetch(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}/invoice`, { idToken });
   },
 
   setCustody(

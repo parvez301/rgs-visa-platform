@@ -135,6 +135,17 @@ function renderCasePage(
       };
       return Promise.resolve({ ok: true, status: 200, json: async () => updatedCase });
     }
+    if (requestMethod === "GET" && requestUrl.endsWith("/invoice")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          fileName: "invoice-RGS-1001.pdf",
+          contentType: "application/pdf",
+          pdfBase64: Buffer.from("%PDF-1.4 fake").toString("base64"),
+        }),
+      });
+    }
     // The case GET, ensure POST, and every axis PUT: answer with the full case.
     return Promise.resolve({ ok: true, status: 200, json: async () => caseRecord });
   });
@@ -230,6 +241,39 @@ describe("CasePage", () => {
     expect(lineItemRows[1]!.textContent).toContain("₹1,500");
 
     expect(screen.getByTestId("case-total").textContent).toContain("₹11,500");
+    expect(screen.getByRole("button", { name: "Download invoice" })).toBeEnabled();
+  });
+
+  it("downloads an invoice PDF when line items exist", async () => {
+    const { requestLog } = renderCasePage({
+      caseRecord: buildCase({
+        lineItems: [{ code: "VISA_FEE", label: "Visa fee", amountInr: 5000, quantity: 1, kind: "GOVT_FEE" }],
+        totalInr: 5000,
+      }),
+    });
+
+    // jsdom has no URL.createObjectURL -- stub enough for the download path.
+    const createObjectUrl = vi.fn(() => "blob:invoice");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, writable: true, value: createObjectUrl });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Download invoice" }));
+
+    await waitFor(() => {
+      expect(requestLog.some((request) => request.url.endsWith("/invoice"))).toBe(true);
+      expect(createObjectUrl).toHaveBeenCalled();
+    });
+  });
+
+  it("keeps Download invoice disabled when the case has no line items", async () => {
+    renderCasePage({ caseRecord: buildCase({ lineItems: [], totalInr: 0 }) });
+
+    expect(await screen.findByRole("button", { name: "Download invoice" })).toBeDisabled();
   });
 
   it("shows the entry type and remarks captured when the case was opened", async () => {

@@ -18,7 +18,8 @@ export type CrmEventType =
   // Recorded by rememberMemory when the memory cites a sourceCaseId (fix
   // round 1, Minor 5) -- same safety argument as PROPOSAL_APPROVED above.
   | "MEMORY_REMEMBERED"
-  | "DOCUMENT_CHECKLIST_CHANGED";
+  | "DOCUMENT_CHECKLIST_CHANGED"
+  | "INVOICE_GENERATED";
 
 export interface CrmEvent {
   eventId: string;

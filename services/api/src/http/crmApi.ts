@@ -18,6 +18,7 @@ import {
   ensureCaseDocumentChecklist,
   setCaseDocumentCheckState,
 } from "../domain/crm/caseDocumentChecklist";
+import { generateCaseInvoice } from "../domain/crm/caseInvoice";
 import { listCaseEvents } from "../domain/crm/crmEvents";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
 import {
@@ -340,6 +341,15 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
         requestContext.pathParams["caseId"]!,
         body.label,
         body.state,
+        requestContext.callerEmail,
+      );
+    })
+    .add("GET", "/api/v1/admin/crm/cases/{caseId}/invoice", async (requestContext) => {
+      requireAdmin(requestContext);
+      return generateCaseInvoice(
+        context,
+        tenantId,
+        requestContext.pathParams["caseId"]!,
         requestContext.callerEmail,
       );
     })

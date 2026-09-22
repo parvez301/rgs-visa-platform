@@ -1,17 +1,19 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { crm } from "@rgs/shared";
+import { useAuth } from "../../lib/auth";
 import { CrmLayout } from "../CrmLayout";
 import { AgentPanel } from "../agent/AgentPanel";
 import { AxisChip } from "../components/Chip";
 import { ConflictPrompt } from "../components/ConflictPrompt";
-import { CARD_CLASS, FIELD_LABEL_CLASS, INPUT_CLASS } from "../components/controls";
+import { CARD_CLASS, FIELD_LABEL_CLASS, INPUT_CLASS, SECONDARY_BUTTON_CLASS } from "../components/controls";
 import {
   describeApplicantEditValue,
   useApplicantEdit,
   type ApplicantEdit,
   type ApplicantEditAxis,
 } from "../api/applicantMutations";
+import { crmClient } from "../api/crmClient";
 import { useCase, useCaseEvents, usePartners } from "../api/hooks";
 import { describeLedgerEditValue, useLedgerEdit, type LedgerEditColumn } from "../api/mutations";
 import {
@@ -192,10 +194,21 @@ function readCaseColumnValue(caseRecord: crm.CrmCase, column: LedgerEditColumn):
   }
 }
 
-function CaseSection({ title, children }: { title: string; children: ReactNode }) {
+function CaseSection({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-base font-semibold text-ink">{title}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-base font-semibold text-ink">{title}</h2>
+        {action}
+      </div>
       {children}
     </section>
   );
@@ -566,8 +579,8 @@ function describeCourier(applicant: crm.CaseApplicant): string {
 }
 
 /**
- * R51: read-only. The admin client has no line-item method at all, so nothing
- * on this screen could write one even if it offered a control.
+ * R51: read-only table for lines already on the case. Invoice download sits
+ * beside the heading -- the admin still has no line-item write method here.
  *
  * `amountInr` is the UNIT price and `totalInr` is the case sum of
  * `amountInr × quantity` across items (`LineItemSchema`'s own comment). Both
@@ -575,8 +588,53 @@ function describeCourier(applicant: crm.CaseApplicant): string {
  * tells a desk agent a two-quantity line cost half what it did.
  */
 function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
+  const { idToken } = useAuth();
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
+  const [isDownloadingInvoice, setIsDownloadingInvoice] = useState(false);
+
+  async function downloadInvoice(): Promise<void> {
+    if (idToken === null) return;
+    setIsDownloadingInvoice(true);
+    setInvoiceError(null);
+    try {
+      const invoice = await crmClient.downloadCaseInvoice(idToken, caseRecord.caseId);
+      const binary = atob(invoice.pdfBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: invoice.contentType }));
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = invoice.fileName;
+      anchor.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      setInvoiceError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsDownloadingInvoice(false);
+    }
+  }
+
   return (
-    <CaseSection title="Line items">
+    <CaseSection
+      title="Line items"
+      action={
+        <button
+          type="button"
+          className={SECONDARY_BUTTON_CLASS}
+          disabled={caseRecord.lineItems.length === 0 || isDownloadingInvoice || idToken === null}
+          onClick={() => void downloadInvoice()}
+        >
+          {isDownloadingInvoice ? "Preparing invoice…" : "Download invoice"}
+        </button>
+      }
+    >
+      {invoiceError !== null && (
+        <p role="alert" className="mb-2 text-sm text-rose-800">
+          {invoiceError}
+        </p>
+      )}
       <div className={`${CARD_CLASS} overflow-x-auto`}>
         <table className="w-full border-collapse text-left text-sm">
           <thead>
