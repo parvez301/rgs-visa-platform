@@ -125,6 +125,10 @@ function CaseScreen({ caseId }: { caseId: string }) {
                 partnersQuery.data?.find((partner) => partner.partnerId === caseRecord.partnerId)
                   ?.canonicalName ?? caseRecord.partnerId
               }
+              partnerContactEmail={
+                partnersQuery.data?.find((partner) => partner.partnerId === caseRecord.partnerId)
+                  ?.contactEmail
+              }
               onCommitCaseEdit={(column, nextValue) =>
                 void commitCaseEdit({
                   caseId: caseRecord.caseId,
@@ -236,10 +240,12 @@ function CaseField({ fieldKey, label, children }: { fieldKey: string; label: str
 function CaseHeader({
   caseRecord,
   partnerName,
+  partnerContactEmail,
   onCommitCaseEdit,
 }: {
   caseRecord: crm.CrmCase;
   partnerName: string;
+  partnerContactEmail?: string;
   onCommitCaseEdit: (column: LedgerEditColumn, nextValue: string) => void;
 }) {
   const caseStatusOptions = allowedCaseStatusOptions(caseRecord.caseStatus);
@@ -256,7 +262,12 @@ function CaseHeader({
 
       <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
         <CaseField fieldKey="partner" label="Partner">
-          {partnerName}
+          <span className="flex flex-col gap-0.5">
+            <span>{partnerName}</span>
+            {partnerContactEmail !== undefined && partnerContactEmail !== "" && (
+              <span className="text-xs text-ink-soft">{partnerContactEmail}</span>
+            )}
+          </span>
         </CaseField>
         <CaseField fieldKey="destinationCountry" label="Country">
           {caseRecord.destinationCountry}

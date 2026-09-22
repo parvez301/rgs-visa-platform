@@ -19,7 +19,8 @@ export type CrmEventType =
   // round 1, Minor 5) -- same safety argument as PROPOSAL_APPROVED above.
   | "MEMORY_REMEMBERED"
   | "DOCUMENT_CHECKLIST_CHANGED"
-  | "INVOICE_GENERATED";
+  | "INVOICE_GENERATED"
+  | "PARTNER_NOTIFIED";
 
 export interface CrmEvent {
   eventId: string;

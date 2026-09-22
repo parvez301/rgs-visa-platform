@@ -83,7 +83,8 @@ export type CrmEventType =
   | "PROPOSAL_DISCARDED"
   | "MEMORY_REMEMBERED"
   | "DOCUMENT_CHECKLIST_CHANGED"
-  | "INVOICE_GENERATED";
+  | "INVOICE_GENERATED"
+  | "PARTNER_NOTIFIED";
 
 export interface CrmEventView {
   eventId: string;
@@ -197,6 +198,7 @@ export interface CreateCaseInput {
 
 export interface CreatePartnerInput {
   canonicalName: string;
+  contactEmail?: string;
 }
 
 export interface UpsertTravellerInput {

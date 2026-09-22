@@ -63,6 +63,7 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
   const [caseType, setCaseType] = useState<crm.CaseType>("VISA");
   const [partnerChoice, setPartnerChoice] = useState("");
   const [newPartnerName, setNewPartnerName] = useState("");
+  const [newPartnerEmail, setNewPartnerEmail] = useState("");
   const [destinationCountry, setDestinationCountry] = useState("");
   const [visaType, setVisaType] = useState<crm.VisaType | "">("");
   const [entryType, setEntryType] = useState<crm.EntryType | "">("");
@@ -84,7 +85,12 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
     async mutationFn(): Promise<crm.CrmCase> {
       const partnerId =
         partnerChoice === NEW_PARTNER_CHOICE
-          ? (await crmClient.createPartner(idToken!, { canonicalName: newPartnerName.trim() })).partnerId
+          ? (
+              await crmClient.createPartner(idToken!, {
+                canonicalName: newPartnerName.trim(),
+                ...(newPartnerEmail.trim() !== "" ? { contactEmail: newPartnerEmail.trim() } : {}),
+              })
+            ).partnerId
           : partnerChoice;
 
       const applicants: CreateCaseInput["applicants"] = [];
@@ -233,15 +239,27 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
             </select>
           </label>
           {partnerChoice === NEW_PARTNER_CHOICE && (
-            <label className="flex flex-col gap-1">
-              <span className={FIELD_LABEL_CLASS}>New partner name</span>
-              <input
-                value={newPartnerName}
-                onChange={(changeEvent) => setNewPartnerName(changeEvent.target.value)}
-                placeholder="Agency or walk-in name"
-                className={FIELD_CLASS}
-              />
-            </label>
+            <>
+              <label className="flex flex-col gap-1">
+                <span className={FIELD_LABEL_CLASS}>New partner name</span>
+                <input
+                  value={newPartnerName}
+                  onChange={(changeEvent) => setNewPartnerName(changeEvent.target.value)}
+                  placeholder="Agency or walk-in name"
+                  className={FIELD_CLASS}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className={FIELD_LABEL_CLASS}>Partner email (optional)</span>
+                <input
+                  type="email"
+                  value={newPartnerEmail}
+                  onChange={(changeEvent) => setNewPartnerEmail(changeEvent.target.value)}
+                  placeholder="For status updates"
+                  className={FIELD_CLASS}
+                />
+              </label>
+            </>
           )}
 
           <div className="grid gap-4 sm:grid-cols-2">

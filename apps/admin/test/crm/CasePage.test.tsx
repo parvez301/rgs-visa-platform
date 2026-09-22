@@ -109,7 +109,13 @@ function renderCasePage(
         ok: true,
         status: 200,
         json: async () => ({
-          partners: [{ partnerId: "partner_1", canonicalName: "Skyline Travels" }],
+          partners: [
+            {
+              partnerId: "partner_1",
+              canonicalName: "Skyline Travels",
+              contactEmail: "desk@skyline.test",
+            },
+          ],
           unreadablePartnerIds: [],
         }),
       });
@@ -201,6 +207,7 @@ describe("CasePage", () => {
 
     // Shared fields: present once each, at the top, never on an applicant row.
     expect(screen.getAllByText("Skyline Travels")).toHaveLength(1);
+    expect(screen.getByText("desk@skyline.test")).toBeInTheDocument();
     expect(screen.getAllByText("Visa · Tourist")).toHaveLength(1);
     expect(screen.getAllByText("2026-03-01")).toHaveLength(1);
 

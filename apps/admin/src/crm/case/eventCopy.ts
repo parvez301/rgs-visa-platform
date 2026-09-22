@@ -45,6 +45,7 @@ export interface CrmEventCopy {
  * | APPLICANT_OUTCOME_CHANGED | applicantRef, fromOutcome, toOutcome                  | crm/cases.ts:321          |
  * | DOCUMENT_CHECKLIST_CHANGED| documentLabel, fromState, toState OR action=stamped | caseDocumentChecklist.ts |
  * | INVOICE_GENERATED         | fileName, totalInr, lineItemCount                   | caseInvoice.ts           |
+ * | PARTNER_NOTIFIED          | channel, toAddress, fromStatus, toStatus            | partnerStatusNotify.ts   |
  * | LINE_ITEM_ADDED           | lineItemCode, quantity, amountInr (UNIT), lineTotalInr | crm/lineItems.ts:79       |
  * | MEMORY_REMEMBERED         | scope, memoryKey, createdBy                           | crm/memory.ts:179         |
  * | PROPOSAL_APPROVED         | proposalId, toolName, edited, changed, autoApplied     | agent/approval.ts:546     |
@@ -257,6 +258,18 @@ export function describeCrmEvent(event: CrmEventView): CrmEventCopy {
         title: `Invoice downloaded by ${actorEmail}`,
         detail: `${readMetaString(meta, "fileName") ?? "invoice.pdf"} · ${formatInr(
           readMetaNumber(meta, "totalInr") ?? 0,
+        )}`,
+        isAutoApplied: false,
+      };
+
+    case "PARTNER_NOTIFIED":
+      return {
+        title: `Partner notified by ${actorEmail}`,
+        detail: `Email to ${readMetaString(meta, "toAddress") ?? "unknown"} · ${describeTransition(
+          meta,
+          "fromStatus",
+          "toStatus",
+          CASE_STATUS_LABELS,
         )}`,
         isAutoApplied: false,
       };
