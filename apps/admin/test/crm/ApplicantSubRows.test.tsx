@@ -62,6 +62,7 @@ function buildCase(applicants: crm.CaseApplicant[]): crm.CrmCase {
     receivedDate: "2026-03-04",
     lineItems: [],
     totalInr: 12_000,
+    documentChecklist: [],
     applicants,
     watchdogOverrides: {},
     mutedRules: [],

@@ -41,6 +41,7 @@ interface RequestLogEntry {
 }
 
 function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
+  const { documentChecklist: documentChecklistOverride, ...restOverrides } = overrides;
   return {
     tenantId: "tenant_1",
     caseId: "case_1",
@@ -77,7 +78,8 @@ function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
     mutedRules: [],
     createdAt: "2026-03-01T09:00:00.000Z",
     updatedAt: "2026-03-04T10:00:00.000Z",
-    ...overrides,
+    ...restOverrides,
+    documentChecklist: documentChecklistOverride ?? [],
   };
 }
 
@@ -95,10 +97,11 @@ function renderCasePage(
   const fetchMock = vi.fn((url: string, init: RequestInit = {}) => {
     const requestMethod = init.method ?? "GET";
     const requestUrl = String(url);
+    const requestBody = init.body === undefined ? undefined : JSON.parse(String(init.body));
     requestLog.push({
       method: requestMethod,
       url: requestUrl,
-      body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
+      body: requestBody,
     });
 
     if (requestUrl.endsWith("/partners")) {
@@ -121,7 +124,18 @@ function renderCasePage(
         json: async () => ({ code: "INTERNAL", message: "The case could not be read from storage" }),
       });
     }
-    // The case GET, and every axis PUT: both answer with the full case.
+    if (requestMethod === "PUT" && requestUrl.includes("/document-checklist") && requestBody !== undefined) {
+      const updatedCase: crm.CrmCase = {
+        ...caseRecord,
+        documentChecklist: caseRecord.documentChecklist.map((item) =>
+          item.label === requestBody.label
+            ? { ...item, state: requestBody.state as crm.DocumentCheckState }
+            : item,
+        ),
+      };
+      return Promise.resolve({ ok: true, status: 200, json: async () => updatedCase });
+    }
+    // The case GET, ensure POST, and every axis PUT: answer with the full case.
     return Promise.resolve({ ok: true, status: 200, json: async () => caseRecord });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -225,6 +239,33 @@ describe("CasePage", () => {
 
     expect(await screen.findByTestId("case-field-entryType")).toHaveTextContent("Multiple entry");
     expect(screen.getByTestId("case-field-remarks")).toHaveTextContent("Passport copy is faint");
+  });
+
+  it("shows the document checklist and writes a mark change for one document", async () => {
+    const { requestLog } = renderCasePage({
+      caseRecord: buildCase({
+        documentChecklist: [
+          { label: "Passport", state: "MISSING" },
+          { label: "Photo", state: "RECEIVED" },
+        ],
+      }),
+    });
+
+    expect(await screen.findByTestId("document-checklist")).toBeInTheDocument();
+    expect(screen.getByLabelText("Passport status")).toHaveValue("MISSING");
+    expect(screen.getByLabelText("Photo status")).toHaveValue("RECEIVED");
+
+    fireEvent.change(screen.getByLabelText("Passport status"), { target: { value: "VERIFIED" } });
+
+    await waitFor(() => {
+      const checklistWrite = requestLog.find(
+        (request) => request.method === "PUT" && request.url.includes("/document-checklist"),
+      );
+      expect(checklistWrite).toMatchObject({
+        method: "PUT",
+        body: { label: "Passport", state: "VERIFIED" },
+      });
+    });
   });
 
   it("edits one applicant's custody without touching its sibling", async () => {

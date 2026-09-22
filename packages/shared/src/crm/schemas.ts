@@ -6,6 +6,7 @@ import {
   CASE_TYPES,
   COURIER_MODES,
   CUSTODY_STATUSES,
+  DOCUMENT_CHECK_STATES,
   ENTRY_TYPES,
   LINE_ITEM_KINDS,
   PARTNER_TYPES,
@@ -93,6 +94,12 @@ export const CaseApplicantSchema = z.object({
 });
 export type CaseApplicant = z.infer<typeof CaseApplicantSchema>;
 
+export const CaseDocumentCheckSchema = z.object({
+  label: z.string().trim().min(1),
+  state: z.enum(DOCUMENT_CHECK_STATES).default("MISSING"),
+});
+export type CaseDocumentCheck = z.infer<typeof CaseDocumentCheckSchema>;
+
 export const CrmCaseSchema = z
   .object({
     tenantId,
@@ -115,6 +122,12 @@ export const CrmCaseSchema = z
     remarks: z.string().trim().min(1).max(2000).optional(),
     lineItems: z.array(LineItemSchema).default([]),
     totalInr: z.number().int().nonnegative().default(0),
+    /**
+     * Destination document list stamped onto the case at open (or later via
+     * ensure), each mark Missing / Received / Verified. Empty when the
+     * country has no template on file.
+     */
+    documentChecklist: z.array(CaseDocumentCheckSchema).default([]),
     applicants: z.array(CaseApplicantSchema).min(1, "a case needs at least one applicant"),
     watchdogOverrides: z.record(z.enum(WATCHDOG_RULE_IDS), z.number().int().positive()).default({}),
     mutedRules: z.array(z.enum(WATCHDOG_RULE_IDS)).default([]),

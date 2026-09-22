@@ -45,6 +45,12 @@ export const BILLING_LABELS: Record<crm.BillingStatus, string> = {
   UNKNOWN: "Unknown",
 };
 
+export const DOCUMENT_CHECK_STATE_LABELS: Record<crm.DocumentCheckState, string> = {
+  MISSING: "Missing",
+  RECEIVED: "Received",
+  VERIFIED: "Verified",
+};
+
 export const CASE_TYPE_LABELS: Record<crm.CaseType, string> = {
   VISA: "Visa",
   ATTESTATION: "Attestation",

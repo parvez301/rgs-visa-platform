@@ -66,13 +66,24 @@ export async function getCountryChecklist(
   tenantId: string,
   countryCode: string,
 ): Promise<CountryChecklist> {
+  const checklist = await findCountryChecklist(context, tenantId, countryCode);
+  if (checklist === undefined) {
+    throw notFound(`No document checklist is on file for ${countryCode}`);
+  }
+  return checklist;
+}
+
+/** Soft read used when stamping a case -- missing country list is not an error. */
+export async function findCountryChecklist(
+  context: AppContext,
+  tenantId: string,
+  countryCode: string,
+): Promise<CountryChecklist | undefined> {
   const storedItem = await context.table.get(
     countryChecklistPartitionKey(tenantId, countryCode),
     META_SORT_KEY,
   );
-  if (storedItem === undefined) {
-    throw notFound(`No document checklist is on file for ${countryCode}`);
-  }
+  if (storedItem === undefined) return undefined;
   // Raw, a ZodError escapes router.ts's ApiError-only mapping as a 500 the
   // moment a checklist row is hand-repaired or half-written -- the same
   // failure readCase and parseStoredPartner both guard against.

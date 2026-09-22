@@ -15,6 +15,8 @@ import {
 } from "./keys";
 import { getPartnerOrThrow } from "./partners";
 import { getTravellerOrThrow } from "./travellers";
+import { findCountryChecklist } from "./countryChecklist";
+import { stampDocumentChecklistFromCountry } from "./caseDocumentChecklist";
 
 export interface CreateCaseApplicantInput {
   applicantRef: string;
@@ -52,6 +54,11 @@ export async function createCase(
   }
 
   const nowIso = context.now().toISOString();
+  const countryChecklist = await findCountryChecklist(context, tenantId, input.destinationCountry);
+  const documentChecklist =
+    countryChecklist === undefined
+      ? []
+      : stampDocumentChecklistFromCountry(countryChecklist.requiredDocuments);
   let crmCase: crm.CrmCase;
   try {
     crmCase = crm.CrmCaseSchema.parse({
@@ -73,6 +80,7 @@ export async function createCase(
       ...(input.remarks !== undefined ? { remarks: input.remarks } : {}),
       lineItems: [],
       totalInr: 0,
+      documentChecklist,
       watchdogOverrides: {},
       mutedRules: [],
       applicants: input.applicants.map((applicant) => ({

@@ -92,6 +92,10 @@ export const COURIER_MODES = [
 ] as const;
 export type CourierMode = (typeof COURIER_MODES)[number];
 
+/** Per-case document checklist marks (stamped from the country template). */
+export const DOCUMENT_CHECK_STATES = ["MISSING", "RECEIVED", "VERIFIED"] as const;
+export type DocumentCheckState = (typeof DOCUMENT_CHECK_STATES)[number];
+
 /**
  * "UNRECORDED" is not a kind of business relationship -- it is the absence of
  * one on file, and it exists because the migration has 207 cases whose

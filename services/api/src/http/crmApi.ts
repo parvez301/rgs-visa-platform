@@ -14,6 +14,10 @@ import {
   updateCaseDetails,
   type UpdateCaseDetailsInput,
 } from "../domain/crm/cases";
+import {
+  ensureCaseDocumentChecklist,
+  setCaseDocumentCheckState,
+} from "../domain/crm/caseDocumentChecklist";
 import { listCaseEvents } from "../domain/crm/crmEvents";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
 import {
@@ -105,6 +109,10 @@ const CaseStatusBody = z.object({ toStatus: z.enum(crm.CASE_STATUSES) });
 const BillingStatusBody = z.object({ toBillingStatus: z.enum(crm.BILLING_STATUSES) });
 const CustodyBody = z.object({ toCustody: z.enum(crm.CUSTODY_STATUSES) });
 const OutcomeBody = z.object({ toOutcome: z.enum(crm.APPLICANT_OUTCOMES) });
+const DocumentCheckBody = z.object({
+  label: z.string().trim().min(1),
+  state: z.enum(crm.DOCUMENT_CHECK_STATES),
+});
 
 /**
  * Resolving means closing an open item, so OPEN is not among the destinations
@@ -311,6 +319,27 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
         tenantId,
         requestContext.pathParams["caseId"]!,
         body.toBillingStatus,
+        requestContext.callerEmail,
+      );
+    })
+    .add("POST", "/api/v1/admin/crm/cases/{caseId}/document-checklist/ensure", async (requestContext) => {
+      requireAdmin(requestContext);
+      return ensureCaseDocumentChecklist(
+        context,
+        tenantId,
+        requestContext.pathParams["caseId"]!,
+        requestContext.callerEmail,
+      );
+    })
+    .add("PUT", "/api/v1/admin/crm/cases/{caseId}/document-checklist", async (requestContext) => {
+      requireAdmin(requestContext);
+      const body = parseBody(DocumentCheckBody, requestContext.body);
+      return setCaseDocumentCheckState(
+        context,
+        tenantId,
+        requestContext.pathParams["caseId"]!,
+        body.label,
+        body.state,
         requestContext.callerEmail,
       );
     })

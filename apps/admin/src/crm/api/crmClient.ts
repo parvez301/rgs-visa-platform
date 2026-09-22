@@ -81,7 +81,8 @@ export type CrmEventType =
   | "LINE_ITEM_ADDED"
   | "PROPOSAL_APPROVED"
   | "PROPOSAL_DISCARDED"
-  | "MEMORY_REMEMBERED";
+  | "MEMORY_REMEMBERED"
+  | "DOCUMENT_CHECKLIST_CHANGED";
 
 export interface CrmEventView {
   eventId: string;
@@ -393,6 +394,26 @@ export const crmClient = {
     return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}/billing`, {
       method: "PUT",
       body: { toBillingStatus },
+      idToken,
+    });
+  },
+
+  ensureDocumentChecklist(idToken: string, caseId: string): Promise<crm.CrmCase> {
+    return apiFetch<crm.CrmCase>(
+      `${CRM_BASE}/cases/${encodeURIComponent(caseId)}/document-checklist/ensure`,
+      { method: "POST", idToken },
+    );
+  },
+
+  setDocumentCheckState(
+    idToken: string,
+    caseId: string,
+    label: string,
+    state: crm.DocumentCheckState,
+  ): Promise<crm.CrmCase> {
+    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}/document-checklist`, {
+      method: "PUT",
+      body: { label, state },
       idToken,
     });
   },

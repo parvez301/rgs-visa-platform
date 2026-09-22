@@ -34,6 +34,7 @@ import {
   hasNoLegalMove,
 } from "../transitions";
 import { Timeline } from "./Timeline";
+import { DocumentChecklistSection } from "./DocumentChecklistSection";
 
 const NOT_RECORDED = "—";
 
@@ -136,6 +137,8 @@ function CaseScreen({ caseId }: { caseId: string }) {
               caseRecord={caseRecord}
               onCommitApplicantEdit={(edit) => void commitApplicantEdit(edit)}
             />
+
+            <DocumentChecklistSection caseRecord={caseRecord} />
 
             <LineItemsTable caseRecord={caseRecord} />
 

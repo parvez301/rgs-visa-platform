@@ -5,6 +5,7 @@ import {
   CASE_STATUS_LABELS,
   CASE_TYPE_LABELS,
   CUSTODY_LABELS,
+  DOCUMENT_CHECK_STATE_LABELS,
   MEMORY_AUTHOR_LABELS,
   OUTCOME_LABELS,
   describeEnumValue,
@@ -42,7 +43,7 @@ export interface CrmEventCopy {
  * | CASE_STATUS_CHANGED       | fromStatus, toStatus                                  | crm/cases.ts:234, :397    |
  * | CUSTODY_CHANGED           | applicantRef, fromCustody, toCustody                  | crm/cases.ts:273          |
  * | APPLICANT_OUTCOME_CHANGED | applicantRef, fromOutcome, toOutcome                  | crm/cases.ts:321          |
- * | BILLING_CHANGED           | fromBillingStatus, toBillingStatus                    | crm/cases.ts:356          |
+ * | DOCUMENT_CHECKLIST_CHANGED| documentLabel, fromState, toState OR action=stamped | caseDocumentChecklist.ts |
  * | LINE_ITEM_ADDED           | lineItemCode, quantity, amountInr (UNIT), lineTotalInr | crm/lineItems.ts:79       |
  * | MEMORY_REMEMBERED         | scope, memoryKey, createdBy                           | crm/memory.ts:179         |
  * | PROPOSAL_APPROVED         | proposalId, toolName, edited, changed, autoApplied     | agent/approval.ts:546     |
@@ -224,6 +225,31 @@ export function describeCrmEvent(event: CrmEventView): CrmEventCopy {
         detail: describeTransition(meta, "fromBillingStatus", "toBillingStatus", BILLING_LABELS),
         isAutoApplied: false,
       };
+
+    case "DOCUMENT_CHECKLIST_CHANGED": {
+      const action = readMetaString(meta, "action");
+      if (action === "stamped") {
+        const documentCount = readMetaNumber(meta, "documentCount");
+        return {
+          title: `Document checklist loaded by ${actorEmail}`,
+          detail:
+            documentCount === undefined
+              ? "Country checklist stamped onto the case"
+              : `${documentCount} document${documentCount === 1 ? "" : "s"} stamped from the country list`,
+          isAutoApplied: false,
+        };
+      }
+      return {
+        title: `Document mark changed by ${actorEmail}`,
+        detail: `${readMetaString(meta, "documentLabel") ?? "Document"} · ${describeTransition(
+          meta,
+          "fromState",
+          "toState",
+          DOCUMENT_CHECK_STATE_LABELS,
+        )}`,
+        isAutoApplied: false,
+      };
+    }
 
     case "CASE_UPDATED":
       return {
