@@ -48,7 +48,12 @@ describe("crmClient.loadLedger", () => {
       { rows: [{ ...oneRow, caseId: "case_2" }], unreadableCaseIds: ["case_bad"], appliedQuery: { statuses: [], limit: 500 } },
     ]);
 
-    const load = await crmClient.loadLedger("token-1", {});
+    const pageSnapshots: string[][] = [];
+    const load = await crmClient.loadLedger("token-1", {}, {
+      onPage(partialLoad) {
+        pageSnapshots.push(partialLoad.rows.map((row) => row.caseId));
+      },
+    });
 
     expect(load.rows.map((row) => row.caseId)).toEqual(["case_1", "case_2"]);
     expect(load.unreadableCaseIds).toEqual(["case_bad"]);
@@ -56,6 +61,7 @@ describe("crmClient.loadLedger", () => {
     expect(recorded).toHaveLength(2);
     expect(recorded[1]!.url).toContain("cursor=cursor-2");
     expect(recorded[0]!.authorization).toBe("Bearer token-1");
+    expect(pageSnapshots).toEqual([["case_1"], ["case_1", "case_2"]]);
   });
 
   // F4: the `rows` test above proves accumulation because case_1 only exists

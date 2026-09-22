@@ -32,15 +32,16 @@ const mockedUsePartners = vi.mocked(usePartners);
  * than invented here, so both files lie about the union in exactly one way.
  */
 function fakeQueryResult<QueryData>(
-  overrides: Partial<UseQueryResult<QueryData, Error>>,
-): UseQueryResult<QueryData, Error> {
+  overrides: Partial<UseQueryResult<QueryData, Error>> & { isFetchingMore?: boolean },
+): UseQueryResult<QueryData, Error> & { isFetchingMore: boolean } {
   return {
     data: undefined,
     isLoading: false,
     isError: false,
     error: null,
+    isFetchingMore: false,
     ...overrides,
-  } as unknown as UseQueryResult<QueryData, Error>;
+  } as unknown as UseQueryResult<QueryData, Error> & { isFetchingMore: boolean };
 }
 
 /**

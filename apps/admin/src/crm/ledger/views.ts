@@ -52,6 +52,32 @@ export function liveWorkViewId(): string {
   return LIVE_WORK_VIEW_ID;
 }
 
+export function awaitingPaymentViewId(): string {
+  return AWAITING_PAYMENT_VIEW_ID;
+}
+
+export function unbilledViewId(): string {
+  return UNBILLED_VIEW_ID;
+}
+
+export function everythingViewId(): string {
+  return EVERYTHING_VIEW_ID;
+}
+
+/** Built-ins that belong in the Today chip group on the Ledger. */
+export function isTodayLedgerViewId(viewId: string): boolean {
+  return (
+    viewId === LIVE_WORK_VIEW_ID ||
+    viewId === COLLECT_TODAY_VIEW_ID ||
+    viewId === APPOINTMENTS_TODAY_VIEW_ID
+  );
+}
+
+/** Built-ins that belong in the Billing chip group on the Ledger. */
+export function isBillingLedgerViewId(viewId: string): boolean {
+  return viewId === AWAITING_PAYMENT_VIEW_ID || viewId === UNBILLED_VIEW_ID;
+}
+
 /**
  * The views a desk agent lands on before anyone has saved anything
  * (brief, "Three built-in views ship, and cannot be deleted" -- Unbilled and

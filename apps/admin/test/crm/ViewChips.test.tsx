@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { crm } from "@rgs/shared";
 import { ViewChips } from "../../src/crm/ledger/ViewChips";
@@ -17,14 +18,20 @@ const ACTIVE_SORT: LedgerSort = { column: "receivedDate", direction: "desc" };
 
 function renderViewChips() {
   const onApplyView = vi.fn();
-  const result = render(
-    <ViewChips
-      userEmail="ops@rgs.test"
-      activeFilters={ACTIVE_FILTERS}
-      activeSort={ACTIVE_SORT}
-      onApplyView={onApplyView}
-    />,
-  );
+  function Harness() {
+    const [activeViewId, setActiveViewId] = useState<string | undefined>(undefined);
+    return (
+      <ViewChips
+        userEmail="ops@rgs.test"
+        activeFilters={ACTIVE_FILTERS}
+        activeSort={ACTIVE_SORT}
+        onApplyView={onApplyView}
+        activeViewId={activeViewId}
+        onActiveViewIdChange={setActiveViewId}
+      />
+    );
+  }
+  const result = render(<Harness />);
   return { ...result, onApplyView };
 }
 
@@ -54,6 +61,8 @@ describe("ViewChips", () => {
       "Unbilled",
       "Everything",
     ]);
+    expect(screen.getByText("Today")).toBeInTheDocument();
+    expect(screen.getByText("Billing")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Delete the/ })).not.toBeInTheDocument();
   });
 

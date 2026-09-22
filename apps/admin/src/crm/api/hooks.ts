@@ -1,7 +1,7 @@
 import { crm } from "@rgs/shared";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../../lib/auth";
-import { crmClient } from "./crmClient";
+import { crmClient, type LedgerLoad } from "./crmClient";
 
 /**
  * Query keys are namespaced under "crm" so nothing here can collide with the
@@ -28,17 +28,45 @@ export const crmQueryKeys = {
     ["crm", "memories", scope, partnerId ?? ""] as const,
 };
 
+/**
+ * Streams ledger pages into the query cache as they arrive so the first ~500
+ * rows can paint while later pages keep loading. `isFetching` stays true
+ * until the walk finishes; callers treat `data !== undefined` as "ready to
+ * show rows" rather than waiting on `isLoading` alone.
+ */
 export function useLedgerRows(statuses: crm.CaseStatus[], partnerId?: string) {
   const { idToken } = useAuth();
-  return useQuery({
-    queryKey: crmQueryKeys.ledger(statuses, partnerId),
-    queryFn: () => crmClient.loadLedger(idToken!, { statuses, ...(partnerId ? { partnerId } : {}) }),
+  const queryClient = useQueryClient();
+  const queryKey = crmQueryKeys.ledger(statuses, partnerId);
+
+  const query = useQuery({
+    queryKey,
+    queryFn: async (): Promise<LedgerLoad> => {
+      let latestLoad: LedgerLoad | undefined;
+      const finalLoad = await crmClient.loadLedger(
+        idToken!,
+        { statuses, ...(partnerId ? { partnerId } : {}) },
+        {
+          onPage(partialLoad) {
+            latestLoad = partialLoad;
+            queryClient.setQueryData(queryKey, partialLoad);
+          },
+        },
+      );
+      return latestLoad ?? finalLoad;
+    },
     enabled: idToken !== null,
     // The ledger is a 1.4 MB read; the app's 30s default would re-fetch it
     // every time a desk agent tabs back. Five minutes, and every mutation
     // invalidates it explicitly, so staleness is never how a change appears.
     staleTime: 5 * 60_000,
   });
+
+  return {
+    ...query,
+    /** True after the first page landed while later pages are still in flight. */
+    isFetchingMore: query.isFetching && query.data !== undefined,
+  };
 }
 
 export function useCase(caseId: string) {

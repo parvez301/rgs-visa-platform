@@ -19,6 +19,7 @@ import { CASE_STATUS_LABELS, REVIEW_REASON_LABELS } from "../labels";
 import { NewCaseDrawer } from "../newCase/NewCaseDrawer";
 import { applyFilters, applySort, localTodayIso, type LedgerFilters, type LedgerSort } from "./filters";
 import { BulkActionsBar } from "./BulkActionsBar";
+import { LedgerSkeleton } from "./LedgerSkeleton";
 import { LedgerTable } from "./LedgerTable";
 import { countOpsDashboard } from "./opsDashboard";
 import {
@@ -29,7 +30,7 @@ import {
 } from "./views";
 import { ViewChips } from "./ViewChips";
 
-const DEFAULT_LEDGER_SORT: LedgerSort = { column: "receivedDate", direction: "desc" };
+const DEFAULT_LIVE_WORK = findBuiltInLedgerView(liveWorkViewId())!;
 
 /**
  * The client-only slice of `LedgerFilters` -- everything except `statuses`
@@ -39,8 +40,6 @@ const DEFAULT_LEDGER_SORT: LedgerSort = { column: "receivedDate", direction: "de
  * land without touching that existing state or the tests pinned to it.
  */
 type ClientOnlyLedgerFilters = Omit<LedgerFilters, "statuses" | "partnerId">;
-
-const NO_CLIENT_FILTERS: ClientOnlyLedgerFilters = {};
 
 /**
  * Exactly one of these two filters is ever in force server-side (spec §2.1,
@@ -66,25 +65,32 @@ export function rowMatchesIssueFilter(
   return openReasons.includes(issueFilter);
 }
 
+function clientFiltersFromView(viewFilters: LedgerFilters): ClientOnlyLedgerFilters {
+  return {
+    destinationCountry: viewFilters.destinationCountry,
+    caseType: viewFilters.caseType,
+    search: viewFilters.search,
+    billingStatuses: viewFilters.billingStatuses,
+    appointmentDateOn: viewFilters.appointmentDateOn,
+    expectedCollectionDateOn: viewFilters.expectedCollectionDateOn,
+  };
+}
+
 export function LedgerPage() {
   const { email: signedInUserEmail } = useAuth();
-  const [selectedCaseStatuses, setSelectedCaseStatuses] = useState<crm.CaseStatus[]>([]);
+  // Default Live work: smaller first fetch and matches the daily work queue.
+  const [selectedCaseStatuses, setSelectedCaseStatuses] = useState<crm.CaseStatus[]>([
+    ...DEFAULT_LIVE_WORK.filters.statuses,
+  ]);
   const [selectedPartnerId, setSelectedPartnerId] = useState<string | undefined>(undefined);
-  const [clientLedgerFilters, setClientLedgerFilters] = useState<ClientOnlyLedgerFilters>(NO_CLIENT_FILTERS);
-  const [ledgerSort, setLedgerSort] = useState<LedgerSort>(DEFAULT_LEDGER_SORT);
+  const [clientLedgerFilters, setClientLedgerFilters] = useState<ClientOnlyLedgerFilters>(() =>
+    clientFiltersFromView(DEFAULT_LIVE_WORK.filters),
+  );
+  const [ledgerSort, setLedgerSort] = useState<LedgerSort>(DEFAULT_LIVE_WORK.sort);
+  const [activeViewId, setActiveViewId] = useState<string | undefined>(liveWorkViewId());
+  const [isStatusMenuOpen, setIsStatusMenuOpen] = useState(false);
   const [isNewCaseDrawerOpen, setIsNewCaseDrawerOpen] = useState(false);
-  /**
-   * Client-side, over the rows already loaded: the summary knows every open
-   * reason per REF, so no second server round-trip is needed to ask "show me
-   * every case whose partner the import could not place".
-   */
   const [selectedIssueFilter, setSelectedIssueFilter] = useState<IssueFilter>(ALL_CASES);
-  /**
-   * R62: the grid's selection, lifted here so `CrmLayout`'s right column can
-   * hand it to the agent. `useCallback` with `[]` deps keeps the identity
-   * stable, so `LedgerTable`'s reporting effect fires on a real selection
-   * change rather than on every render of this page.
-   */
   const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
   const [selectionClearToken, setSelectionClearToken] = useState(0);
   const reportSelectedCaseIds = useCallback((nextSelectedCaseIds: string[]) => {
@@ -103,22 +109,6 @@ export function LedgerPage() {
 
   const ledgerRowsQuery = useLedgerRows(selectedCaseStatuses, selectedPartnerId);
   const partnersQuery = usePartners();
-  /**
-   * Spec §7's review markers, read ONCE for the whole screen.
-   *
-   * The import left 3,958 open review items behind, and the summary route
-   * exists precisely so that marking the rows carrying them costs one
-   * projected read rather than one request per case. Indexed by `caseRef`
-   * here, because that is the only identifier the summary carries -- it is
-   * built from the review items themselves, which name a workbook ref and
-   * never a `caseId`.
-   *
-   * A failed or still-loading summary yields an empty map and therefore no
-   * markers, which is the honest degradation: a Ledger with no marks reads as
-   * "nothing flagged", and the alternative (a banner about a review summary on
-   * a screen whose job is cases) would put import plumbing in front of every
-   * desk agent every time this one read is slow.
-   */
   const reviewSummaryQuery = useReviewSummary();
   const reviewEntriesByCaseRef = useMemo(() => {
     const entriesByCaseRef = new Map<string, OpenReviewSummaryEntry>();
@@ -138,6 +128,7 @@ export function LedgerPage() {
 
   function toggleCaseStatus(caseStatus: crm.CaseStatus) {
     setSelectedPartnerId(undefined);
+    setActiveViewId(undefined);
     setSelectedCaseStatuses((currentCaseStatuses) =>
       currentCaseStatuses.includes(caseStatus)
         ? currentCaseStatuses.filter((existingCaseStatus) => existingCaseStatus !== caseStatus)
@@ -147,23 +138,14 @@ export function LedgerPage() {
 
   function selectPartner(partnerId: string | undefined) {
     setSelectedCaseStatuses([]);
+    setActiveViewId(undefined);
     setSelectedPartnerId(partnerId);
   }
 
-  /** A saved (or built-in) view's full `LedgerFilters` split back into the
-   * server-side state this page already owns and the client-only state
-   * introduced in Task 13. */
   function applyLedgerView(viewFilters: LedgerFilters, viewSort: LedgerSort) {
     setSelectedCaseStatuses(viewFilters.statuses);
     setSelectedPartnerId(viewFilters.partnerId);
-    setClientLedgerFilters({
-      destinationCountry: viewFilters.destinationCountry,
-      caseType: viewFilters.caseType,
-      search: viewFilters.search,
-      billingStatuses: viewFilters.billingStatuses,
-      appointmentDateOn: viewFilters.appointmentDateOn,
-      expectedCollectionDateOn: viewFilters.expectedCollectionDateOn,
-    });
+    setClientLedgerFilters(clientFiltersFromView(viewFilters));
     setLedgerSort(viewSort);
   }
 
@@ -175,15 +157,6 @@ export function LedgerPage() {
 
   const ledgerLoad = ledgerRowsQuery.data;
   const unreadableCaseCount = ledgerLoad?.unreadableCaseIds.length ?? 0;
-  /**
-   * D40 / finding #5: the review summary names the items it could not parse,
-   * and nothing read that list -- so a case whose review items are unreadable
-   * rendered as a CLEAN row, which inverts the whole argument for the markers
-   * (spec §7: a dirty row must not look clean). It joins the partial-ledger
-   * banner rather than getting a banner of its own: that banner is already a
-   * `role="status"` stating several independent facts about how complete this
-   * screen is, and this is one more.
-   */
   const unreadableReviewItemCount = reviewSummaryQuery.data?.unreadableReviewItemIds.length ?? 0;
   const isLedgerPartial =
     Boolean(ledgerLoad?.truncated) || unreadableCaseCount > 0 || unreadableReviewItemCount > 0;
@@ -197,7 +170,6 @@ export function LedgerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ledgerLoad?.rows, clientLedgerFilters, ledgerSort, partnerNamesById, reviewEntriesByCaseRef, selectedIssueFilter]);
 
-  /** How many LOADED cases each issue option would show; drawn into the option labels. */
   const issueCaseCounts = useMemo(() => {
     const countByReason = new Map<crm.ReviewReason, number>();
     let withIssueCount = 0;
@@ -218,21 +190,41 @@ export function LedgerPage() {
     [ledgerLoad?.rows, todayIso],
   );
   const openReviewCaseCount = reviewSummaryQuery.data?.entries.length ?? 0;
+  const isFetchingMore = ledgerRowsQuery.isFetchingMore === true;
 
   function applyBuiltInViewById(viewId: string) {
     const builtInView = findBuiltInLedgerView(viewId);
     if (builtInView === undefined) return;
+    setActiveViewId(viewId);
     applyLedgerView(builtInView.filters, builtInView.sort);
   }
 
+  const statusSummaryLabel =
+    selectedCaseStatuses.length === 0
+      ? "All statuses"
+      : selectedCaseStatuses.length === crm.CASE_STATUSES.length
+        ? "All statuses"
+        : selectedCaseStatuses.length <= 2
+          ? selectedCaseStatuses.map((status) => CASE_STATUS_LABELS[status]).join(", ")
+          : `${selectedCaseStatuses.length} statuses`;
+
+  const hasFirstPage = ledgerLoad !== undefined;
+  const showSkeleton = !hasFirstPage && (ledgerRowsQuery.isLoading || ledgerRowsQuery.isFetching);
+  const showError = ledgerRowsQuery.isError && !hasFirstPage;
+
   return (
     <CrmLayout agentPanel={<AgentPanel selectedCaseIds={selectedCaseIds} />}>
-      <div className="flex h-full flex-col gap-4">
+      <div className="flex h-full flex-col gap-3">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold">Ledger</h1>
             <p className="mt-0.5 text-sm text-ink-soft">
-              {describeLedgerCount(visibleLedgerRows.length, ledgerLoad?.rows.length, ledgerRowsQuery.isLoading)}
+              {describeLedgerCount(
+                visibleLedgerRows.length,
+                ledgerLoad?.rows.length,
+                !hasFirstPage,
+                isFetchingMore,
+              )}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -246,33 +238,46 @@ export function LedgerPage() {
         </div>
 
         <div
-          className={`${CARD_CLASS} flex flex-wrap items-center gap-2 px-4 py-2.5`}
+          className="flex flex-wrap items-baseline gap-x-5 gap-y-1 border-b border-line pb-2 text-sm"
           aria-label="Today's work"
         >
-          <span className={`${FIELD_LABEL_CLASS} mr-1`}>Today</span>
+          <span className="text-xs font-medium uppercase tracking-wide text-ink-soft">Today</span>
           <button
             type="button"
             onClick={() => applyBuiltInViewById(collectTodayViewId())}
-            className={PILL_OFF_CLASS}
+            className="text-ink hover:underline"
           >
-            Collect {opsCounts.collectToday.toLocaleString()}
+            Collect{" "}
+            <span className="tabular-nums text-ink-soft">
+              {opsCounts.collectToday.toLocaleString()}
+              {isFetchingMore ? "…" : ""}
+            </span>
           </button>
           <button
             type="button"
             onClick={() => applyBuiltInViewById(appointmentsTodayViewId())}
-            className={PILL_OFF_CLASS}
+            className="text-ink hover:underline"
           >
-            Appointments {opsCounts.appointmentsToday.toLocaleString()}
+            Appointments{" "}
+            <span className="tabular-nums text-ink-soft">
+              {opsCounts.appointmentsToday.toLocaleString()}
+              {isFetchingMore ? "…" : ""}
+            </span>
           </button>
           <button
             type="button"
             onClick={() => applyBuiltInViewById(liveWorkViewId())}
-            className={PILL_OFF_CLASS}
+            className="text-ink hover:underline"
           >
-            Pending {opsCounts.pendingLive.toLocaleString()}
+            Pending{" "}
+            <span className="tabular-nums text-ink-soft">
+              {opsCounts.pendingLive.toLocaleString()}
+              {isFetchingMore ? "…" : ""}
+            </span>
           </button>
-          <Link to="/crm/review" className={PILL_OFF_CLASS}>
-            Open review {openReviewCaseCount.toLocaleString()}
+          <Link to="/crm/review" className="text-ink hover:underline">
+            Open review{" "}
+            <span className="tabular-nums text-ink-soft">{openReviewCaseCount.toLocaleString()}</span>
           </Link>
         </div>
 
@@ -280,25 +285,26 @@ export function LedgerPage() {
 
         <div className={`${CARD_CLASS} flex flex-col gap-3 px-4 py-3`}>
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`${FIELD_LABEL_CLASS} mr-1`}>Status</span>
-            {crm.CASE_STATUSES.map((caseStatus) => (
-              // Never `disabled` while a partner filter is active: a desk agent
-              // must always be able to click straight back into status
-              // filtering in one step. `toggleCaseStatus` already clears the
-              // partner selection, so disabling this button would be the only
-              // thing standing between a partner-filtered view and a status
-              // filter -- a dead end with no way out except the partner
-              // dropdown's own "All partners" option.
-              <button
-                key={caseStatus}
-                type="button"
-                onClick={() => toggleCaseStatus(caseStatus)}
-                aria-pressed={selectedCaseStatuses.includes(caseStatus)}
-                className={selectedCaseStatuses.includes(caseStatus) ? PILL_ON_CLASS : PILL_OFF_CLASS}
-              >
-                {CASE_STATUS_LABELS[caseStatus]}
-              </button>
-            ))}
+            <button
+              type="button"
+              aria-expanded={isStatusMenuOpen}
+              onClick={() => setIsStatusMenuOpen((isOpen) => !isOpen)}
+              className={isStatusMenuOpen ? PILL_ON_CLASS : PILL_OFF_CLASS}
+            >
+              Status · {statusSummaryLabel}
+            </button>
+            {isStatusMenuOpen &&
+              crm.CASE_STATUSES.map((caseStatus) => (
+                <button
+                  key={caseStatus}
+                  type="button"
+                  onClick={() => toggleCaseStatus(caseStatus)}
+                  aria-pressed={selectedCaseStatuses.includes(caseStatus)}
+                  className={selectedCaseStatuses.includes(caseStatus) ? PILL_ON_CLASS : PILL_OFF_CLASS}
+                >
+                  {CASE_STATUS_LABELS[caseStatus]}
+                </button>
+              ))}
           </div>
 
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
@@ -342,38 +348,41 @@ export function LedgerPage() {
                 className={`${INPUT_CLASS} min-w-56 font-normal`}
               >
                 <option value={ALL_CASES}>All cases</option>
-                <option value={WITH_ANY_ISSUE}>With an open issue ({issueCaseCounts.withIssueCount.toLocaleString()})</option>
+                <option value={WITH_ANY_ISSUE}>
+                  With an open issue ({issueCaseCounts.withIssueCount.toLocaleString()})
+                </option>
                 <option value={WITHOUT_ISSUES}>
                   Without open issues ({issueCaseCounts.withoutIssueCount.toLocaleString()})
                 </option>
                 {crm.REVIEW_REASONS.filter(
-                  (reason) => (issueCaseCounts.countByReason.get(reason) ?? 0) > 0 || reason === selectedIssueFilter,
+                  (reason) =>
+                    (issueCaseCounts.countByReason.get(reason) ?? 0) > 0 || reason === selectedIssueFilter,
                 ).map((reason) => (
                   <option key={reason} value={reason}>
-                    {REVIEW_REASON_LABELS[reason]} ({(issueCaseCounts.countByReason.get(reason) ?? 0).toLocaleString()})
+                    {REVIEW_REASON_LABELS[reason]} (
+                    {(issueCaseCounts.countByReason.get(reason) ?? 0).toLocaleString()})
                   </option>
                 ))}
               </select>
             </label>
-
-            {signedInUserEmail !== null && (
-              <div className="flex items-center gap-2 lg:ml-auto">
-                <span className={FIELD_LABEL_CLASS}>Views</span>
-                <ViewChips
-                  userEmail={signedInUserEmail}
-                  activeFilters={activeLedgerFilters}
-                  activeSort={ledgerSort}
-                  onApplyView={applyLedgerView}
-                />
-              </div>
-            )}
           </div>
+
+          {signedInUserEmail !== null && (
+            <div className="flex flex-col gap-1 border-t border-line pt-3">
+              <span className={FIELD_LABEL_CLASS}>Views</span>
+              <ViewChips
+                userEmail={signedInUserEmail}
+                activeFilters={activeLedgerFilters}
+                activeSort={ledgerSort}
+                onApplyView={applyLedgerView}
+                activeViewId={activeViewId}
+                onActiveViewIdChange={setActiveViewId}
+              />
+            </div>
+          )}
         </div>
 
-        <BulkActionsBar
-          selectedCaseIds={selectedCaseIds}
-          onClearSelection={clearLedgerSelection}
-        />
+        <BulkActionsBar selectedCaseIds={selectedCaseIds} onClearSelection={clearLedgerSelection} />
 
         {isLedgerPartial && (
           <div
@@ -390,9 +399,9 @@ export function LedgerPage() {
         )}
 
         <div className="min-h-0 flex-1">
-          {ledgerRowsQuery.isLoading ? (
-            <p className="text-sm text-ink-soft">Loading the ledger…</p>
-          ) : ledgerRowsQuery.isError ? (
+          {showSkeleton ? (
+            <LedgerSkeleton />
+          ) : showError ? (
             <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-900">
               The ledger could not be loaded: {String(ledgerRowsQuery.error)}
             </p>
@@ -411,47 +420,20 @@ export function LedgerPage() {
   );
 }
 
-/**
- * The line under the title. "Showing" is honest HERE because both numbers are
- * the client's own: rows on screen after the search box and view filters, and
- * rows the ledger LOADED. Neither claims to be the size of the whole ledger;
- * `describePartialLedgerBanner` below owns that boundary.
- */
 function describeLedgerCount(
   visibleRowCount: number,
   loadedRowCount: number | undefined,
-  isLoading: boolean,
+  isWaitingForFirstPage: boolean,
+  isFetchingMore: boolean,
 ): string {
-  if (isLoading || loadedRowCount === undefined) return "Loading cases…";
-  if (visibleRowCount === loadedRowCount) {
-    return `${loadedRowCount.toLocaleString()} case${loadedRowCount === 1 ? "" : "s"}`;
-  }
-  return `Showing ${visibleRowCount.toLocaleString()} of ${loadedRowCount.toLocaleString()} loaded cases`;
+  if (isWaitingForFirstPage || loadedRowCount === undefined) return "Loading cases…";
+  const base =
+    visibleRowCount === loadedRowCount
+      ? `${loadedRowCount.toLocaleString()} case${loadedRowCount === 1 ? "" : "s"}`
+      : `Showing ${visibleRowCount.toLocaleString()} of ${loadedRowCount.toLocaleString()} loaded cases`;
+  return isFetchingMore ? `${base} · loading more…` : base;
 }
 
-/**
- * A silent partial ledger is the one thing this screen must never be. Both
- * sentences are independent -- either can appear alone, and when both
- * conditions hold both sentences appear, so neither reason can hide the
- * other.
- *
- * The truncated sentence deliberately never states a missing-row count:
- * `truncated` only means the page-filling walk stopped at `MAX_LEDGER_PAGES`
- * before its cursor ran out, and nothing in the response says how much
- * ledger sits past that point. Fabricating a total would be worse than
- * omitting one. What the client knows exactly is how many rows it LOADED --
- * `loadedRowCount` -- and that is the number a desk agent actually needs, to
- * judge whether the case they are hunting for could be past the edge of
- * this view.
- *
- * R48 (fix round 1, F6): "Loaded", never "Showing". Rows loaded and rows on
- * screen are two different numbers from Task 13 on -- `visibleLedgerRows` is
- * the loaded rows AFTER the client-side filters and the search box -- so a
- * truncated ledger plus any filter used to put "Showing the first 500 cases"
- * over a table of three. The NUMBER stays the loaded one on purpose: it names
- * the load boundary, which is the only thing this banner exists to say. It is
- * the verb that was false.
- */
 function describePartialLedgerBanner(
   isTruncated: boolean,
   loadedRowCount: number,
@@ -470,12 +452,6 @@ function describePartialLedgerBanner(
     );
   }
   if (unreadableReviewItemCount > 0) {
-    // Names the CONSEQUENCE, not just the count: an unreadable review item is
-    // invisible on the row it belongs to, and a row that needs attention
-    // looking clean is the thing a desk agent has to be told about. The count
-    // is known exactly (it is `unreadableReviewItemIds.length`), the case it
-    // belongs to is not -- the summary cannot say which case an item it could
-    // not parse was about -- so the sentence does not pretend to name one.
     sentences.push(
       `${unreadableReviewItemCount} import-review item${unreadableReviewItemCount === 1 ? "" : "s"} could not be read, so a row that needs attention may look clean.`,
     );

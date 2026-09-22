@@ -266,10 +266,14 @@ async function fetchLedgerPage(
  * Capped, and honest when the cap bites: a server bug that always answers with
  * a cursor would otherwise spin until the tab dies, and a ledger that quietly
  * stops at row 5,000 is a desk agent concluding a case does not exist.
+ *
+ * `onPage` fires after every page with the cumulative load so the UI can paint
+ * the first ~500 rows while later pages keep arriving.
  */
 async function loadLedger(
   idToken: string,
   params: { statuses?: crm.CaseStatus[]; partnerId?: string },
+  options?: { onPage?: (partialLoad: LedgerLoad) => void },
 ): Promise<LedgerLoad> {
   const rows: crm.LedgerRow[] = [];
   const unreadableCaseIds: string[] = [];
@@ -287,9 +291,21 @@ async function loadLedger(
     appliedQuery = page.appliedQuery;
     cursor = page.nextCursor;
     pagesRead += 1;
+    const partialLoad: LedgerLoad = {
+      rows: [...rows],
+      unreadableCaseIds: [...unreadableCaseIds],
+      truncated: cursor !== undefined && pagesRead >= MAX_LEDGER_PAGES,
+      appliedQuery,
+    };
+    options?.onPage?.(partialLoad);
   } while (cursor !== undefined && pagesRead < MAX_LEDGER_PAGES);
 
-  return { rows, unreadableCaseIds, truncated: cursor !== undefined, appliedQuery };
+  return {
+    rows,
+    unreadableCaseIds,
+    truncated: cursor !== undefined,
+    appliedQuery,
+  };
 }
 
 /**

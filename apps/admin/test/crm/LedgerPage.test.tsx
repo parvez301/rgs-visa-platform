@@ -119,15 +119,16 @@ const mockedUsePartners = vi.mocked(usePartners);
  * union" lie to one place rather than repeating it at every call site.
  */
 function fakeQueryResult<QueryData>(
-  overrides: Partial<UseQueryResult<QueryData, Error>>,
-): UseQueryResult<QueryData, Error> {
+  overrides: Partial<UseQueryResult<QueryData, Error>> & { isFetchingMore?: boolean },
+): UseQueryResult<QueryData, Error> & { isFetchingMore: boolean } {
   return {
     data: undefined,
     isLoading: false,
     isError: false,
     error: null,
+    isFetchingMore: false,
     ...overrides,
-  } as unknown as UseQueryResult<QueryData, Error>;
+  } as unknown as UseQueryResult<QueryData, Error> & { isFetchingMore: boolean };
 }
 
 function buildLedgerRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
@@ -311,9 +312,9 @@ describe("LedgerPage — the status/partner filter exclusion", () => {
 
     renderLedgerPage();
 
-    await user.click(screen.getByRole("button", { name: "New" }));
+    await user.click(screen.getByRole("button", { name: /Status ·/ }));
+    // Live work is the default open view, so New starts pressed.
     expect(screen.getByRole("button", { name: "New" })).toHaveAttribute("aria-pressed", "true");
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["NEW"], undefined);
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Partner" }), "partner_1");
     // Selecting a partner must clear the status filter -- the server only
@@ -350,6 +351,7 @@ describe("LedgerPage — the status/partner filter exclusion", () => {
     // Nothing else in this component disables it while a partner is
     // selected, so this click alone must both select the status and drop
     // the partner filter in the same step.
+    await user.click(screen.getByRole("button", { name: /Status ·/ }));
     await user.click(screen.getByRole("button", { name: "In progress" }));
     expect(screen.getByRole("combobox", { name: "Partner" })).toHaveValue("");
     expect(screen.getByRole("button", { name: "In progress" })).toHaveAttribute(
