@@ -46,7 +46,7 @@ import {
   upsertTraveller,
 } from "../domain/crm/travellers";
 import { Router, parseBody, parseQueryParam } from "./router";
-import { requireAdmin } from "./adminAccess";
+import { requireScreen, requireWrite } from "./adminAccess";
 
 const CreatePartnerBody = z.object({
   canonicalName: z.string().min(1),
@@ -178,19 +178,19 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
 
   return router
     .add("GET", "/api/v1/admin/crm/partners", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crm");
       // { partners, unreadablePartnerIds } — a row that would not parse is
       // named in the response rather than silently missing from it, and never
       // takes the whole tenant's partner list down with it.
       return listPartners(context, tenantId);
     })
     .add("POST", "/api/v1/admin/crm/partners", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crm");
       const body = parseBody(CreatePartnerBody, requestContext.body);
       return createPartner(context, tenantId, body, requestContext.callerEmail);
     })
     .add("POST", "/api/v1/admin/crm/travellers", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crm");
       const body = parseBody(UpsertTravellerBody, requestContext.body);
       return upsertTraveller(context, tenantId, body);
     })
@@ -198,7 +198,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       "GET",
       "/api/v1/admin/crm/travellers/by-passport/{passportNumber}",
       async (requestContext) => {
-        requireAdmin(requestContext);
+        requireScreen(requestContext, "crm");
         const traveller = await findTravellerByPassport(
           context,
           tenantId,
@@ -212,7 +212,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       "GET",
       "/api/v1/admin/crm/travellers/by-name/{fullName}",
       async (requestContext) => {
-        requireAdmin(requestContext);
+        requireScreen(requestContext, "crm");
         const traveller = await findTravellerByName(
           context,
           tenantId,
@@ -223,7 +223,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       },
     )
     .add("GET", "/api/v1/admin/crm/cases", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crm");
       const requestedStatus = requestContext.queryParams["status"] ?? "NEW";
       if (!crm.CASE_STATUSES.includes(requestedStatus as crm.CaseStatus)) {
         throw badRequest(`Unknown case status ${requestedStatus}`);
@@ -233,11 +233,11 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       return listCasesByStatus(context, tenantId, requestedStatus as crm.CaseStatus);
     })
     .add("GET", "/api/v1/admin/crm/cases/by-partner/{partnerId}", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crm");
       return listCasesByPartner(context, tenantId, requestContext.pathParams["partnerId"]!);
     })
     .add("POST", "/api/v1/admin/crm/cases", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crm");
       const body = parseBody(CreateCaseBody, requestContext.body);
       return createCase(context, tenantId, body, requestContext.callerEmail);
     })
@@ -247,7 +247,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
     // would be answered by getCase with caseId="ledger" -- a 404 that looks
     // like a missing case. A test in crmApi.test.ts asserts the order.
     .add("GET", "/api/v1/admin/crm/cases/ledger", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crm");
       const partnerId = requestContext.queryParams["partnerId"];
       const statuses = parseLedgerStatuses(requestContext.queryParams["status"]);
       const limit = parseQueryParam(
@@ -282,11 +282,11 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       };
     })
     .add("GET", "/api/v1/admin/crm/cases/{caseId}", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crm");
       return getCase(context, tenantId, requestContext.pathParams["caseId"]!);
     })
     .add("PUT", "/api/v1/admin/crm/cases/{caseId}", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crm");
       const input: UpdateCaseDetailsInput = parseBody(UpdateCaseDetailsBody, requestContext.body);
       return updateCaseDetails(
         context,
@@ -297,13 +297,13 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       );
     })
     .add("GET", "/api/v1/admin/crm/cases/{caseId}/events", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crm");
       return {
         events: await listCaseEvents(context, tenantId, requestContext.pathParams["caseId"]!),
       };
     })
     .add("PUT", "/api/v1/admin/crm/cases/{caseId}/status", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crm");
       const body = parseBody(CaseStatusBody, requestContext.body);
       return changeCaseStatus(
         context,
@@ -314,7 +314,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       );
     })
     .add("PUT", "/api/v1/admin/crm/cases/{caseId}/billing", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crm");
       const body = parseBody(BillingStatusBody, requestContext.body);
       return changeBillingStatus(
         context,
@@ -325,7 +325,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       );
     })
     .add("POST", "/api/v1/admin/crm/cases/{caseId}/document-checklist/ensure", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crm");
       return ensureCaseDocumentChecklist(
         context,
         tenantId,
@@ -334,7 +334,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       );
     })
     .add("PUT", "/api/v1/admin/crm/cases/{caseId}/document-checklist", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crm");
       const body = parseBody(DocumentCheckBody, requestContext.body);
       return setCaseDocumentCheckState(
         context,
@@ -346,7 +346,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       );
     })
     .add("GET", "/api/v1/admin/crm/cases/{caseId}/invoice", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crm");
       return generateCaseInvoice(
         context,
         tenantId,
@@ -355,7 +355,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       );
     })
     .add("POST", "/api/v1/admin/crm/appointment-reminders/run", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crm");
       const todayIso = context.now().toISOString().slice(0, 10);
       return runAppointmentReminders(
         context,
@@ -368,7 +368,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       "PUT",
       "/api/v1/admin/crm/cases/{caseId}/applicants/{applicantRef}/custody",
       async (requestContext) => {
-        requireAdmin(requestContext);
+        requireWrite(requestContext, "crm");
         const body = parseBody(CustodyBody, requestContext.body);
         return changeApplicantCustody(
           context,
@@ -384,7 +384,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       "PUT",
       "/api/v1/admin/crm/cases/{caseId}/applicants/{applicantRef}/outcome",
       async (requestContext) => {
-        requireAdmin(requestContext);
+        requireWrite(requestContext, "crm");
         const body = parseBody(OutcomeBody, requestContext.body);
         return changeApplicantOutcome(
           context,
@@ -397,7 +397,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       },
     )
     .add("GET", "/api/v1/admin/crm/review", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crmReview");
       const requestedStatus = requestContext.queryParams["status"] ?? "OPEN";
       // `find` over the shared tuple narrows to crm.ReviewStatus without a
       // cast. An unrecognised value is a 400, never a quiet fall back to OPEN:
@@ -420,22 +420,22 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
     // collision as the ledger route above, same consequence: registered after
     // it, this answers `getReviewItemOrThrow("summary")` and 404s.
     .add("GET", "/api/v1/admin/crm/review/summary", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crmReview");
       return summariseOpenReviewItems(context, tenantId);
     })
     // Same six-segment collision as /review/summary; must also stay before
     // "/api/v1/admin/crm/review/{reviewItemId}".
     .add("GET", "/api/v1/admin/crm/review/groups", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crmReview");
       return listOpenReviewGroups(context, tenantId);
     })
     .add("POST", "/api/v1/admin/crm/review/groups/resolve", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crmReview");
       const input: ResolveReviewGroupInput = parseBody(ResolveReviewGroupBody, requestContext.body);
       return resolveReviewGroup(context, tenantId, input, requestContext.callerEmail);
     })
     .add("GET", "/api/v1/admin/crm/review/{reviewItemId}", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crmReview");
       return getReviewItemOrThrow(
         context,
         tenantId,
@@ -443,7 +443,7 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       );
     })
     .add("PUT", "/api/v1/admin/crm/review/{reviewItemId}/resolve", async (requestContext) => {
-      requireAdmin(requestContext);
+      requireWrite(requestContext, "crmReview");
       // Typed as the domain's own interface, so a drift between this body
       // schema and what resolveReviewItem accepts fails to compile here.
       const resolution: ReviewItemResolution = parseBody(

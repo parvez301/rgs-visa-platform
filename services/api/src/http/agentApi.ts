@@ -15,7 +15,7 @@ import {
 } from "../domain/crm/memory";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
 import { Router, parseBody, parseQueryParam, type RequestContext, type RouteHandler } from "./router";
-import { requireAdmin } from "./adminAccess";
+import { requireScreen, requireWrite } from "./adminAccess";
 
 /**
  * Model input billed by the token, arriving over the network, with nothing
@@ -219,7 +219,7 @@ export const RunTurnBody = z
 
 const ApproveProposalBody = z.object({
   // Deliberately no actorEmail/approvedBy field: the actor is always the
-  // verified caller from requireAdmin (task-11-controller-notes.md §1), and
+  // verified caller from the route access gate (task-11-controller-notes.md §1), and
   // Zod's default "strip" mode on z.object drops any such field a caller
   // sends anyway, before it ever reaches this handler.
   editedInput: z.record(z.unknown()).optional(),
@@ -266,7 +266,7 @@ function resolveAdminMemoryScope(
 }
 
 /**
- * requireAdmin guarantees `callerId` and an admin role are present, but
+ * requireWrite guarantees `callerId` and CRM write access are present, but
  * router.ts still defaults a missing `email` JWT claim to `""`, and createCase/createPartner/
  * rememberMemory all tolerate that by OMITTING the author rather than
  * refusing the request (cases.ts:85, partners.ts:60, memory.ts's own doc
@@ -283,11 +283,11 @@ function resolveAdminMemoryScope(
  * `proposedBy`, the same kind of audit field.
  *
  * Refused HERE, at the three routes that record an actor, rather than
- * inside `requireAdmin` itself -- changing it there would break the Plan
+ * inside the shared access helpers -- changing them would break the Plan
  * 2/3 behaviour above, which is deliberately the opposite.
  */
 function requireAdminEmail(requestContext: RequestContext): string {
-  const { adminEmail } = requireAdmin(requestContext);
+  const { adminEmail } = requireWrite(requestContext, "crm");
   if (adminEmail === "") {
     throw forbidden(
       "This admin token has no email claim, so it cannot be recorded as the actor for this action",
@@ -345,7 +345,7 @@ const AGENT_ROUTE_DEFINITIONS: AgentRouteDefinition[] = [
     method: "GET",
     path: "/api/v1/admin/crm/agent/proposals",
     buildHandler: (context) => async (requestContext) => {
-      requireAdmin(requestContext);
+      requireScreen(requestContext, "crm");
       // { proposals, unreadableProposalIds } -- a row that would not parse
       // is named in the response rather than silently missing from it, the
       // same rule every other listing in this codebase follows.
@@ -414,7 +414,7 @@ const AGENT_ROUTE_DEFINITIONS: AgentRouteDefinition[] = [
     method: "GET",
     path: "/api/v1/admin/crm/agent/memories",
     buildHandler: (context) => async (requestContext) => {
-      const { adminEmail } = requireAdmin(requestContext);
+      const { adminEmail } = requireScreen(requestContext, "crm");
       const scopeKind = parseQueryParam(
         MemoryScopeKindSchema,
         "scope",
@@ -428,7 +428,7 @@ const AGENT_ROUTE_DEFINITIONS: AgentRouteDefinition[] = [
     method: "POST",
     path: "/api/v1/admin/crm/agent/memories",
     buildHandler: (context) => async (requestContext) => {
-      const { adminEmail } = requireAdmin(requestContext);
+      const { adminEmail } = requireWrite(requestContext, "crm");
       const body = parseBody(RememberMemoryBody, requestContext.body);
       const scope = resolveAdminMemoryScope(body.scope, body.partnerId, adminEmail);
       return rememberMemory(
@@ -455,7 +455,7 @@ const AGENT_ROUTE_DEFINITIONS: AgentRouteDefinition[] = [
     method: "DELETE",
     path: "/api/v1/admin/crm/agent/memories/{memoryKey}",
     buildHandler: (context) => async (requestContext) => {
-      const { adminEmail } = requireAdmin(requestContext);
+      const { adminEmail } = requireWrite(requestContext, "crm");
       const scopeKind = parseQueryParam(
         MemoryScopeKindSchema,
         "scope",
