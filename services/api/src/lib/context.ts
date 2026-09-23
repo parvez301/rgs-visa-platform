@@ -1,6 +1,7 @@
 import type { ActivityEvent, ActivityEventType, ActivityActorRole } from "@rgs/shared";
 import type { LlmProvider } from "../agent/providers/types";
 import type { TableClient } from "./db";
+import type { CognitoAdminsClient } from "./cognitoAdmins";
 import type { DocumentStore } from "./documentStore";
 import type { EmailSender } from "./email";
 import { newId } from "./ids";
@@ -18,6 +19,8 @@ export interface AppContext {
    * touching every existing test.
    */
   llm?: LlmProvider;
+  /** Staff administration seam; supplied by admin handlers that manage Cognito. */
+  cognitoAdmins?: CognitoAdminsClient;
 }
 
 export async function logActivity(
