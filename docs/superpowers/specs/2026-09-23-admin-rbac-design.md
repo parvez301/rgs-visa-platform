@@ -1,6 +1,6 @@
 # RGS Admin — User management, roles, and screen access
 
-**Status:** design approved in chat 2026-09-23; awaiting spec file review before implementation plan.
+**Status:** implemented (verified 2026-09-23 — automated suites in task 9; post-deploy smoke in §9 still requires separate approval).
 
 **Context:** Admin Cognito pool today is flat — any signed-in admin sees every nav item and can call every admin API. This spec adds fixed roles, screen gating, and an Owner-only Users screen with email invite.
 
