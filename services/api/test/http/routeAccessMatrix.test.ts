@@ -29,7 +29,7 @@ const ROUTE_ACCESS: RouteAccess[] = [
   { method: "GET", pathPattern: "/api/v1/admin/config/countries", screen: "config", mode: "read" },
   { method: "PUT", pathPattern: "/api/v1/admin/config/countries", screen: "config", mode: "write" },
   { method: "POST", pathPattern: "/api/v1/admin/config/seed", screen: "config", mode: "write" },
-  { method: "GET", pathPattern: "/api/v1/admin/staff", screen: "adminUsers", mode: "write" },
+  { method: "GET", pathPattern: "/api/v1/admin/staff", screen: "adminUsers", mode: "read" },
   { method: "POST", pathPattern: "/api/v1/admin/staff", screen: "adminUsers", mode: "write" },
   { method: "PUT", pathPattern: "/api/v1/admin/staff/{username}/role", screen: "adminUsers", mode: "write" },
   { method: "POST", pathPattern: "/api/v1/admin/staff/{username}/disable", screen: "adminUsers", mode: "write" },

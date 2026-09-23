@@ -9,7 +9,7 @@ import {
 } from "../domain/admin/staff";
 import type { AppContext } from "../lib/context";
 import type { CognitoAdminsClient } from "../lib/cognitoAdmins";
-import { requireRole } from "./adminAccess";
+import { requireRole, requireScreen } from "./adminAccess";
 import { parseBody, Router } from "./router";
 
 const StaffInviteSchema = z.object({
@@ -27,7 +27,7 @@ export function registerStaffRoutes(
 ): Router {
   return adminRouter
     .add("GET", "/api/v1/admin/staff", async (requestContext) => {
-      requireRole(requestContext, ["Owner"]);
+      requireScreen(requestContext, "adminUsers");
       return listStaff(requireCognitoAdmins(context));
     })
     .add("POST", "/api/v1/admin/staff", async (requestContext) => {
