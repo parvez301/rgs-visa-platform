@@ -141,9 +141,9 @@ export class RgsPlatformStack extends cdk.Stack {
         },
         ignoreErrorCodesMatching: "UserNotFoundException",
       },
-      // AdminAddUserToGroup has been in the Lambda runtime's bundled SDK for
-      // years; there is nothing to npm-install at deploy time.
-      installLatestAwsSdk: false,
+      // Must be true: with false, AwsCustomResource looks for the wrong v3
+      // package name (`client-cognitoidentityprovider`) and the seed fails.
+      installLatestAwsSdk: true,
       policy: customResources.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
           actions: ["cognito-idp:AdminAddUserToGroup"],
