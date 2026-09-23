@@ -169,8 +169,13 @@ function buildEvent(method: string, path: string, body?: unknown): LambdaEvent {
       http: { method },
       // The turn route answers 403 for an admin token with no email claim --
       // `decidedBy`/`proposedBy` are audit fields and it refuses to write a
-      // blank one.
-      authorizer: { jwt: { claims: { sub: "admin_1", email: "ops@rgs.test" } } },
+      // blank one -- and for one with no `cognito:groups`, which resolves to
+      // no admin role at all.
+      authorizer: {
+        jwt: {
+          claims: { sub: "admin_1", email: "ops@rgs.test", "cognito:groups": "[Owner]" },
+        },
+      },
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   } as unknown as LambdaEvent;

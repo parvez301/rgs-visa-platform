@@ -50,7 +50,7 @@ const ROUTE_ACCESS: RouteAccess[] = [
   { method: "PUT", pathPattern: "/api/v1/admin/crm/cases/{caseId}/billing", screen: "crm", mode: "write" },
   { method: "POST", pathPattern: "/api/v1/admin/crm/cases/{caseId}/document-checklist/ensure", screen: "crm", mode: "write" },
   { method: "PUT", pathPattern: "/api/v1/admin/crm/cases/{caseId}/document-checklist", screen: "crm", mode: "write" },
-  { method: "GET", pathPattern: "/api/v1/admin/crm/cases/{caseId}/invoice", screen: "crm", mode: "read" },
+  { method: "GET", pathPattern: "/api/v1/admin/crm/cases/{caseId}/invoice", screen: "crm", mode: "write" },
   { method: "POST", pathPattern: "/api/v1/admin/crm/appointment-reminders/run", screen: "crm", mode: "write" },
   { method: "PUT", pathPattern: "/api/v1/admin/crm/cases/{caseId}/applicants/{applicantRef}/custody", screen: "crm", mode: "write" },
   { method: "PUT", pathPattern: "/api/v1/admin/crm/cases/{caseId}/applicants/{applicantRef}/outcome", screen: "crm", mode: "write" },

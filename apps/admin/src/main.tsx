@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AppProviders } from "./AppProviders";
+import { HomeRoute } from "./components/HomeRoute";
 import { RequireScreen } from "./components/RequireScreen";
 import { useAuth } from "./lib/auth";
 import { ActivityPage } from "./pages/ActivityPage";
@@ -43,9 +44,9 @@ createRoot(document.getElementById("root")!).render(
             path="/"
             element={
               <RequireAuth>
-                <RequireScreen screen="queue">
+                <HomeRoute>
                   <QueuePage />
-                </RequireScreen>
+                </HomeRoute>
               </RequireAuth>
             }
           />

@@ -67,6 +67,46 @@ export const SCREEN_ACCESS: Record<
   }),
 };
 
+/**
+ * Normalises `cognito:groups` into a list of group names.
+ *
+ * The shape depends on where the claim is read. The SPA reads the decoded ID
+ * token, where it is a real array. The API reads
+ * `requestContext.authorizer.jwt.claims` from an API Gateway *HTTP* API, which
+ * flattens every claim to a string and serialises multi-valued ones as a
+ * bracketed, space-separated list -- `[Owner]`, `[Owner Ops]` -- not as JSON.
+ * A REST API or a locally decoded token gives JSON (`["Owner"]`) instead.
+ *
+ * All three are accepted. Anything else returns `[]`, which resolves to a null
+ * role and therefore no access.
+ */
+export function parseCognitoGroups(claim: unknown): string[] {
+  if (claim === undefined || claim === null) return [];
+
+  if (Array.isArray(claim)) {
+    return claim.every((group) => typeof group === "string") ? [...claim] : [];
+  }
+
+  if (typeof claim !== "string") return [];
+
+  const trimmed = claim.trim();
+  if (trimmed === "") return [];
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.every((group) => typeof group === "string") ? parsed : [];
+  } catch {
+    // Not JSON -- fall through to the bracketed HTTP API form below.
+  }
+
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return [];
+  return trimmed
+    .slice(1, -1)
+    .split(/[,\s]+/)
+    .filter((group) => group !== "");
+}
+
 export function primaryRole(roles: readonly string[]): AdminRole | null {
   const roleSet = new Set(roles);
   for (const role of ADMIN_ROLES) {

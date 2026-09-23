@@ -14,6 +14,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  parseCognitoGroups,
   primaryRole as selectPrimaryRole,
   type AdminRole,
 } from "@rgs/shared";
@@ -41,25 +42,10 @@ export interface AuthState {
 // see `apps/admin/test/crm/virtual.ts`'s `renderLedger`.
 export const AuthContext = createContext<AuthState | null>(null);
 
+// Same normalisation the API applies to `cognito:groups`, so the nav the SPA
+// renders cannot disagree with what the API will authorise.
 export function parseGroups(groups: unknown): string[] {
-  if (groups === undefined || groups === null) return [];
-
-  let parsedGroups: unknown = groups;
-  if (typeof groups === "string") {
-    try {
-      parsedGroups = JSON.parse(groups);
-    } catch {
-      return [];
-    }
-  }
-
-  if (
-    Array.isArray(parsedGroups) &&
-    parsedGroups.every((group) => typeof group === "string")
-  ) {
-    return parsedGroups;
-  }
-  return [];
+  return parseCognitoGroups(groups);
 }
 
 function cognitoUserFor(email: string): CognitoUser {

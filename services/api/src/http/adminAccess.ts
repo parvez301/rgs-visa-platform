@@ -1,6 +1,7 @@
 import {
   canAccessScreen,
   canWriteScreen,
+  parseCognitoGroups,
   primaryRole,
   type AdminRole,
   type AdminScreen,
@@ -15,21 +16,7 @@ export interface AdminIdentity {
 }
 
 export function parseCognitoGroupsClaim(claim: unknown): string[] {
-  if (claim === undefined || claim === null) return [];
-
-  let parsedClaim: unknown = claim;
-  if (typeof claim === "string") {
-    try {
-      parsedClaim = JSON.parse(claim);
-    } catch {
-      return [];
-    }
-  }
-
-  if (!Array.isArray(parsedClaim) || !parsedClaim.every((group) => typeof group === "string")) {
-    return [];
-  }
-  return parsedClaim;
+  return parseCognitoGroups(claim);
 }
 
 export function requireAdmin(requestContext: RequestContext): AdminIdentity {

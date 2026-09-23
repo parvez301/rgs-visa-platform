@@ -345,8 +345,10 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
         requestContext.callerEmail,
       );
     })
+    // A GET, but `generateCaseInvoice` stamps an INVOICE_GENERATED event into
+    // case history, so it is gated as a write.
     .add("GET", "/api/v1/admin/crm/cases/{caseId}/invoice", async (requestContext) => {
-      requireScreen(requestContext, "crm");
+      requireWrite(requestContext, "crm");
       return generateCaseInvoice(
         context,
         tenantId,

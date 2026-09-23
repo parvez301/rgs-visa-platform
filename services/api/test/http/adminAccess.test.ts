@@ -24,15 +24,27 @@ function ctx(partial: Partial<RequestContext>): RequestContext {
 }
 
 describe("parseCognitoGroupsClaim", () => {
-  it("parses the JSON string API Gateway puts in JWT claims", () => {
+  it("parses a JSON string claim", () => {
     expect(parseCognitoGroupsClaim("[\"Owner\",\"Ops\"]")).toEqual(["Owner", "Ops"]);
+    expect(parseCognitoGroupsClaim("[\"Owner\"]")).toEqual(["Owner"]);
+  });
+
+  // This is what a deployed HTTP API JWT authorizer actually sends: the claim
+  // is flattened to a string and multi-valued groups become `[a b]`.
+  it("parses the bracketed form the HTTP API authorizer flattens groups into", () => {
+    expect(parseCognitoGroupsClaim("[Owner]")).toEqual(["Owner"]);
+    expect(parseCognitoGroupsClaim("[Owner Ops]")).toEqual(["Owner", "Ops"]);
   });
 
   it("accepts an already-parsed string array", () => {
     expect(parseCognitoGroupsClaim(["Finance", "Viewer"])).toEqual(["Finance", "Viewer"]);
   });
 
-  it.each([undefined, "not-json", "{\"Owner\":true}", [1, "Ops"]])(
+  it.each(["[]", "", []])("returns empty for an empty claim: %j", (claim) => {
+    expect(parseCognitoGroupsClaim(claim)).toEqual([]);
+  });
+
+  it.each([undefined, "Owner", "not-json", "{\"Owner\":true}", [1, "Ops"]])(
     "returns empty for a missing or malformed claim: %j",
     (claim) => {
       expect(parseCognitoGroupsClaim(claim)).toEqual([]);
@@ -79,7 +91,11 @@ describe("access helpers", () => {
 });
 
 describe("Router Cognito groups", () => {
-  it("adds parsed groups to RequestContext", async () => {
+  it.each([
+    ["[\"Owner\",\"Ops\"]", ["Owner", "Ops"]],
+    ["[Owner Ops]", ["Owner", "Ops"]],
+    ["[Owner]", ["Owner"]],
+  ])("adds groups parsed from %j to RequestContext", async (claim, expected) => {
     const router = new Router().add("GET", "/roles", async (requestContext) => ({
       roles: requestContext.roles,
     }));
@@ -92,7 +108,7 @@ describe("Router Cognito groups", () => {
             claims: {
               sub: "sub-1",
               email: "a@example.com",
-              "cognito:groups": "[\"Owner\",\"Ops\"]",
+              "cognito:groups": claim,
             },
           },
         },
@@ -102,7 +118,7 @@ describe("Router Cognito groups", () => {
     const response = (await router.dispatch(event)) as { statusCode: number; body: string };
 
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body)).toEqual({ roles: ["Owner", "Ops"] });
+    expect(JSON.parse(response.body)).toEqual({ roles: expected });
   });
 });
 

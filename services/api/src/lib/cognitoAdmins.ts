@@ -65,6 +65,9 @@ export class AwsCognitoAdmins implements CognitoAdminsClient {
           { Name: "email", Value: input.email },
           { Name: "email_verified", Value: "true" },
         ],
+        // Cognito defaults to SMS, and admins are invited by email only --
+        // without this the temporary password is never delivered.
+        DesiredDeliveryMediums: ["EMAIL"],
       }),
     );
     if (response.User === undefined) {

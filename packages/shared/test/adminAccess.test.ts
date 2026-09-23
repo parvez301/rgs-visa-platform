@@ -2,9 +2,38 @@ import { describe, expect, it } from "vitest";
 import {
   canAccessScreen,
   canWriteScreen,
+  parseCognitoGroups,
   primaryRole,
   SCREEN_ACCESS,
 } from "../src/adminAccess";
+
+describe("parseCognitoGroups", () => {
+  it.each([
+    ['["Owner"]', ["Owner"]],
+    ['["Owner","Ops"]', ["Owner", "Ops"]],
+    // API Gateway HTTP API flattens a multi-valued claim to this form.
+    ["[Owner]", ["Owner"]],
+    ["[Owner Ops]", ["Owner", "Ops"]],
+    ["[Owner, Ops]", ["Owner", "Ops"]],
+    [["Finance", "Viewer"], ["Finance", "Viewer"]],
+    [[], []],
+    ["[]", []],
+    ["", []],
+  ])("normalizes %j", (claim, expected) => {
+    expect(parseCognitoGroups(claim)).toEqual(expected);
+  });
+
+  it.each([undefined, null, "Owner", "not-json", '{"Owner":true}', [1, "Ops"], 42])(
+    "returns empty for a missing or unrecognised claim: %j",
+    (claim) => {
+      expect(parseCognitoGroups(claim)).toEqual([]);
+    },
+  );
+
+  it("resolves a primary role from the bracketed HTTP API form", () => {
+    expect(primaryRole(parseCognitoGroups("[Owner Ops]"))).toBe("Owner");
+  });
+});
 
 describe("primaryRole", () => {
   it("prefers Owner when multiple groups are present", () => {

@@ -1,22 +1,8 @@
 import { Link, NavLink } from "react-router";
 import type { ReactNode } from "react";
-import type { AdminScreen } from "@rgs/shared";
 import { useAdminAccess } from "../lib/adminAccess";
 import { useAuth } from "../lib/auth";
-
-const NAV_LINKS: ReadonlyArray<{
-  label: string;
-  to: string;
-  screen: AdminScreen;
-}> = [
-  { label: "Queue", to: "/", screen: "queue" },
-  { label: "Activity", to: "/activity", screen: "activity" },
-  { label: "Leads", to: "/leads", screen: "leads" },
-  { label: "Notices", to: "/notices", screen: "notices" },
-  { label: "Config", to: "/config", screen: "config" },
-  { label: "CRM", to: "/crm", screen: "crm" },
-  { label: "Users", to: "/admin/users", screen: "adminUsers" },
-] as const;
+import { ADMIN_NAV_LINKS } from "../lib/navLinks";
 
 /**
  * `contentWidth`: the visa-platform pages read best in a 1152px column; the
@@ -53,7 +39,7 @@ export function AdminShell({
             <span className="hidden md:inline text-xs text-paper/60">{email}</span>
           </Link>
           <nav className="flex flex-wrap items-center gap-4 text-sm">
-            {NAV_LINKS.filter((navLink) => canAccess(navLink.screen)).map((navLink) => (
+            {ADMIN_NAV_LINKS.filter((navLink) => canAccess(navLink.screen)).map((navLink) => (
               <NavLink
                 key={navLink.to}
                 to={navLink.to}

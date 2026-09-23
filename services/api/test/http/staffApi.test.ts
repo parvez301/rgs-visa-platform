@@ -1,3 +1,7 @@
+import {
+  AdminCreateUserCommand,
+  type CognitoIdentityProviderClient,
+} from "@aws-sdk/client-cognito-identity-provider";
 import type { AdminRole } from "@rgs/shared";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -147,6 +151,41 @@ describe("staff admin routes", () => {
 
     expect(response.statusCode).toBe(400);
     expect((await cognitoAdmins.adminGetUser("owner-cognito-username")).enabled).toBe(true);
+  });
+});
+
+// `InMemoryCognitoAdmins` cannot see command inputs, so the invite delivery
+// medium is only checkable against the real client with a stubbed `send`.
+describe("AwsCognitoAdmins.adminCreateUser", () => {
+  it("asks Cognito to deliver the invite by email", async () => {
+    const sentCommands: unknown[] = [];
+    const client = {
+      send: async (command: unknown) => {
+        sentCommands.push(command);
+        return {
+          User: {
+            Username: "new@rgs.test",
+            Attributes: [{ Name: "email", Value: "new@rgs.test" }],
+            UserStatus: "FORCE_CHANGE_PASSWORD",
+            Enabled: true,
+          },
+        };
+      },
+    } as unknown as CognitoIdentityProviderClient;
+
+    const created = await new AwsCognitoAdmins(client, "ap-south-1_test").adminCreateUser({
+      email: "new@rgs.test",
+    });
+
+    expect(created.email).toBe("new@rgs.test");
+    expect(sentCommands).toHaveLength(1);
+    const [command] = sentCommands;
+    expect(command).toBeInstanceOf(AdminCreateUserCommand);
+    expect((command as AdminCreateUserCommand).input).toMatchObject({
+      UserPoolId: "ap-south-1_test",
+      Username: "new@rgs.test",
+      DesiredDeliveryMediums: ["EMAIL"],
+    });
   });
 });
 

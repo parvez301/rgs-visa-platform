@@ -126,6 +126,10 @@ export class RgsPlatformStack extends cdk.Stack {
         physicalResourceId: customResources.PhysicalResourceId.of(
           `rgs-owner-admin-${stage}`,
         ),
+        // A stage whose seed account has not been created yet must not take
+        // the deploy down with it: it degrades to "no Owner yet", which is
+        // fail-closed and fixable from the Cognito console.
+        ignoreErrorCodesMatching: "UserNotFoundException",
       },
       onUpdate: {
         service: "CognitoIdentityProvider",
@@ -135,7 +139,11 @@ export class RgsPlatformStack extends cdk.Stack {
           Username: "admin@raysglobalservices.com",
           GroupName: "Owner",
         },
+        ignoreErrorCodesMatching: "UserNotFoundException",
       },
+      // AdminAddUserToGroup has been in the Lambda runtime's bundled SDK for
+      // years; there is nothing to npm-install at deploy time.
+      installLatestAwsSdk: false,
       policy: customResources.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
           actions: ["cognito-idp:AdminAddUserToGroup"],
