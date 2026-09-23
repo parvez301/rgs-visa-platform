@@ -177,6 +177,8 @@ const TEST_AUTH_STATE: AuthState = {
   isSignedIn: true,
   email: "agent@example.com",
   idToken: "test-id-token",
+  roles: ["Ops"],
+  primaryRole: "Ops",
   needsNewPassword: false,
   signIn: async () => "signedIn",
   completeNewPassword: async () => {},
