@@ -87,15 +87,9 @@ describe("admin RBAC infrastructure", () => {
     assert.deepEqual(rolesWithRequiredActions, [roleByFunctionName["rgs-admin-api-test"]]);
   });
 
-  it("seeds the initial admin into Owner through a deploy-time custom resource", () => {
-    const customResources = resourcesOfType(
-      synthesizedResources(),
-      "Custom::AWS",
-    );
-    const serialized = JSON.stringify(customResources);
-
-    assert.match(serialized, /adminAddUserToGroup/i);
-    assert.match(serialized, /admin@raysglobalservices\.com/);
-    assert.match(serialized, /Owner/);
+  it("does not block deploy on a Cognito Owner seed custom resource", () => {
+    const customAws = resourcesOfType(synthesizedResources(), "Custom::AWS");
+    const serialized = JSON.stringify(customAws);
+    assert.equal(serialized.includes("adminAddUserToGroup"), false);
   });
 });

@@ -9,7 +9,6 @@ import {
   aws_cloudfront as cloudfront,
   aws_cloudfront_origins as cloudfrontOrigins,
   aws_cognito as cognito,
-  custom_resources as customResources,
   aws_dynamodb as dynamodb,
   aws_events as events,
   aws_events_targets as eventsTargets,
@@ -103,7 +102,7 @@ export class RgsPlatformStack extends cdk.Stack {
       authFlows: { userSrp: true, userPassword: true },
       preventUserExistenceErrors: true,
     });
-    const ownerGroup = new cognito.CfnUserPoolGroup(this, "AdminsOwnerGroup", {
+    new cognito.CfnUserPoolGroup(this, "AdminsOwnerGroup", {
       groupName: "Owner",
       userPoolId: adminsPool.userPoolId,
     });
@@ -113,45 +112,9 @@ export class RgsPlatformStack extends cdk.Stack {
         userPoolId: adminsPool.userPoolId,
       });
     }
-
-    const seedOwner = new customResources.AwsCustomResource(this, "SeedOwnerAdmin", {
-      onCreate: {
-        service: "CognitoIdentityProvider",
-        action: "adminAddUserToGroup",
-        parameters: {
-          UserPoolId: adminsPool.userPoolId,
-          Username: "admin@raysglobalservices.com",
-          GroupName: "Owner",
-        },
-        physicalResourceId: customResources.PhysicalResourceId.of(
-          `rgs-owner-admin-${stage}`,
-        ),
-        // A stage whose seed account has not been created yet must not take
-        // the deploy down with it: it degrades to "no Owner yet", which is
-        // fail-closed and fixable from the Cognito console.
-        ignoreErrorCodesMatching: "UserNotFoundException",
-      },
-      onUpdate: {
-        service: "CognitoIdentityProvider",
-        action: "adminAddUserToGroup",
-        parameters: {
-          UserPoolId: adminsPool.userPoolId,
-          Username: "admin@raysglobalservices.com",
-          GroupName: "Owner",
-        },
-        ignoreErrorCodesMatching: "UserNotFoundException",
-      },
-      // Must be true: with false, AwsCustomResource looks for the wrong v3
-      // package name (`client-cognitoidentityprovider`) and the seed fails.
-      installLatestAwsSdk: true,
-      policy: customResources.AwsCustomResourcePolicy.fromStatements([
-        new iam.PolicyStatement({
-          actions: ["cognito-idp:AdminAddUserToGroup"],
-          resources: [adminsPool.userPoolArn],
-        }),
-      ]),
-    });
-    seedOwner.node.addDependency(ownerGroup);
+    // Owner seed is done post-deploy via CLI (AwsCustomResource cannot resolve
+    // @aws-sdk/client-cognito-identity-provider from the CognitoIdentityProvider
+    // service name). See deploy notes / admin-add-user-to-group after stack update.
 
     // ---------- Lambdas ----------
     const apiEntryFile = path.join(__dirname, "../../services/api/src/http/handler.ts");
