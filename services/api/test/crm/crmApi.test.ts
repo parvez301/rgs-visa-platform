@@ -32,7 +32,15 @@ function buildEvent(
     rawPath: path,
     requestContext: {
       http: { method },
-      authorizer: { jwt: { claims: { sub: "admin_1", email: "ops@rgs.test" } } },
+      authorizer: {
+        jwt: {
+          claims: {
+            sub: "admin_1",
+            email: "ops@rgs.test",
+            "cognito:groups": "[\"Owner\"]",
+          },
+        },
+      },
     },
     ...(queryStringParameters ? { queryStringParameters } : {}),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -105,7 +113,9 @@ function buildEventWithoutEmailClaim(
     rawPath: path,
     requestContext: {
       http: { method },
-      authorizer: { jwt: { claims: { sub: "admin_1" } } },
+      authorizer: {
+        jwt: { claims: { sub: "admin_1", "cognito:groups": "[\"Owner\"]" } },
+      },
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   } as unknown as APIGatewayProxyEventV2;

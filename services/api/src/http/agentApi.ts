@@ -15,7 +15,7 @@ import {
 } from "../domain/crm/memory";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
 import { Router, parseBody, parseQueryParam, type RequestContext, type RouteHandler } from "./router";
-import { requireAdmin } from "./adminApi";
+import { requireAdmin } from "./adminAccess";
 
 /**
  * Model input billed by the token, arriving over the network, with nothing
@@ -266,8 +266,8 @@ function resolveAdminMemoryScope(
 }
 
 /**
- * requireAdmin only guarantees `callerId` is present -- router.ts defaults a
- * missing `email` JWT claim to `""`, and createCase/createPartner/
+ * requireAdmin guarantees `callerId` and an admin role are present, but
+ * router.ts still defaults a missing `email` JWT claim to `""`, and createCase/createPartner/
  * rememberMemory all tolerate that by OMITTING the author rather than
  * refusing the request (cases.ts:85, partners.ts:60, memory.ts's own doc
  * comment on `createdByEmail`) -- correct for them, and pinned by

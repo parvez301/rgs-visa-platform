@@ -1,7 +1,6 @@
 import { APPLICATION_STATUSES, DOC_TYPES, PAYMENT_STATUSES } from "@rgs/shared";
 import { z } from "zod";
 import type { AppContext } from "../lib/context";
-import { forbidden } from "../lib/errors";
 import { listRecentActivity, listUserActivity } from "../domain/activity";
 import {
   addInternalNote,
@@ -24,7 +23,8 @@ import {
   listNotices,
   upsertNotice,
 } from "../domain/notices";
-import { Router, parseBody, parseQueryParam, type RequestContext } from "./router";
+import { Router, parseBody, parseQueryParam } from "./router";
+import { requireAdmin } from "./adminAccess";
 import { registerAgentRoutes } from "./agentApi";
 import { registerCrmRoutes } from "./crmApi";
 
@@ -48,14 +48,6 @@ const ReviewDocumentSchema = z.object({
 });
 
 const NoteSchema = z.object({ noteText: z.string().min(1).max(2000) });
-
-export function requireAdmin(requestContext: RequestContext): {
-  adminId: string;
-  adminEmail: string;
-} {
-  if (!requestContext.callerId) throw forbidden("Admin sign in required");
-  return { adminId: requestContext.callerId, adminEmail: requestContext.callerEmail };
-}
 
 export function buildAdminRouter(context: AppContext): Router {
   const adminRouter = new Router()

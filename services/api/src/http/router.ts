@@ -1,11 +1,14 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda";
 import { ZodError, type ZodType } from "zod";
 import { ApiError, badRequest } from "../lib/errors";
+import { parseCognitoGroupsClaim } from "./adminAccess";
 
 export interface RequestContext {
   /** Cognito subject (user or admin id). Empty string for unauthenticated routes. */
   callerId: string;
   callerEmail: string;
+  /** Raw Cognito group names from the JWT claim. */
+  roles: string[];
   pathParams: Record<string, string>;
   queryParams: Record<string, string>;
   body: unknown;
@@ -100,6 +103,7 @@ export class Router {
       const responsePayload = await matchResult.route.handler({
         callerId: jwtClaims["sub"] ?? "",
         callerEmail: jwtClaims["email"] ?? "",
+        roles: parseCognitoGroupsClaim(jwtClaims["cognito:groups"]),
         pathParams: matchResult.pathParams,
         queryParams: (event.queryStringParameters ?? {}) as Record<string, string>,
         body: parsedBody,

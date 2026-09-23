@@ -36,7 +36,15 @@ function buildEvent(
     rawPath: path,
     requestContext: {
       http: { method },
-      authorizer: { jwt: { claims: { sub: "admin_1", email: ADMIN_EMAIL } } },
+      authorizer: {
+        jwt: {
+          claims: {
+            sub: "admin_1",
+            email: ADMIN_EMAIL,
+            "cognito:groups": "[\"Owner\"]",
+          },
+        },
+      },
     },
     ...(queryStringParameters ? { queryStringParameters } : {}),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -95,7 +103,14 @@ function buildEventNoEmailClaim(method: string, path: string, body?: unknown): A
     rawPath: path,
     requestContext: {
       http: { method },
-      authorizer: { jwt: { claims: { sub: "admin_no_email" } } },
+      authorizer: {
+        jwt: {
+          claims: {
+            sub: "admin_no_email",
+            "cognito:groups": "[\"Owner\"]",
+          },
+        },
+      },
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   } as unknown as APIGatewayProxyEventV2;
@@ -542,7 +557,15 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
       rawPath: "/api/v1/admin/crm/agent/turn",
       requestContext: {
         http: { method: "POST" },
-        authorizer: { jwt: { claims: { sub: "admin_1", email: ADMIN_EMAIL } } },
+        authorizer: {
+          jwt: {
+            claims: {
+              sub: "admin_1",
+              email: ADMIN_EMAIL,
+              "cognito:groups": "[\"Owner\"]",
+            },
+          },
+        },
       },
       body: "{not valid json",
     } as unknown as APIGatewayProxyEventV2;

@@ -46,7 +46,7 @@ import {
   upsertTraveller,
 } from "../domain/crm/travellers";
 import { Router, parseBody, parseQueryParam } from "./router";
-import { requireAdmin } from "./adminApi";
+import { requireAdmin } from "./adminAccess";
 
 const CreatePartnerBody = z.object({
   canonicalName: z.string().min(1),

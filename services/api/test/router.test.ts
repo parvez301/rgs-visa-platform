@@ -28,7 +28,17 @@ function makeEvent(
       time: "",
       timeEpoch: 0,
       ...(options.sub !== undefined
-        ? { authorizer: { jwt: { claims: { sub: options.sub, email: options.email ?? "" } } } }
+        ? {
+            authorizer: {
+              jwt: {
+                claims: {
+                  sub: options.sub,
+                  email: options.email ?? "",
+                  "cognito:groups": "[\"Owner\"]",
+                },
+              },
+            },
+          }
         : {}),
     } as APIGatewayProxyEventV2["requestContext"],
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
