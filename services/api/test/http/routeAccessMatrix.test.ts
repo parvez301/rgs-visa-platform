@@ -1,4 +1,4 @@
-import type { AdminRole, AdminScreen } from "@rgs/shared";
+import { ADMIN_ROLES, type AdminRole, type AdminScreen } from "@rgs/shared";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { describe, expect, it } from "vitest";
 import { buildAdminRouter } from "../../src/http/adminApi";
@@ -63,19 +63,27 @@ const ROUTE_ACCESS: RouteAccess[] = [
   { method: "DELETE", pathPattern: "/api/v1/admin/crm/agent/memories/{memoryKey}", screen: "crm", mode: "write" },
 ];
 
-const deniedRoleByAccess: Partial<
-  Record<`${AdminScreen}:${RouteAccess["mode"]}`, AdminRole>
-> = {
-  "queue:read": "Finance",
-  "queue:write": "Viewer",
-  "leads:read": "Viewer",
-  "notices:read": "Viewer",
-  "notices:write": "Viewer",
-  "config:read": "Ops",
-  "config:write": "Ops",
-  "crm:write": "Viewer",
-  "crmReview:read": "Viewer",
-  "crmReview:write": "Viewer",
+type AccessClass = `${AdminScreen}:${RouteAccess["mode"]}`;
+
+const ALLOWED_ROLES: Record<AccessClass, readonly AdminRole[]> = {
+  "queue:read": ["Owner", "Ops", "Viewer"],
+  "queue:write": ["Owner", "Ops"],
+  "activity:read": ["Owner", "Ops", "Finance", "Viewer"],
+  "activity:write": ["Owner", "Ops", "Finance"],
+  "leads:read": ["Owner", "Ops"],
+  "leads:write": ["Owner", "Ops"],
+  "notices:read": ["Owner", "Ops"],
+  "notices:write": ["Owner", "Ops"],
+  "config:read": ["Owner"],
+  "config:write": ["Owner"],
+  "crm:read": ["Owner", "Ops", "Finance", "Viewer"],
+  "crm:write": ["Owner", "Ops", "Finance"],
+  "crmReview:read": ["Owner", "Ops"],
+  "crmReview:write": ["Owner", "Ops"],
+  "portalUser:read": ["Owner", "Ops", "Finance", "Viewer"],
+  "portalUser:write": [],
+  "adminUsers:read": ["Owner"],
+  "adminUsers:write": ["Owner"],
 };
 
 function routeKey(route: { method: string; path: string }): string {
@@ -119,15 +127,22 @@ describe("admin route access matrix", () => {
   });
 
   it.each(
-    ROUTE_ACCESS.flatMap((route) => {
-      const deniedRole = deniedRoleByAccess[`${route.screen}:${route.mode}`];
-      return deniedRole === undefined ? [] : [{ ...route, deniedRole }];
-    }),
-  )("$method $pathPattern rejects $deniedRole for $screen $mode", async (route) => {
-    const response = (await router.dispatch(eventFor(route, route.deniedRole))) as {
+    ROUTE_ACCESS.flatMap((route) =>
+      ADMIN_ROLES.map((role) => ({
+        ...route,
+        role,
+        expectedAccess: ALLOWED_ROLES[`${route.screen}:${route.mode}`].includes(role),
+      })),
+    ),
+  )("$method $pathPattern enforces $screen $mode for $role", async (route) => {
+    const response = (await router.dispatch(eventFor(route, route.role))) as {
       statusCode: number;
     };
 
-    expect(response.statusCode).toBe(403);
+    if (route.expectedAccess) {
+      expect(response.statusCode).not.toBe(403);
+    } else {
+      expect(response.statusCode).toBe(403);
+    }
   });
 });
