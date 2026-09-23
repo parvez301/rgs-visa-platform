@@ -1,5 +1,7 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda";
+import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import type { AppContext } from "../lib/context";
+import { AwsCognitoAdmins } from "../lib/cognitoAdmins";
 import { DynamoTableClient } from "../lib/db";
 import { withWriteRetries, writeRetryOptionsFromEnvironment } from "../lib/tableRetry";
 import { S3DocumentStore } from "../lib/documentStore";
@@ -66,6 +68,7 @@ export function buildProductionContext(): AppContext {
     );
   }
   const llmProvider = tryBuildLlmProvider();
+  const adminsUserPoolId = process.env["ADMINS_USER_POOL_ID"];
   return {
     // N11: every write in the process goes through the retry seam, including
     // the migration's -- `cli.ts` builds its context from this same function,
@@ -87,6 +90,14 @@ export function buildProductionContext(): AppContext {
     adminNotificationAddress,
     now: () => new Date(),
     ...(llmProvider !== undefined ? { llm: llmProvider } : {}),
+    ...(adminsUserPoolId !== undefined
+      ? {
+          cognitoAdmins: new AwsCognitoAdmins(
+            new CognitoIdentityProviderClient({}),
+            adminsUserPoolId,
+          ),
+        }
+      : {}),
   };
 }
 

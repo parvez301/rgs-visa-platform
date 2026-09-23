@@ -2,6 +2,7 @@ import { ADMIN_ROLES, type AdminRole, type AdminScreen } from "@rgs/shared";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { describe, expect, it } from "vitest";
 import { buildAdminRouter } from "../../src/http/adminApi";
+import { InMemoryCognitoAdmins } from "../../src/lib/cognitoAdmins";
 import { buildTestContext } from "../helpers";
 
 interface RouteAccess {
@@ -28,6 +29,11 @@ const ROUTE_ACCESS: RouteAccess[] = [
   { method: "GET", pathPattern: "/api/v1/admin/config/countries", screen: "config", mode: "read" },
   { method: "PUT", pathPattern: "/api/v1/admin/config/countries", screen: "config", mode: "write" },
   { method: "POST", pathPattern: "/api/v1/admin/config/seed", screen: "config", mode: "write" },
+  { method: "GET", pathPattern: "/api/v1/admin/staff", screen: "adminUsers", mode: "write" },
+  { method: "POST", pathPattern: "/api/v1/admin/staff", screen: "adminUsers", mode: "write" },
+  { method: "PUT", pathPattern: "/api/v1/admin/staff/{username}/role", screen: "adminUsers", mode: "write" },
+  { method: "POST", pathPattern: "/api/v1/admin/staff/{username}/disable", screen: "adminUsers", mode: "write" },
+  { method: "POST", pathPattern: "/api/v1/admin/staff/{username}/enable", screen: "adminUsers", mode: "write" },
   { method: "GET", pathPattern: "/api/v1/admin/crm/partners", screen: "crm", mode: "read" },
   { method: "POST", pathPattern: "/api/v1/admin/crm/partners", screen: "crm", mode: "write" },
   { method: "POST", pathPattern: "/api/v1/admin/crm/travellers", screen: "crm", mode: "write" },
@@ -114,7 +120,17 @@ function eventFor(route: RouteAccess, role: AdminRole): APIGatewayProxyEventV2 {
 }
 
 describe("admin route access matrix", () => {
-  const router = buildAdminRouter(buildTestContext());
+  const context = buildTestContext();
+  context.cognitoAdmins = new InMemoryCognitoAdmins([
+    {
+      username: "x",
+      email: "x@rgs.test",
+      groups: ["Ops"],
+      status: "CONFIRMED",
+      enabled: true,
+    },
+  ]);
+  const router = buildAdminRouter(context);
 
   it("classifies every registered route exactly once", () => {
     const registeredRouteKeys = router.registeredRoutes.map(routeKey).sort();

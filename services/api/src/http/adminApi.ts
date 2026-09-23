@@ -27,6 +27,7 @@ import { Router, parseBody, parseQueryParam } from "./router";
 import { requireScreen, requireWrite } from "./adminAccess";
 import { registerAgentRoutes } from "./agentApi";
 import { registerCrmRoutes } from "./crmApi";
+import { registerStaffRoutes } from "./staffApi";
 
 const TransitionSchema = z.object({
   toStatus: z.enum(APPLICATION_STATUSES),
@@ -189,5 +190,8 @@ export function buildAdminRouter(context: AppContext): Router {
       const seededCount = await seedCountryConfig(context);
       return { seededCount };
     });
-  return registerAgentRoutes(registerCrmRoutes(adminRouter, context), context);
+  return registerStaffRoutes(
+    registerAgentRoutes(registerCrmRoutes(adminRouter, context), context),
+    context,
+  );
 }
