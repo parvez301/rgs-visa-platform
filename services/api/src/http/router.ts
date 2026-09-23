@@ -6,6 +6,8 @@ import { parseCognitoGroupsClaim } from "./adminAccess";
 export interface RequestContext {
   /** Cognito subject (user or admin id). Empty string for unauthenticated routes. */
   callerId: string;
+  /** Cognito username, which is distinct from both `sub` and email. */
+  callerUsername: string;
   callerEmail: string;
   /** Raw Cognito group names from the JWT claim. */
   roles: string[];
@@ -102,6 +104,8 @@ export class Router {
       }
       const responsePayload = await matchResult.route.handler({
         callerId: jwtClaims["sub"] ?? "",
+        callerUsername:
+          jwtClaims["cognito:username"] ?? jwtClaims["username"] ?? jwtClaims["sub"] ?? "",
         callerEmail: jwtClaims["email"] ?? "",
         roles: parseCognitoGroupsClaim(jwtClaims["cognito:groups"]),
         pathParams: matchResult.pathParams,

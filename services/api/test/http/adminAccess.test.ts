@@ -13,6 +13,7 @@ import { Router, type RequestContext } from "../../src/http/router";
 function ctx(partial: Partial<RequestContext>): RequestContext {
   return {
     callerId: "sub-1",
+    callerUsername: "username-1",
     callerEmail: "a@example.com",
     roles: [],
     pathParams: {},

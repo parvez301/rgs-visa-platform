@@ -43,13 +43,13 @@ export function registerStaffRoutes(
       "PUT",
       "/api/v1/admin/staff/{username}/role",
       async (requestContext) => {
-        const { adminId } = requireRole(requestContext, ["Owner"]);
+        requireRole(requestContext, ["Owner"]);
         const { role } = parseBody(StaffRoleSchema, requestContext.body);
         await setStaffRole(
           requireCognitoAdmins(context),
           requestContext.pathParams["username"]!,
           role,
-          adminId,
+          requestContext.callerUsername,
         );
         return { updated: true };
       },
@@ -58,11 +58,11 @@ export function registerStaffRoutes(
       "POST",
       "/api/v1/admin/staff/{username}/disable",
       async (requestContext) => {
-        const { adminId } = requireRole(requestContext, ["Owner"]);
+        requireRole(requestContext, ["Owner"]);
         await disableStaff(
           requireCognitoAdmins(context),
           requestContext.pathParams["username"]!,
-          adminId,
+          requestContext.callerUsername,
         );
         return { disabled: true };
       },

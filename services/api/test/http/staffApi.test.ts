@@ -27,8 +27,10 @@ function event(
       authorizer: {
         jwt: {
           claims: {
-            sub: role === "Owner" ? "owner-1" : "ops-1",
+            sub: role === "Owner" ? "owner-sub" : "ops-sub",
             email: `${role.toLowerCase()}@rgs.test`,
+            "cognito:username":
+              role === "Owner" ? "owner-cognito-username" : "ops-cognito-username",
             "cognito:groups": JSON.stringify([role]),
           },
         },
@@ -46,7 +48,7 @@ describe("staff admin routes", () => {
     context = buildTestContext();
     cognitoAdmins = new InMemoryCognitoAdmins([
       {
-        username: "owner-1",
+        username: "owner-cognito-username",
         email: "owner@rgs.test",
         groups: ["Owner"],
         status: "CONFIRMED",
@@ -64,7 +66,7 @@ describe("staff admin routes", () => {
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body)).toEqual([
       {
-        username: "owner-1",
+        username: "owner-cognito-username",
         email: "owner@rgs.test",
         role: "Owner",
         status: "CONFIRMED",
@@ -133,6 +135,18 @@ describe("staff admin routes", () => {
 
     expect(response.statusCode).toBe(403);
     expect(await cognitoAdmins.listUsers()).toHaveLength(1);
+  });
+
+  it("uses the Cognito username to prevent an Owner disabling themself", async () => {
+    await cognitoAdmins.adminCreateUser({ email: "other.owner@rgs.test" });
+    await cognitoAdmins.adminAddUserToGroup("other.owner@rgs.test", "Owner");
+
+    const response = (await buildAdminRouter(context).dispatch(
+      event("POST", "/api/v1/admin/staff/owner-cognito-username/disable"),
+    )) as ApiResponse;
+
+    expect(response.statusCode).toBe(400);
+    expect((await cognitoAdmins.adminGetUser("owner-cognito-username")).enabled).toBe(true);
   });
 });
 
