@@ -12,6 +12,10 @@ import { UndoToastProvider } from "../../src/crm/UndoToast";
 import { AgentPanelProvider } from "../../src/crm/agent/AgentPanelProvider";
 import { mountedCell } from "./virtual";
 
+vi.mock("../../src/crm/ledger/BulkActionsBar", () => ({
+  BulkActionsBar: () => <div data-testid="bulk-actions-bar">Bulk actions</div>,
+}));
+
 /**
  * `AdminShell` renders a react-router `<Link>`/`<NavLink>` in its header.
  * `LedgerTable` (Task 12) calls `useLedgerEdit()` unconditionally, which
@@ -67,6 +71,7 @@ vi.mock("../../src/crm/api/hooks", async (importOriginal) => {
 const STILL_LOADING_QUERY = { data: undefined, isLoading: true, isError: false, error: null };
 
 let currentReviewSummaryQuery: unknown = STILL_LOADING_QUERY;
+let currentPrimaryRole: "Owner" | "Viewer" = "Owner";
 
 /**
  * G6: `unreadableReviewItemIds` was hard-coded to `[]` here, which made the one
@@ -87,6 +92,7 @@ function stubReviewSummary(
 
 afterEach(() => {
   currentReviewSummaryQuery = STILL_LOADING_QUERY;
+  currentPrimaryRole = "Owner";
 });
 
 /**
@@ -101,6 +107,8 @@ vi.mock("../../src/lib/auth", () => ({
     isSignedIn: true,
     email: "agent@example.com",
     idToken: "test-id-token",
+    roles: [currentPrimaryRole],
+    primaryRole: currentPrimaryRole,
     needsNewPassword: false,
     signIn: vi.fn(),
     completeNewPassword: vi.fn(),
@@ -171,6 +179,19 @@ const onePartner: crm.Partner = {
 function stubPartners(partners: crm.Partner[] = [onePartner]): void {
   mockedUsePartners.mockReturnValue(fakeQueryResult<crm.Partner[]>({ data: partners }));
 }
+
+describe("LedgerPage — read-only access", () => {
+  it("hides write entry points from Viewers", () => {
+    currentPrimaryRole = "Viewer";
+    stubLedgerLoad();
+    stubPartners();
+
+    renderLedgerPage();
+
+    expect(screen.queryByRole("button", { name: "New case" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bulk-actions-bar")).not.toBeInTheDocument();
+  });
+});
 
 describe("LedgerPage — the partial-ledger banner", () => {
   it("renders no banner on a clean load", () => {

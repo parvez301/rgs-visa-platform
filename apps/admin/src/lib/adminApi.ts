@@ -9,6 +9,7 @@ import type {
   NoticeInput,
   PaymentStatus,
   User,
+  AdminRole,
 } from "@rgs/shared";
 import { unwrapListingResponse } from "@rgs/shared";
 
@@ -66,6 +67,14 @@ export interface ReviewDocumentInput {
   decision: "APPROVED" | "REJECTED";
   userEmail: string;
   rejectReason?: string;
+}
+
+export interface StaffMember {
+  username: string;
+  email: string;
+  role: AdminRole | null;
+  status: string;
+  enabled: boolean;
 }
 
 /**
@@ -238,4 +247,43 @@ export const adminApi = {
       method: "POST",
       idToken,
     }),
+
+  listStaff: (idToken: string) =>
+    apiFetch<StaffMember[]>("/api/v1/admin/staff", { idToken }),
+
+  inviteStaff: (
+    idToken: string,
+    input: { email: string; role: AdminRole },
+  ) =>
+    apiFetch<StaffMember>("/api/v1/admin/staff", {
+      method: "POST",
+      body: input,
+      idToken,
+    }),
+
+  setStaffRole: (
+    idToken: string,
+    username: string,
+    role: AdminRole,
+  ) =>
+    apiFetch<{ updated: boolean }>(
+      `/api/v1/admin/staff/${encodeURIComponent(username)}/role`,
+      {
+        method: "PUT",
+        body: { role },
+        idToken,
+      },
+    ),
+
+  disableStaff: (idToken: string, username: string) =>
+    apiFetch<{ disabled: boolean }>(
+      `/api/v1/admin/staff/${encodeURIComponent(username)}/disable`,
+      { method: "POST", idToken },
+    ),
+
+  enableStaff: (idToken: string, username: string) =>
+    apiFetch<{ enabled: boolean }>(
+      `/api/v1/admin/staff/${encodeURIComponent(username)}/enable`,
+      { method: "POST", idToken },
+    ),
 };

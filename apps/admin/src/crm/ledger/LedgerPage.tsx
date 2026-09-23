@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { crm } from "@rgs/shared";
 import { Link } from "react-router";
+import { useAdminAccess } from "../../lib/adminAccess";
 import { useAuth } from "../../lib/auth";
 import { CrmLayout } from "../CrmLayout";
 import { AgentPanel } from "../agent/AgentPanel";
@@ -78,6 +79,8 @@ function clientFiltersFromView(viewFilters: LedgerFilters): ClientOnlyLedgerFilt
 
 export function LedgerPage() {
   const { email: signedInUserEmail } = useAuth();
+  const { canWrite } = useAdminAccess();
+  const canWriteCrm = canWrite("crm");
   // Default Live work: smaller first fetch and matches the daily work queue.
   const [selectedCaseStatuses, setSelectedCaseStatuses] = useState<crm.CaseStatus[]>([
     ...DEFAULT_LIVE_WORK.filters.statuses,
@@ -231,9 +234,11 @@ export function LedgerPage() {
             <Link to="/crm/review" className={SECONDARY_BUTTON_CLASS}>
               Review queue
             </Link>
-            <button type="button" onClick={() => setIsNewCaseDrawerOpen(true)} className={PRIMARY_BUTTON_CLASS}>
-              New case
-            </button>
+            {canWriteCrm && (
+              <button type="button" onClick={() => setIsNewCaseDrawerOpen(true)} className={PRIMARY_BUTTON_CLASS}>
+                New case
+              </button>
+            )}
           </div>
         </div>
 
@@ -281,7 +286,9 @@ export function LedgerPage() {
           </Link>
         </div>
 
-        {isNewCaseDrawerOpen && <NewCaseDrawer onClose={() => setIsNewCaseDrawerOpen(false)} />}
+        {canWriteCrm && isNewCaseDrawerOpen && (
+          <NewCaseDrawer onClose={() => setIsNewCaseDrawerOpen(false)} />
+        )}
 
         <div className={`${CARD_CLASS} flex flex-col gap-3 px-4 py-3`}>
           <div className="flex flex-wrap items-center gap-2">
@@ -382,7 +389,9 @@ export function LedgerPage() {
           )}
         </div>
 
-        <BulkActionsBar selectedCaseIds={selectedCaseIds} onClearSelection={clearLedgerSelection} />
+        {canWriteCrm && (
+          <BulkActionsBar selectedCaseIds={selectedCaseIds} onClearSelection={clearLedgerSelection} />
+        )}
 
         {isLedgerPartial && (
           <div

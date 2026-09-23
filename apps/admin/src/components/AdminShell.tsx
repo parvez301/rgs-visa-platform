@@ -1,14 +1,21 @@
 import { Link, NavLink } from "react-router";
 import type { ReactNode } from "react";
+import type { AdminScreen } from "@rgs/shared";
+import { useAdminAccess } from "../lib/adminAccess";
 import { useAuth } from "../lib/auth";
 
-const NAV_LINKS = [
-  { label: "Queue", to: "/" },
-  { label: "Activity", to: "/activity" },
-  { label: "Leads", to: "/leads" },
-  { label: "Notices", to: "/notices" },
-  { label: "Config", to: "/config" },
-  { label: "CRM", to: "/crm" },
+const NAV_LINKS: ReadonlyArray<{
+  label: string;
+  to: string;
+  screen: AdminScreen;
+}> = [
+  { label: "Queue", to: "/", screen: "queue" },
+  { label: "Activity", to: "/activity", screen: "activity" },
+  { label: "Leads", to: "/leads", screen: "leads" },
+  { label: "Notices", to: "/notices", screen: "notices" },
+  { label: "Config", to: "/config", screen: "config" },
+  { label: "CRM", to: "/crm", screen: "crm" },
+  { label: "Users", to: "/admin/users", screen: "adminUsers" },
 ] as const;
 
 /**
@@ -25,6 +32,7 @@ export function AdminShell({
   contentWidth?: "default" | "wide" | "full";
 }) {
   const { email, signOut } = useAuth();
+  const { canAccess } = useAdminAccess();
   const widthClass =
     contentWidth === "full" ? "max-w-none" : contentWidth === "wide" ? "max-w-[90rem]" : "max-w-6xl";
   const isCrmWide = contentWidth === "wide";
@@ -45,7 +53,7 @@ export function AdminShell({
             <span className="hidden md:inline text-xs text-paper/60">{email}</span>
           </Link>
           <nav className="flex flex-wrap items-center gap-4 text-sm">
-            {NAV_LINKS.map((navLink) => (
+            {NAV_LINKS.filter((navLink) => canAccess(navLink.screen)).map((navLink) => (
               <NavLink
                 key={navLink.to}
                 to={navLink.to}

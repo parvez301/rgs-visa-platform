@@ -5,6 +5,7 @@ import { AppProviders } from "./AppProviders";
 import { RequireScreen } from "./components/RequireScreen";
 import { useAuth } from "./lib/auth";
 import { ActivityPage } from "./pages/ActivityPage";
+import { AdminUsersPage } from "./pages/AdminUsersPage";
 import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
 import { AuthPage } from "./pages/AuthPage";
 import { ConfigPage } from "./pages/ConfigPage";
@@ -104,6 +105,16 @@ createRoot(document.getElementById("root")!).render(
               <RequireAuth>
                 <RequireScreen screen="portalUser">
                   <UserActivityPage />
+                </RequireScreen>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <RequireAuth>
+                <RequireScreen screen="adminUsers">
+                  <AdminUsersPage />
                 </RequireScreen>
               </RequireAuth>
             }
