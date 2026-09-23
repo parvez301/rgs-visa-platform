@@ -51,12 +51,12 @@ export async function setStaffRole(
     await requireAnotherEnabledOwner(client, username);
   }
 
-  await client.adminAddUserToGroup(username, role);
   for (const existingRole of ADMIN_ROLES) {
     if (existingRole !== role && groups.includes(existingRole)) {
       await client.adminRemoveUserFromGroup(username, existingRole);
     }
   }
+  await client.adminAddUserToGroup(username, role);
 }
 
 export async function disableStaff(

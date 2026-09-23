@@ -58,6 +58,41 @@ describe("Cognito staff domain", () => {
     ]);
   });
 
+  it("leaves no admin role when adding the replacement role fails", async () => {
+    const client = new FaultInjectingCognitoAdmins(
+      [
+        staffUser("staff@example.com", ["Ops", "Viewer", "unrelated"]),
+      ],
+      { failAddGroup: "Finance" },
+    );
+
+    await expect(
+      setStaffRole(client, "staff@example.com", "Finance", "owner@example.com"),
+    ).rejects.toThrow("Injected add failure");
+
+    expect(await client.adminListGroupsForUser("staff@example.com")).toEqual([
+      "unrelated",
+    ]);
+  });
+
+  it("does not add the replacement role when removing an old role fails", async () => {
+    const client = new FaultInjectingCognitoAdmins(
+      [
+        staffUser("staff@example.com", ["Ops", "Viewer", "unrelated"]),
+      ],
+      { failRemoveGroup: "Viewer" },
+    );
+
+    await expect(
+      setStaffRole(client, "staff@example.com", "Finance", "owner@example.com"),
+    ).rejects.toThrow("Injected remove failure");
+
+    expect(await client.adminListGroupsForUser("staff@example.com")).toEqual([
+      "Viewer",
+      "unrelated",
+    ]);
+  });
+
   it("rejects disabling the actor's own account", async () => {
     const client = new InMemoryCognitoAdmins([
       staffUser("owner@example.com", ["Owner"]),
@@ -163,5 +198,37 @@ async function expectApiError(
   } catch (error) {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).statusCode).toBe(statusCode);
+  }
+}
+
+class FaultInjectingCognitoAdmins extends InMemoryCognitoAdmins {
+  constructor(
+    seedUsers: ConstructorParameters<typeof InMemoryCognitoAdmins>[0],
+    private readonly failures: {
+      failAddGroup?: string;
+      failRemoveGroup?: string;
+    },
+  ) {
+    super(seedUsers);
+  }
+
+  override async adminAddUserToGroup(
+    username: string,
+    group: string,
+  ): Promise<void> {
+    if (group === this.failures.failAddGroup) {
+      throw new Error("Injected add failure");
+    }
+    await super.adminAddUserToGroup(username, group);
+  }
+
+  override async adminRemoveUserFromGroup(
+    username: string,
+    group: string,
+  ): Promise<void> {
+    if (group === this.failures.failRemoveGroup) {
+      throw new Error("Injected remove failure");
+    }
+    await super.adminRemoveUserFromGroup(username, group);
   }
 }
