@@ -22,6 +22,12 @@ export interface SesEmailSenderOptions {
    */
   roleArn?: string;
   externalId?: string;
+  /**
+   * SES configuration set to stamp on every send. Without it SES emits no
+   * bounce / complaint / delivery events for the message, so nothing
+   * downstream can ever learn whether it arrived.
+   */
+  configurationSetName?: string;
 }
 
 /**
@@ -78,6 +84,7 @@ export class SesEmailSender implements EmailSender {
       region: options.region,
       roleArn: options.roleArn,
       externalId: options.externalId,
+      configurationSetName: options.configurationSetName,
     });
   }
 
@@ -88,6 +95,7 @@ export class SesEmailSender implements EmailSender {
         fromAddress: this.fromAddress,
         ...this.assumeOptions,
       }));
+    const configurationSetName = this.assumeOptions?.configurationSetName;
     await client.send(
       new SendEmailCommand({
         Source: this.fromAddress,
@@ -96,6 +104,9 @@ export class SesEmailSender implements EmailSender {
           Subject: { Data: email.subject },
           Body: { Text: { Data: email.bodyText } },
         },
+        ...(configurationSetName !== undefined && configurationSetName.trim() !== ""
+          ? { ConfigurationSetName: configurationSetName }
+          : {}),
       }),
     );
   }
