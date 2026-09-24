@@ -148,6 +148,9 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
     if (expectedCollectionDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedCollectionDate)) {
       return "Enter the collection date as a full date.";
     }
+    if (expectedCollectionDate !== "" && expectedCollectionDate < receivedDate) {
+      return "Collection date cannot be before the received date.";
+    }
     const nameMissingIndex = applicantDrafts.findIndex((applicantDraft) => applicantDraft.fullName.trim() === "");
     if (nameMissingIndex !== -1) return `Applicant ${nameMissingIndex + 1} needs a name.`;
     return null;

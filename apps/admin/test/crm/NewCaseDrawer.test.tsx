@@ -177,6 +177,18 @@ describe("NewCaseDrawer", () => {
     expect(screen.queryByText("Landed on the case page")).toBeNull();
   });
 
+  it("refuses a collection date earlier than the received date before sending anything", async () => {
+    const { requestLog } = renderDrawer();
+    await fillTheCommonFields();
+    fireEvent.change(screen.getByLabelText("Partner"), { target: { value: "partner_1" } });
+    fireEvent.change(screen.getByLabelText("Collection date"), { target: { value: "2026-09-15" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create case" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Collection date cannot be before the received date.");
+    expect(requestLog.filter((request) => request.method === "POST")).toHaveLength(0);
+  });
+
   it("sends collection date, entry type, and remarks when filled, and hides entry type off a visa case", async () => {
     const { requestLog } = renderDrawer();
     await fillTheCommonFields();

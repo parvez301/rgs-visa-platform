@@ -198,4 +198,16 @@ describe("updateCaseDetails", () => {
       updateCaseDetails(context, TENANT_ID, "case_missing", { appointmentDate: "2026-10-01" }, ACTOR),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
+
+  it("rejects a collection date earlier than the case's received date", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+
+    await expect(
+      updateCaseDetails(context, TENANT_ID, seeded.caseId, { expectedCollectionDate: "2026-08-31" }, ACTOR),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: "Collection date cannot be before the received date",
+    });
+  });
 });

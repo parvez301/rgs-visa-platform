@@ -138,6 +138,12 @@ export function EditableCell({
   }
 
   if (!isOpen) {
+    // The two chip-backed axes open on a plain click as well as Enter: the
+    // desk asked to change status "directly from the table" (feedback round
+    // 1, 2026-09-24), and a badge that looks like a button should act like
+    // one. The date and visa-type cells keep click-to-focus / Enter-to-edit,
+    // so a click meant to select a row cannot pop a date picker.
+    const opensOnClick = column === "caseStatus" || column === "billingStatus";
     return (
       <div
         onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
@@ -146,6 +152,7 @@ export function EditableCell({
             openEditor();
           }
         }}
+        {...(opensOnClick ? { onClick: openEditor, className: "cursor-pointer" } : {})}
       >
         {renderClosedValue !== undefined ? renderClosedValue() : renderStaticValue(column, row)}
       </div>
