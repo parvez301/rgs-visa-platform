@@ -212,4 +212,34 @@ describe("EditableCell", () => {
 
     expect(onCloseEditor).not.toHaveBeenCalled();
   });
+
+  it("opens the status editor on a plain click of the chip", () => {
+    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    render(<EditableCell column="caseStatus" row={row} onCommit={vi.fn()} isEditing={false} />);
+
+    fireEvent.click(screen.getByText("In progress"));
+
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
+  });
+
+  it("opens the billing editor on a plain click of the chip", () => {
+    const row = buildRow({ billingStatus: "UNBILLED" });
+    render(<EditableCell column="billingStatus" row={row} onCommit={vi.fn()} isEditing={false} />);
+
+    fireEvent.click(screen.getByText("Unbilled"));
+
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
+  });
+
+  it("does not open the appointment date editor on a plain click, only on Enter", () => {
+    const row = buildRow({ appointmentDate: "2026-02-01" });
+    const { container } = render(
+      <EditableCell column="appointmentDate" row={row} onCommit={vi.fn()} isEditing={false} />,
+    );
+
+    fireEvent.click(container.firstElementChild as HTMLElement);
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(container.querySelector("input")).toBeNull();
+  });
 });

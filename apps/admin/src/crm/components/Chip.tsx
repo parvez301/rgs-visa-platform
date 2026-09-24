@@ -74,17 +74,31 @@ export const BILLING_TINTS: Record<crm.BillingStatus, string> = {
 const DATA_DEBT_BORDER = "border border-dashed border-amber-500";
 const SOLID_BORDER = "border border-transparent";
 
-type AnyAxisChipProps =
+/**
+ * `sm` is the default everywhere a chip sits in running text or a sub-row.
+ * `md` is for the Ledger's status column, where the chip IS the control the
+ * desk clicks to move a case (feedback round 1, 2026-09-24: "make the status
+ * badge bigger/clickable") and needs a target the size of a small button.
+ */
+type ChipSize = "sm" | "md";
+const CHIP_SIZE_CLASSES: Record<ChipSize, string> = {
+  sm: "h-6 px-2.5 text-xs",
+  md: "h-7 px-3 text-sm",
+};
+
+type AnyAxisChipProps = (
   | { axis: "caseStatus"; value: crm.CaseStatus }
   | { axis: "custody"; value: crm.CustodyStatus }
   | { axis: "outcome"; value: crm.ApplicantOutcome }
-  | { axis: "billing"; value: crm.BillingStatus };
+  | { axis: "billing"; value: crm.BillingStatus }
+) & { size?: ChipSize };
 
 export function AxisChip(props: AnyAxisChipProps) {
   const { label, tint, isDataDebt } = describeChip(props);
+  const sizeClasses = CHIP_SIZE_CLASSES[props.size ?? "sm"];
   return (
     <span
-      className={`inline-flex h-6 items-center whitespace-nowrap rounded-full px-2.5 text-xs font-semibold leading-none ${tint} ${
+      className={`inline-flex items-center whitespace-nowrap rounded-full font-semibold leading-none ${sizeClasses} ${tint} ${
         isDataDebt ? DATA_DEBT_BORDER : SOLID_BORDER
       }`}
       {...(isDataDebt

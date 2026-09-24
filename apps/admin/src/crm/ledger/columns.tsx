@@ -117,7 +117,7 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
     header: "Status",
     width: 140,
     editable: "caseStatus",
-    render: (row) => <AxisChip axis="caseStatus" value={row.caseStatus} />,
+    render: (row) => <AxisChip axis="caseStatus" value={row.caseStatus} size="md" />,
   },
   {
     key: "billingStatus",

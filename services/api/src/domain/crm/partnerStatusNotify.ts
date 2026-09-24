@@ -1,7 +1,8 @@
-import type { crm } from "@rgs/shared";
+import { COUNTRY_PRODUCTS, type crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
 import { recordCrmEvent } from "./crmEvents";
 import { getPartnerOrThrow } from "./partners";
+import { getTravellerOrThrow } from "./travellers";
 
 /** Desk-facing words for status emails — keep in sync with admin CASE_STATUS_LABELS. */
 const CASE_STATUS_EMAIL_LABELS: Record<crm.CaseStatus, string> = {
@@ -15,6 +16,37 @@ const CASE_STATUS_EMAIL_LABELS: Record<crm.CaseStatus, string> = {
   WITHDRAWN: "Withdrawn",
   DUPLICATE: "Duplicate",
 };
+
+/**
+ * `REF – STATUS – NAME – COUNTRY`: the desk's own filing convention for
+ * status mail (feedback round 1, 2026-09-24), so a partner's inbox sorts and
+ * searches the way their paper files do. NAME is the first applicant plus a
+ * head-count for the rest; COUNTRY is the destination's full name, falling
+ * back to the ISO code when the catalogue has no entry for it.
+ */
+export async function buildStatusEmailSubject(
+  context: AppContext,
+  tenantId: string,
+  crmCase: crm.CrmCase,
+  toStatus: crm.CaseStatus,
+): Promise<string> {
+  const firstApplicant = crmCase.applicants[0];
+  const firstTraveller =
+    firstApplicant === undefined
+      ? undefined
+      : await getTravellerOrThrow(context, tenantId, firstApplicant.travellerId);
+  const extraApplicantCount = crmCase.applicants.length - 1;
+  const applicantName =
+    firstTraveller === undefined
+      ? "Unnamed applicant"
+      : extraApplicantCount > 0
+        ? `${firstTraveller.fullName} +${extraApplicantCount}`
+        : firstTraveller.fullName;
+  const countryName =
+    COUNTRY_PRODUCTS.find((product) => product.countryCode === crmCase.destinationCountry)?.countryName ??
+    crmCase.destinationCountry;
+  return `${crmCase.caseRef} – ${CASE_STATUS_EMAIL_LABELS[toStatus]} – ${applicantName} – ${countryName}`;
+}
 
 /**
  * Best-effort partner email when a case status moves. No contact email → no
@@ -39,7 +71,7 @@ export async function notifyPartnerOfCaseStatusChange(
   const toLabel = CASE_STATUS_EMAIL_LABELS[toStatus];
   await context.email.send({
     toAddress: partner.contactEmail,
-    subject: `Case ${crmCase.caseRef} status update: ${toLabel}`,
+    subject: await buildStatusEmailSubject(context, tenantId, crmCase, toStatus),
     bodyText: [
       `Hello,`,
       ``,

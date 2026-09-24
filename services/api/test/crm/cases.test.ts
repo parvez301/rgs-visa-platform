@@ -246,6 +246,32 @@ describe("crm cases", () => {
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 
+  it("rejects a collection date earlier than the received date", async () => {
+    const context = buildTestContext();
+    const partnerId = await seedPartner(context);
+    const travellerId = await seedTraveller(context, "Asha Rao");
+    await expect(
+      createCase(
+        context,
+        "rgs",
+        {
+          caseRef: "31998",
+          caseType: "VISA",
+          visaType: "TOURIST",
+          partnerId,
+          destinationCountry: "BH",
+          receivedDate: "2026-01-10",
+          expectedCollectionDate: "2026-01-09",
+          applicants: [{ applicantRef: "31998", travellerId }],
+        },
+        "ops@rgs.test",
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: "Collection date cannot be before the received date",
+    });
+  });
+
   it("rejects a VISA case with no visa type", async () => {
     const context = buildTestContext();
     const partnerId = await seedPartner(context);

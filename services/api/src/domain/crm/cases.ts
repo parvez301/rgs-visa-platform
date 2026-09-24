@@ -39,6 +39,18 @@ export interface CreateCaseInput {
   applicants: CreateCaseApplicantInput[];
 }
 
+/**
+ * ISO dates compare as strings. A collection date before the day the desk
+ * received the file is a typo every time (feedback round 1, 2026-09-24), so
+ * both the create and the update path refuse it with the same sentence the
+ * New Case form shows -- one rule, one wording, whichever door it came in.
+ */
+function assertCollectionNotBeforeReceived(receivedDate: string, expectedCollectionDate: string | undefined): void {
+  if (expectedCollectionDate !== undefined && expectedCollectionDate < receivedDate) {
+    throw badRequest("Collection date cannot be before the received date");
+  }
+}
+
 export async function createCase(
   context: AppContext,
   tenantId: string,
@@ -60,6 +72,7 @@ export async function createCase(
     countryChecklist === undefined
       ? []
       : stampDocumentChecklistFromCountry(countryChecklist.requiredDocuments);
+  assertCollectionNotBeforeReceived(input.receivedDate, input.expectedCollectionDate);
   let crmCase: crm.CrmCase;
   try {
     crmCase = crm.CrmCaseSchema.parse({
@@ -200,6 +213,7 @@ export async function updateCaseDetails(
   if (changedFieldNames.length === 0) {
     return currentCase;
   }
+  assertCollectionNotBeforeReceived(currentCase.receivedDate, input.expectedCollectionDate);
 
   // Unwrapped, a ZodError here is not an ApiError, and router.ts maps only
   // ApiError subclasses -- so a caller-supplied date that fails CrmCaseSchema's
