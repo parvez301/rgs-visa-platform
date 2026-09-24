@@ -85,6 +85,7 @@ export function buildProductionContext(): AppContext {
         region: process.env["SES_REGION"],
         roleArn: process.env["SES_ROLE_ARN"],
         externalId: process.env["SES_EXTERNAL_ID"],
+        configurationSetName: process.env["SES_CONFIGURATION_SET"],
       }),
     ),
     adminNotificationAddress,

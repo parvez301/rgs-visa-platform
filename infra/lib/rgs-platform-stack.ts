@@ -18,6 +18,7 @@ import {
   aws_s3 as s3,
   aws_s3_deployment as s3deploy,
 } from "aws-cdk-lib";
+import { SES_CONFIGURATION_SET_NAME } from "./rgs-ses-events-stack";
 
 export interface RgsPlatformStackProps extends cdk.StackProps {
   stage: string;
@@ -137,6 +138,9 @@ export class RgsPlatformStack extends cdk.Stack {
         SES_REGION: "us-east-1",
         SES_ROLE_ARN: "arn:aws:iam::781517218736:role/RgsCrmSesSendRole",
         SES_EXTERNAL_ID: "rgs-crm-ses-send",
+        // Stamped on every send so SES emits delivery/bounce/complaint events
+        // into the RgsSesEvents stack (cloud account). Must match that stack.
+        SES_CONFIGURATION_SET: SES_CONFIGURATION_SET_NAME,
         NODE_OPTIONS: "--enable-source-maps",
       },
     };
