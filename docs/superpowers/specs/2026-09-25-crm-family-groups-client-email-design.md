@@ -1,7 +1,7 @@
 # CRM: family groups, client email, vendor email automation
 
 Date: 2026-09-25
-Status: approved design, not yet implemented
+Status: implemented on branch crm-family-groups (2026-09-25)
 Origin: owner feedback doc "SUGGESTIONS FOR CRM (2)" (2026-09-24), items 1 and 3, plus
 the owner's clarification of 2026-09-25: "group name will be same, but need separate
 reference numbers, separate approve/reject per person; 'Vendor' refers to B2B entity;
