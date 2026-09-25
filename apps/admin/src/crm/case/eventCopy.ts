@@ -46,6 +46,7 @@ export interface CrmEventCopy {
  * | DOCUMENT_CHECKLIST_CHANGED| documentLabel, fromState, toState OR action=stamped | caseDocumentChecklist.ts |
  * | INVOICE_GENERATED         | fileName, totalInr, lineItemCount                   | caseInvoice.ts           |
  * | PARTNER_NOTIFIED          | channel, toAddress, fromStatus, toStatus            | statusNotify.ts          |
+ * | CLIENT_NOTIFIED           | channel, toAddress, fromStatus, toStatus            | statusNotify.ts          |
  * | APPOINTMENT_REMINDER_SENT | channel, toAddress, appointmentDate                 | appointmentReminders.ts  |
  * | LINE_ITEM_ADDED           | lineItemCode, quantity, amountInr (UNIT), lineTotalInr | crm/lineItems.ts:79       |
  * | MEMORY_REMEMBERED         | scope, memoryKey, createdBy                           | crm/memory.ts:179         |
@@ -266,6 +267,18 @@ export function describeCrmEvent(event: CrmEventView): CrmEventCopy {
     case "PARTNER_NOTIFIED":
       return {
         title: `Partner notified by ${actorEmail}`,
+        detail: `Email to ${readMetaString(meta, "toAddress") ?? "unknown"} · ${describeTransition(
+          meta,
+          "fromStatus",
+          "toStatus",
+          CASE_STATUS_LABELS,
+        )}`,
+        isAutoApplied: false,
+      };
+
+    case "CLIENT_NOTIFIED":
+      return {
+        title: `Client notified by ${actorEmail}`,
         detail: `Email to ${readMetaString(meta, "toAddress") ?? "unknown"} · ${describeTransition(
           meta,
           "fromStatus",

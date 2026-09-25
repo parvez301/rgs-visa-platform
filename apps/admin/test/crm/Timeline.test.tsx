@@ -104,6 +104,21 @@ describe("Timeline", () => {
 
     expect(screen.getByText(/Nothing has happened on this case yet/)).toBeInTheDocument();
   });
+
+  it("reads a CLIENT_NOTIFIED event as the client being emailed, with the transition", () => {
+    render(
+      <Timeline
+        events={[
+          { eventId: "e1", eventType: "CLIENT_NOTIFIED", caseId: "case_1", actorEmail: "ops@rgs.test", meta: { channel: "email", toAddress: "priya@example.com", fromStatus: "NEW", toStatus: "IN_PROGRESS" }, createdAt: "2026-03-04T10:00:00.000Z" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Client notified by ops@rgs.test")).toBeInTheDocument();
+    expect(screen.getByText(/Email to priya@example.com/)).toBeInTheDocument();
+    expect(screen.getByText(/New/)).toBeInTheDocument();
+    expect(screen.getByText(/In progress/)).toBeInTheDocument();
+  });
 });
 
 describe("describeCrmEvent", () => {
