@@ -45,7 +45,7 @@ export interface CrmEventCopy {
  * | APPLICANT_OUTCOME_CHANGED | applicantRef, fromOutcome, toOutcome                  | crm/cases.ts:321          |
  * | DOCUMENT_CHECKLIST_CHANGED| documentLabel, fromState, toState OR action=stamped | caseDocumentChecklist.ts |
  * | INVOICE_GENERATED         | fileName, totalInr, lineItemCount                   | caseInvoice.ts           |
- * | PARTNER_NOTIFIED          | channel, toAddress, fromStatus, toStatus            | partnerStatusNotify.ts   |
+ * | PARTNER_NOTIFIED          | channel, toAddress, fromStatus, toStatus            | statusNotify.ts          |
  * | APPOINTMENT_REMINDER_SENT | channel, toAddress, appointmentDate                 | appointmentReminders.ts  |
  * | LINE_ITEM_ADDED           | lineItemCode, quantity, amountInr (UNIT), lineTotalInr | crm/lineItems.ts:79       |
  * | MEMORY_REMEMBERED         | scope, memoryKey, createdBy                           | crm/memory.ts:179         |

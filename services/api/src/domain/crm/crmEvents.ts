@@ -21,6 +21,7 @@ export type CrmEventType =
   | "DOCUMENT_CHECKLIST_CHANGED"
   | "INVOICE_GENERATED"
   | "PARTNER_NOTIFIED"
+  | "CLIENT_NOTIFIED"
   | "APPOINTMENT_REMINDER_SENT";
 
 export interface CrmEvent {

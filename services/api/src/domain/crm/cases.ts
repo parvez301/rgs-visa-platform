@@ -17,7 +17,7 @@ import { getPartnerOrThrow } from "./partners";
 import { getTravellerOrThrow } from "./travellers";
 import { findCountryChecklist } from "./countryChecklist";
 import { stampDocumentChecklistFromCountry } from "./caseDocumentChecklist";
-import { notifyPartnerOfCaseStatusChange } from "./partnerStatusNotify";
+import { notifyOnCaseStatusChange } from "./statusNotify";
 
 export interface CreateCaseApplicantInput {
   applicantRef: string;
@@ -303,7 +303,7 @@ export async function changeCaseStatus(
     fromStatus: currentCase.caseStatus,
     toStatus,
   });
-  await notifyPartnerOfCaseStatusChange(
+  await notifyOnCaseStatusChange(
     context,
     tenantId,
     updatedCase,
@@ -474,7 +474,7 @@ async function applyDerivedCaseStatusIfLegal(
     fromStatus: crmCase.caseStatus,
     toStatus: candidateCaseStatus,
   });
-  await notifyPartnerOfCaseStatusChange(
+  await notifyOnCaseStatusChange(
     context,
     tenantId,
     updatedCase,
