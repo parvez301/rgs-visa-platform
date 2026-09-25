@@ -19,6 +19,9 @@ import { CASE_TYPE_LABELS, ENTRY_TYPE_LABELS, VISA_TYPE_LABELS } from "../labels
 /** The `<select>` value that means "type a partner the ledger has not seen". */
 const NEW_PARTNER_CHOICE = "__new_partner__";
 
+/** A full email address, TLD of 2+ characters -- shared by every email field this drawer validates. */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
 interface ApplicantDraft {
   fullName: string;
   passportNumber: string;
@@ -150,6 +153,14 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
     if (partnerChoice === NEW_PARTNER_CHOICE && newPartnerName.trim() === "") {
       return "Type the new partner's name.";
     }
+    const trimmedNewPartnerEmail = newPartnerEmail.trim();
+    if (
+      partnerChoice === NEW_PARTNER_CHOICE &&
+      trimmedNewPartnerEmail !== "" &&
+      !EMAIL_PATTERN.test(trimmedNewPartnerEmail)
+    ) {
+      return "Enter the partner email as a full address.";
+    }
     if (destinationCountry === "") return "Choose the destination country.";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedDate)) return "Enter the received date as a full date.";
     if (expectedCollectionDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedCollectionDate)) {
@@ -159,7 +170,7 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
       return "Collection date cannot be before the received date.";
     }
     const trimmedClientEmail = clientEmail.trim();
-    if (trimmedClientEmail !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedClientEmail)) {
+    if (trimmedClientEmail !== "" && !EMAIL_PATTERN.test(trimmedClientEmail)) {
       return "Enter the client email as a full address.";
     }
     const nameMissingIndex = applicantDrafts.findIndex((applicantDraft) => applicantDraft.fullName.trim() === "");

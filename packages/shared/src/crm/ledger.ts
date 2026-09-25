@@ -81,6 +81,11 @@ export function summariseApplicants(
  * existed and cases with no resolvable travellers stay indistinguishable
  * from "no search text" rather than carrying an empty string the filter
  * would have to special-case.
+ *
+ * `extraTerms` folds in searchable text that isn't an applicant field --
+ * today, `writeCase` passes the case's `groupName` (when it has one) so a
+ * desk agent can find a case by its family group, not just by traveller name
+ * or passport number.
  */
 export function buildLedgerSearchText(
   applicants: readonly { fullName?: string; passportNumber?: string }[],

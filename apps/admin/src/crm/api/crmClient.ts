@@ -113,7 +113,11 @@ export interface UpdateCaseDetailsBody {
   appointmentDate?: string;
   expectedCollectionDate?: string;
   remarks?: string;
-  /** `null` clears; mirrors `UpdateCaseDetailsBody`'s `.nullable()` on the server. */
+  /**
+   * `null` clears; mirrors `UpdateCaseDetailsBody`'s `.nullable()` in
+   * `services/api/src/http/crmApi.ts`, the server-side schema this interface
+   * is the wire-level mirror of.
+   */
   groupName?: string | null;
   clientEmail?: string | null;
 }

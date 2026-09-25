@@ -189,6 +189,33 @@ describe("NewCaseDrawer", () => {
     expect(requestLog.filter((request) => request.method === "POST")).toHaveLength(0);
   });
 
+  it("refuses a malformed new-partner email before sending anything (F4)", async () => {
+    const { requestLog } = renderDrawer();
+    await fillTheCommonFields();
+    fireEvent.change(screen.getByLabelText("Partner"), { target: { value: "__new_partner__" } });
+    fireEvent.change(screen.getByLabelText("New partner name"), { target: { value: "Walk-in Desk" } });
+    fireEvent.change(screen.getByLabelText("Partner email (optional)"), {
+      target: { value: "desk at skyline" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create case" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter the partner email as a full address.");
+    expect(requestLog.filter((request) => request.method === "POST")).toHaveLength(0);
+  });
+
+  it("refuses a client email with a single-character TLD (F4)", async () => {
+    const { requestLog } = renderDrawer();
+    await fillTheCommonFields();
+    fireEvent.change(screen.getByLabelText("Partner"), { target: { value: "partner_1" } });
+    fireEvent.change(screen.getByLabelText("Client email"), { target: { value: "a@b.c" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create case" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter the client email as a full address.");
+    expect(requestLog.filter((request) => request.method === "POST")).toHaveLength(0);
+  });
+
   it("sends collection date, entry type, and remarks when filled, and hides entry type off a visa case", async () => {
     const { requestLog } = renderDrawer();
     await fillTheCommonFields();

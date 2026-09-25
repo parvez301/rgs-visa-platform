@@ -90,6 +90,7 @@ function renderCasePage(
     caseRecord?: crm.CrmCase & { travellers?: crm.CaseTravellerMap };
     events?: CrmEventView[];
     caseReadFails?: boolean;
+    caseDetailsWriteFails?: boolean;
   } = {},
 ) {
   const caseRecord = options.caseRecord ?? buildCase();
@@ -159,6 +160,13 @@ function renderCasePage(
         ok: true,
         status: 200,
         json: async () => ({ partnerId: "partner_1", canonicalName: "Skyline Travels", ...(requestBody as object) }),
+      });
+    }
+    if (requestMethod === "PUT" && requestUrl.endsWith("/cases/case_1") && options.caseDetailsWriteFails === true) {
+      return Promise.resolve({
+        ok: false,
+        status: 400,
+        json: async () => ({ code: "BAD_REQUEST", message: "clientEmail: Invalid email" }),
       });
     }
     // The case GET, ensure POST, and every axis PUT: answer with the full case.
@@ -522,6 +530,21 @@ describe("CasePage", () => {
     expect(
       requestLog.filter((request) => request.method === "PUT" && request.url.endsWith("/cases/case_1")),
     ).toHaveLength(1);
+  });
+
+  it("reverts the client email draft and reports the failure when the server rejects the save (F3)", async () => {
+    renderCasePage({
+      caseRecord: buildCase({ clientEmail: "old@example.com" }),
+      caseDetailsWriteFails: true,
+    });
+    const clientEmailInput = await screen.findByLabelText("Client email");
+
+    fireEvent.change(clientEmailInput, { target: { value: "priya@example" } });
+    fireEvent.blur(clientEmailInput);
+
+    const failureAlert = await screen.findByRole("alert");
+    expect(failureAlert).toHaveTextContent("Not saved");
+    expect(clientEmailInput).toHaveValue("old@example.com");
   });
 
   it("saves the vendor email through PUT /partners/{partnerId}/contact", async () => {

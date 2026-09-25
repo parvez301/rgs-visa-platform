@@ -79,6 +79,44 @@ describe("listLedgerRows", () => {
     });
   });
 
+  it("projects groupName when the case carries one, and carries no groupName key when it does not (F1)", async () => {
+    const context = buildTestContext();
+    await seedCases(context, [
+      buildCase({ caseId: "case_grouped", groupName: "Sharma Family" }),
+      buildCase({ caseId: "case_solo" }),
+    ]);
+
+    const page = await listLedgerRows(context, TENANT_ID, {
+      statuses: [...crm.CASE_STATUSES],
+      limit: DEFAULT_LEDGER_PAGE_LIMIT,
+    });
+
+    const groupedCaseRow = page.rows.find((row) => row.caseId === "case_grouped");
+    const solitaryCaseRow = page.rows.find((row) => row.caseId === "case_solo");
+    expect(groupedCaseRow?.groupName).toBe("Sharma Family");
+    expect(solitaryCaseRow).not.toHaveProperty("groupName");
+  });
+
+  it("guards that every LedgerRowSchema field is requested by the DynamoDB projection (F1)", () => {
+    // A field added to LedgerRowSchema without a matching entry in
+    // LEDGER_PROJECTED_ATTRIBUTES is silently dropped by DynamoDB's
+    // ProjectionExpression -- the exact bug this guards against (groupName
+    // shipped on the schema but not the projection). If a future field is
+    // legitimately derived rather than stored on the META item, exclude it
+    // here by name with a comment saying why.
+    const schemaFieldNames = Object.keys(crm.LedgerRowSchema.shape);
+    const projectedFieldNames = new Set(LEDGER_PROJECTED_ATTRIBUTES);
+    const unprojectedFieldNames = schemaFieldNames.filter(
+      (fieldName) => !projectedFieldNames.has(fieldName),
+    );
+
+    expect(
+      unprojectedFieldNames,
+      `Add these LedgerRowSchema fields to LEDGER_PROJECTED_ATTRIBUTES in ` +
+        `services/api/src/domain/crm/ledger.ts: ${unprojectedFieldNames.join(", ")}`,
+    ).toEqual([]);
+  });
+
   it("carries the applicant roll-up through", async () => {
     const context = buildTestContext();
     await seedCases(context, [

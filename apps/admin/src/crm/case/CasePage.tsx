@@ -98,13 +98,25 @@ function CaseScreen({ caseId }: { caseId: string }) {
 
   const { idToken } = useAuth();
   const queryClient = useQueryClient();
+  const [clientEmailErrorMessage, setClientEmailErrorMessage] = useState<string | null>(null);
+  const [vendorEmailErrorMessage, setVendorEmailErrorMessage] = useState<string | null>(null);
   const clientEmailMutation = useMutation({
     mutationFn: (clientEmail: string | null) => crmClient.updateCaseDetails(idToken!, caseId, { clientEmail }),
+    onMutate: () => setClientEmailErrorMessage(null),
+    onError: (mutationError) =>
+      setClientEmailErrorMessage(
+        `Not saved: ${mutationError instanceof Error ? mutationError.message : String(mutationError)}`,
+      ),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: crmQueryKeys.case(caseId) }),
   });
   const vendorEmailMutation = useMutation({
     mutationFn: (input: { partnerId: string; contactEmail: string | null }) =>
       crmClient.updatePartnerContact(idToken!, input.partnerId, { contactEmail: input.contactEmail }),
+    onMutate: () => setVendorEmailErrorMessage(null),
+    onError: (mutationError) =>
+      setVendorEmailErrorMessage(
+        `Not saved: ${mutationError instanceof Error ? mutationError.message : String(mutationError)}`,
+      ),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: crmQueryKeys.partners() }),
   });
 
@@ -154,6 +166,8 @@ function CaseScreen({ caseId }: { caseId: string }) {
               onCommitVendorEmail={(contactEmail) =>
                 vendorEmailMutation.mutate({ partnerId: caseRecord.partnerId, contactEmail })
               }
+              clientEmailErrorMessage={clientEmailErrorMessage}
+              vendorEmailErrorMessage={vendorEmailErrorMessage}
             />
 
             <ApplicantsTable
@@ -262,6 +276,8 @@ function CaseHeader({
   onCommitCaseEdit,
   onCommitClientEmail,
   onCommitVendorEmail,
+  clientEmailErrorMessage,
+  vendorEmailErrorMessage,
 }: {
   caseRecord: crm.CrmCase;
   partnerName: string;
@@ -269,6 +285,8 @@ function CaseHeader({
   onCommitCaseEdit: (column: LedgerEditColumn, nextValue: string) => void;
   onCommitClientEmail: (clientEmail: string | null) => void;
   onCommitVendorEmail: (contactEmail: string | null) => void;
+  clientEmailErrorMessage: string | null;
+  vendorEmailErrorMessage: string | null;
 }) {
   const caseStatusOptions = allowedCaseStatusOptions(caseRecord.caseStatus);
   const billingStatusOptions = allowedBillingStatusOptions(caseRecord.billingStatus);
@@ -289,11 +307,23 @@ function CaseHeader({
         <CaseField fieldKey="partner" label="Partner">
           <span className="flex flex-col gap-1">
             <span>{partnerName}</span>
-            <InlineEmailControl label="Vendor email" storedValue={partnerContactEmail} onCommit={onCommitVendorEmail} />
+            <InlineEmailControl
+              label="Vendor email"
+              storedValue={partnerContactEmail}
+              placeholder="Add vendor email"
+              errorMessage={vendorEmailErrorMessage}
+              onCommit={onCommitVendorEmail}
+            />
           </span>
         </CaseField>
         <CaseField fieldKey="clientEmail" label="Client email">
-          <InlineEmailControl label="Client email" storedValue={caseRecord.clientEmail} onCommit={onCommitClientEmail} />
+          <InlineEmailControl
+            label="Client email"
+            storedValue={caseRecord.clientEmail}
+            placeholder="Add client email"
+            errorMessage={clientEmailErrorMessage}
+            onCommit={onCommitClientEmail}
+          />
         </CaseField>
         <CaseField fieldKey="destinationCountry" label="Country">
           {caseRecord.destinationCountry}
@@ -481,19 +511,37 @@ function AppointmentDateControl({
 function InlineEmailControl({
   label,
   storedValue,
+  placeholder,
+  errorMessage,
   onCommit,
 }: {
   label: string;
   storedValue: string | undefined;
+  placeholder: string;
+  errorMessage: string | null;
   onCommit: (confirmedValue: string | null) => void;
 }) {
   const [draftValue, setDraftValue] = useState(storedValue ?? "");
   const [lastSeenStoredValue, setLastSeenStoredValue] = useState(storedValue);
+  const [lastSeenErrorMessage, setLastSeenErrorMessage] = useState(errorMessage);
   const alreadyCommittedValueRef = useRef<string | null | undefined>(undefined);
   if (storedValue !== lastSeenStoredValue) {
     setLastSeenStoredValue(storedValue);
     setDraftValue(storedValue ?? "");
     alreadyCommittedValueRef.current = undefined;
+  }
+  if (errorMessage !== lastSeenErrorMessage) {
+    // A rejected PUT leaves the typed value sitting in the box with no
+    // explanation, and `alreadyCommittedValueRef` would then block a retry of
+    // that same address. On a fresh failure (null -> a message) the draft
+    // reverts to what is actually stored and the "already committed" guard is
+    // cleared, exactly as the `storedValue` block above does for a change
+    // that lands.
+    setLastSeenErrorMessage(errorMessage);
+    if (lastSeenErrorMessage === null && errorMessage !== null) {
+      setDraftValue(storedValue ?? "");
+      alreadyCommittedValueRef.current = undefined;
+    }
   }
 
   function commitDraft() {
@@ -510,24 +558,31 @@ function InlineEmailControl({
   }
 
   return (
-    <input
-      type="email"
-      aria-label={label}
-      value={draftValue}
-      placeholder="Add an address"
-      onChange={(changeEvent) => setDraftValue(changeEvent.target.value)}
-      onBlur={commitDraft}
-      onKeyDown={(keyboardEvent) => {
-        if (keyboardEvent.key === "Enter") {
-          keyboardEvent.preventDefault();
-          commitDraft();
-        } else if (keyboardEvent.key === "Escape") {
-          keyboardEvent.preventDefault();
-          setDraftValue(storedValue ?? "");
-        }
-      }}
-      className={CONTROL_CLASS}
-    />
+    <span className="flex flex-col gap-1">
+      <input
+        type="email"
+        aria-label={label}
+        value={draftValue}
+        placeholder={placeholder}
+        onChange={(changeEvent) => setDraftValue(changeEvent.target.value)}
+        onBlur={commitDraft}
+        onKeyDown={(keyboardEvent) => {
+          if (keyboardEvent.key === "Enter") {
+            keyboardEvent.preventDefault();
+            commitDraft();
+          } else if (keyboardEvent.key === "Escape") {
+            keyboardEvent.preventDefault();
+            setDraftValue(storedValue ?? "");
+          }
+        }}
+        className={CONTROL_CLASS}
+      />
+      {errorMessage !== null && (
+        <p role="alert" className="mb-2 text-sm text-rose-800">
+          {errorMessage}
+        </p>
+      )}
+    </span>
   );
 }
 

@@ -37,6 +37,7 @@ export const LEDGER_PROJECTED_ATTRIBUTES: readonly string[] = [
   "SK",
   "caseId",
   "caseRef",
+  "groupName",
   "partnerId",
   "destinationCountry",
   "caseType",
