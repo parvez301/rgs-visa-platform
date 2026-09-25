@@ -23,6 +23,7 @@ export interface CreateCaseApplicantInput {
   applicantRef: string;
   travellerId: string;
   passportNumber?: string;
+  refNo?: string;
 }
 
 export interface CreateCaseInput {
@@ -36,6 +37,8 @@ export interface CreateCaseInput {
   receivedDate: string;
   expectedCollectionDate?: string;
   remarks?: string;
+  groupName?: string;
+  clientEmail?: string;
   applicants: CreateCaseApplicantInput[];
 }
 
@@ -92,6 +95,8 @@ export async function createCase(
         ? { expectedCollectionDate: input.expectedCollectionDate }
         : {}),
       ...(input.remarks !== undefined ? { remarks: input.remarks } : {}),
+      ...(input.groupName !== undefined ? { groupName: input.groupName } : {}),
+      ...(input.clientEmail !== undefined ? { clientEmail: input.clientEmail } : {}),
       lineItems: [],
       totalInr: 0,
       documentChecklist,
@@ -103,6 +108,7 @@ export async function createCase(
         ...(applicant.passportNumber !== undefined
           ? { passportNumber: applicant.passportNumber }
           : {}),
+        ...(applicant.refNo !== undefined ? { refNo: applicant.refNo } : {}),
         custody: "NOT_HELD",
         outcome: "PENDING",
       })),
@@ -154,6 +160,9 @@ export interface UpdateCaseDetailsInput {
   appointmentDate?: string;
   expectedCollectionDate?: string;
   remarks?: string;
+  /** `null` clears the field; `undefined` leaves it alone. */
+  groupName?: string | null;
+  clientEmail?: string | null;
 }
 
 /**
@@ -205,6 +214,15 @@ export async function updateCaseDetails(
   if (input.remarks !== undefined && input.remarks !== currentCase.remarks) {
     changedFieldNames.push("remarks");
   }
+  // `null` means "clear". Comparing through `?? undefined` makes "clear an
+  // absent field" read as no change, so it neither bumps updatedAt nor
+  // records an event naming a change nobody made.
+  const groupNameChanging =
+    input.groupName !== undefined && (input.groupName ?? undefined) !== currentCase.groupName;
+  if (groupNameChanging) changedFieldNames.push("groupName");
+  const clientEmailChanging =
+    input.clientEmail !== undefined && (input.clientEmail ?? undefined) !== currentCase.clientEmail;
+  if (clientEmailChanging) changedFieldNames.push("clientEmail");
 
   // Nothing moved -- an empty input, or every supplied value already matches
   // what's stored. Returning the case as-is, before the parse/write/event
@@ -221,9 +239,20 @@ export async function updateCaseDetails(
   // bare 500 instead of a 400 naming the problem. Same guard as createCase.
   let updatedCase: crm.CrmCase;
   try {
-    const caseForParse = appointmentDateChanging
-      ? (({ appointmentReminderSentFor: _cleared, ...rest }) => rest)(currentCase)
-      : currentCase;
+    const nextGroupName = groupNameChanging ? (input.groupName ?? undefined) : currentCase.groupName;
+    const nextClientEmail = clientEmailChanging ? (input.clientEmail ?? undefined) : currentCase.clientEmail;
+    const {
+      appointmentReminderSentFor,
+      groupName: _storedGroupName,
+      clientEmail: _storedClientEmail,
+      ...caseBase
+    } = currentCase;
+    const caseForParse = {
+      ...caseBase,
+      ...(appointmentDateChanging || appointmentReminderSentFor === undefined ? {} : { appointmentReminderSentFor }),
+      ...(nextGroupName !== undefined ? { groupName: nextGroupName } : {}),
+      ...(nextClientEmail !== undefined ? { clientEmail: nextClientEmail } : {}),
+    };
     updatedCase = crm.CrmCaseSchema.parse({
       ...caseForParse,
       ...(input.visaType !== undefined ? { visaType: input.visaType } : {}),

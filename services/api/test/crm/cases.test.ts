@@ -1079,3 +1079,39 @@ describe("countCasesByField", () => {
     expect(baseTableReadCount).toBe(0);
   });
 });
+
+describe("createCase family group fields", () => {
+  it("stores groupName, clientEmail and each applicant's refNo", async () => {
+    const context = buildTestContext();
+    const partner = await createPartner(context, "rgs", { canonicalName: "Skyline Travels" }, "ops@rgs.test");
+    const first = await upsertTraveller(context, "rgs", { fullName: "Rahul Sharma" });
+    const second = await upsertTraveller(context, "rgs", { fullName: "Priya Sharma" });
+
+    const created = await createCase(
+      context,
+      "rgs",
+      {
+        caseRef: "RGS-2026-0912",
+        caseType: "VISA",
+        visaType: "TOURIST",
+        partnerId: partner.partnerId,
+        destinationCountry: "FR",
+        receivedDate: "2026-09-20",
+        groupName: "Sharma Family",
+        clientEmail: "priya@example.com",
+        applicants: [
+          { applicantRef: "A1", travellerId: first.travellerId, refNo: "RGS-2026-0912" },
+          { applicantRef: "A2", travellerId: second.travellerId, refNo: "RGS-2026-0913" },
+        ],
+      },
+      "ops@rgs.test",
+    );
+
+    expect(created.groupName).toBe("Sharma Family");
+    expect(created.clientEmail).toBe("priya@example.com");
+    expect(created.applicants.map((applicant) => applicant.refNo)).toEqual(["RGS-2026-0912", "RGS-2026-0913"]);
+
+    const reloaded = await getCase(context, "rgs", created.caseId);
+    expect(reloaded).toEqual(created);
+  });
+});

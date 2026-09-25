@@ -21,7 +21,12 @@ import { resolveLedgerSearchText } from "./ledgerSearchText";
 export async function writeCase(context: AppContext, crmCase: crm.CrmCase): Promise<void> {
   const partitionKey = casePartitionKey(crmCase.tenantId, crmCase.caseId);
   const { applicants, ...caseBody } = crmCase;
-  const searchText = await resolveLedgerSearchText(context, crmCase.tenantId, applicants);
+  const searchText = await resolveLedgerSearchText(
+    context,
+    crmCase.tenantId,
+    applicants,
+    crmCase.groupName === undefined ? [] : [crmCase.groupName],
+  );
 
   await context.table.put({
     PK: partitionKey,

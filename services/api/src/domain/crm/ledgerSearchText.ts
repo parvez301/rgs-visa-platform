@@ -16,6 +16,7 @@ export async function resolveLedgerSearchText(
   context: AppContext,
   tenantId: string,
   applicants: readonly crm.CaseApplicant[],
+  extraTerms: readonly string[] = [],
 ): Promise<string | undefined> {
   const searchParts: { fullName?: string; passportNumber?: string }[] = [];
   for (const applicant of applicants) {
@@ -37,5 +38,5 @@ export async function resolveLedgerSearchText(
       passportNumber: parsedTraveller.data.passportNumber ?? applicant.passportNumber,
     });
   }
-  return crm.buildLedgerSearchText(searchParts);
+  return crm.buildLedgerSearchText(searchParts, extraTerms);
 }

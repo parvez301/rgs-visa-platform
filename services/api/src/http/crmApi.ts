@@ -69,12 +69,15 @@ const CreateCaseBody = z.object({
   receivedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   expectedCollectionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   remarks: z.string().trim().min(1).max(2000).optional(),
+  groupName: z.string().trim().min(1).max(120).optional(),
+  clientEmail: z.string().trim().email().optional(),
   applicants: z
     .array(
       z.object({
         applicantRef: z.string().min(1),
         travellerId: z.string().min(1),
         passportNumber: z.string().optional(),
+        refNo: z.string().trim().min(1).max(40).optional(),
       }),
     )
     .min(1),
@@ -105,6 +108,8 @@ const UpdateCaseDetailsBody = z.object({
   appointmentDate: isoDateBody.optional(),
   expectedCollectionDate: isoDateBody.optional(),
   remarks: z.string().trim().min(1).max(2000).optional(),
+  groupName: z.string().trim().min(1).max(120).nullable().optional(),
+  clientEmail: z.string().trim().email().nullable().optional(),
 });
 
 const CaseStatusBody = z.object({ toStatus: z.enum(crm.CASE_STATUSES) });

@@ -383,4 +383,13 @@ describe("writeCase applicantSummary", () => {
       outcome: { PENDING: 1 },
     });
   });
+
+  it("stamps the group name into searchText so the ledger can find a family by name", async () => {
+    const context = buildTestContext();
+    await writeCase(context, buildCase({ groupName: "Sharma Family" } as Partial<crm.CrmCase>));
+
+    const metaItem = await context.table.get(casePartitionKey("rgs", "case_1"), META_SORT_KEY);
+    expect(String(metaItem!["searchText"])).toContain("sharma family");
+    expect(metaItem!["groupName"]).toBe("Sharma Family");
+  });
 });

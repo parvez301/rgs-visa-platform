@@ -210,4 +210,56 @@ describe("updateCaseDetails", () => {
       message: "Collection date cannot be before the received date",
     });
   });
+
+  it("sets and then clears groupName and clientEmail", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+
+    const withFields = await updateCaseDetails(
+      context,
+      TENANT_ID,
+      seeded.caseId,
+      { groupName: "Rao Family", clientEmail: "asha@example.com" },
+      ACTOR,
+    );
+    expect(withFields.groupName).toBe("Rao Family");
+    expect(withFields.clientEmail).toBe("asha@example.com");
+
+    const cleared = await updateCaseDetails(
+      context,
+      TENANT_ID,
+      seeded.caseId,
+      { groupName: null, clientEmail: null },
+      ACTOR,
+    );
+    expect(cleared).not.toHaveProperty("groupName");
+    expect(cleared).not.toHaveProperty("clientEmail");
+
+    const events = await listCaseEvents(context, TENANT_ID, seeded.caseId);
+    const updateEvents = events.filter((event) => event.eventType === "CASE_UPDATED");
+    expect(updateEvents.map((event) => event.meta["changedFields"])).toEqual([
+      "groupName,clientEmail",
+      "groupName,clientEmail",
+    ]);
+  });
+
+  it("treats clearing an already-absent clientEmail as no change", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+
+    const unchanged = await updateCaseDetails(context, TENANT_ID, seeded.caseId, { clientEmail: null }, ACTOR);
+
+    expect(unchanged.updatedAt).toBe(seeded.updatedAt);
+    const events = await listCaseEvents(context, TENANT_ID, seeded.caseId);
+    expect(events.some((event) => event.eventType === "CASE_UPDATED")).toBe(false);
+  });
+
+  it("rejects a malformed clientEmail with a 400 naming the field", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+
+    await expect(
+      updateCaseDetails(context, TENANT_ID, seeded.caseId, { clientEmail: "not an address" }, ACTOR),
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining("clientEmail") });
+  });
 });
