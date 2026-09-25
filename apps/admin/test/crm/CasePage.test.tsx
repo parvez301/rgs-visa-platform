@@ -87,7 +87,7 @@ function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
 
 function renderCasePage(
   options: {
-    caseRecord?: crm.CrmCase;
+    caseRecord?: crm.CrmCase & { travellers?: crm.CaseTravellerMap };
     events?: CrmEventView[];
     caseReadFails?: boolean;
   } = {},
@@ -154,6 +154,13 @@ function renderCasePage(
         }),
       });
     }
+    if (requestMethod === "PUT" && requestUrl.includes("/partners/") && requestUrl.endsWith("/contact")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ partnerId: "partner_1", canonicalName: "Skyline Travels", ...(requestBody as object) }),
+      });
+    }
     // The case GET, ensure POST, and every axis PUT: answer with the full case.
     return Promise.resolve({ ok: true, status: 200, json: async () => caseRecord });
   });
@@ -209,7 +216,7 @@ describe("CasePage", () => {
 
     // Shared fields: present once each, at the top, never on an applicant row.
     expect(screen.getAllByText("Skyline Travels")).toHaveLength(1);
-    expect(screen.getByText("desk@skyline.test")).toBeInTheDocument();
+    expect(screen.getByLabelText("Vendor email")).toHaveValue("desk@skyline.test");
     expect(screen.getAllByText("Visa · Tourist")).toHaveLength(1);
     expect(screen.getAllByText("2026-03-01")).toHaveLength(1);
 
@@ -440,5 +447,77 @@ describe("CasePage", () => {
 
     const timelineEntry = await screen.findByTestId("timeline-entry");
     expect(within(timelineEntry).getByText(/Applied automatically/)).toBeInTheDocument();
+  });
+
+  it("shows the group name beside the REF and each applicant's REF NO and name", async () => {
+    renderCasePage({
+      caseRecord: {
+        ...buildCase({
+          groupName: "Sharma Family",
+          applicants: [
+            { applicantRef: "A1", travellerId: "trv_1", refNo: "RGS-2026-0912", custody: "WITH_RGS", outcome: "PENDING" },
+            { applicantRef: "A2", travellerId: "trv_2", custody: "WITH_RGS", outcome: "PENDING" },
+          ],
+        }),
+        travellers: { trv_1: { fullName: "Rahul Sharma" } },
+      },
+    });
+
+    await screen.findByRole("heading", { name: "RGS-1001" });
+    expect(screen.getByText("Sharma Family")).toBeInTheDocument();
+
+    const applicantRows = screen.getAllByTestId("case-applicant-row");
+    expect(within(applicantRows[0]!).getByText("RGS-2026-0912")).toBeInTheDocument();
+    expect(within(applicantRows[0]!).getByText("Rahul Sharma")).toBeInTheDocument();
+    // No refNo on a multi-applicant case falls back to the internal ref; no
+    // traveller in the map falls back to the shared placeholder.
+    expect(within(applicantRows[1]!).getByText("A2")).toBeInTheDocument();
+    expect(within(applicantRows[1]!).getByText("Unnamed applicant")).toBeInTheDocument();
+  });
+
+  it("saves the client email on blur through PUT /cases/{caseId} and clears it with null", async () => {
+    const { requestLog } = renderCasePage({ caseRecord: buildCase({ clientEmail: "old@example.com" }) });
+    const clientEmailInput = await screen.findByLabelText("Client email");
+    expect(clientEmailInput).toHaveValue("old@example.com");
+
+    fireEvent.change(clientEmailInput, { target: { value: " priya@example.com " } });
+    fireEvent.blur(clientEmailInput);
+    await waitFor(() =>
+      expect(
+        requestLog.find((request) => request.method === "PUT" && request.url.endsWith("/cases/case_1")),
+      ).toMatchObject({ body: { clientEmail: "priya@example.com" } }),
+    );
+
+    fireEvent.change(clientEmailInput, { target: { value: "" } });
+    fireEvent.blur(clientEmailInput);
+    await waitFor(() =>
+      expect(
+        requestLog.filter((request) => request.method === "PUT" && request.url.endsWith("/cases/case_1")).at(-1),
+      ).toMatchObject({ body: { clientEmail: null } }),
+    );
+  });
+
+  it("does not write when the client email is unchanged on blur", async () => {
+    const { requestLog } = renderCasePage({ caseRecord: buildCase({ clientEmail: "old@example.com" }) });
+    const clientEmailInput = await screen.findByLabelText("Client email");
+
+    fireEvent.blur(clientEmailInput);
+
+    expect(requestLog.filter((request) => request.method === "PUT")).toHaveLength(0);
+  });
+
+  it("saves the vendor email through PUT /partners/{partnerId}/contact", async () => {
+    const { requestLog } = renderCasePage();
+    const vendorEmailInput = await screen.findByLabelText("Vendor email");
+    expect(vendorEmailInput).toHaveValue("desk@skyline.test");
+
+    fireEvent.change(vendorEmailInput, { target: { value: "ops@skyline.test" } });
+    fireEvent.keyDown(vendorEmailInput, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(
+        requestLog.find((request) => request.method === "PUT" && request.url.endsWith("/partners/partner_1/contact")),
+      ).toMatchObject({ body: { contactEmail: "ops@skyline.test" } }),
+    );
   });
 });

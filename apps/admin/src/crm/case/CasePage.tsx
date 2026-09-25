@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { crm } from "@rgs/shared";
 import { useAuth } from "../../lib/auth";
 import { CrmLayout } from "../CrmLayout";
@@ -13,8 +14,8 @@ import {
   type ApplicantEdit,
   type ApplicantEditAxis,
 } from "../api/applicantMutations";
-import { crmClient } from "../api/crmClient";
-import { useCase, useCaseEvents, usePartners } from "../api/hooks";
+import { crmClient, type CaseView } from "../api/crmClient";
+import { crmQueryKeys, useCase, useCaseEvents, usePartners } from "../api/hooks";
 import { describeLedgerEditValue, useLedgerEdit, type LedgerEditColumn } from "../api/mutations";
 import {
   BILLING_LABELS,
@@ -95,6 +96,18 @@ function CaseScreen({ caseId }: { caseId: string }) {
     resolveConflict: resolveApplicantConflict,
   } = useApplicantEdit();
 
+  const { idToken } = useAuth();
+  const queryClient = useQueryClient();
+  const clientEmailMutation = useMutation({
+    mutationFn: (clientEmail: string | null) => crmClient.updateCaseDetails(idToken!, caseId, { clientEmail }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: crmQueryKeys.case(caseId) }),
+  });
+  const vendorEmailMutation = useMutation({
+    mutationFn: (input: { partnerId: string; contactEmail: string | null }) =>
+      crmClient.updatePartnerContact(idToken!, input.partnerId, { contactEmail: input.contactEmail }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: crmQueryKeys.partners() }),
+  });
+
   const caseRecord = caseQuery.data;
 
   return (
@@ -137,10 +150,15 @@ function CaseScreen({ caseId }: { caseId: string }) {
                   nextValue,
                 })
               }
+              onCommitClientEmail={(clientEmail) => clientEmailMutation.mutate(clientEmail)}
+              onCommitVendorEmail={(contactEmail) =>
+                vendorEmailMutation.mutate({ partnerId: caseRecord.partnerId, contactEmail })
+              }
             />
 
             <ApplicantsTable
               caseRecord={caseRecord}
+              travellers={caseRecord.travellers}
               onCommitApplicantEdit={(edit) => void commitApplicantEdit(edit)}
             />
 
@@ -242,11 +260,15 @@ function CaseHeader({
   partnerName,
   partnerContactEmail,
   onCommitCaseEdit,
+  onCommitClientEmail,
+  onCommitVendorEmail,
 }: {
   caseRecord: crm.CrmCase;
   partnerName: string;
   partnerContactEmail?: string;
   onCommitCaseEdit: (column: LedgerEditColumn, nextValue: string) => void;
+  onCommitClientEmail: (clientEmail: string | null) => void;
+  onCommitVendorEmail: (contactEmail: string | null) => void;
 }) {
   const caseStatusOptions = allowedCaseStatusOptions(caseRecord.caseStatus);
   const billingStatusOptions = allowedBillingStatusOptions(caseRecord.billingStatus);
@@ -256,18 +278,22 @@ function CaseHeader({
     <header className={`${CARD_CLASS} flex flex-col gap-5 p-5`}>
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="mrz text-2xl font-bold tracking-normal text-ink">{caseRecord.caseRef}</h1>
+        {caseRecord.groupName !== undefined && (
+          <span className="text-base font-semibold text-ink-soft">{caseRecord.groupName}</span>
+        )}
         <AxisChip axis="caseStatus" value={caseRecord.caseStatus} />
         <AxisChip axis="billing" value={caseRecord.billingStatus} />
       </div>
 
       <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
         <CaseField fieldKey="partner" label="Partner">
-          <span className="flex flex-col gap-0.5">
+          <span className="flex flex-col gap-1">
             <span>{partnerName}</span>
-            {partnerContactEmail !== undefined && partnerContactEmail !== "" && (
-              <span className="text-xs text-ink-soft">{partnerContactEmail}</span>
-            )}
+            <InlineEmailControl label="Vendor email" storedValue={partnerContactEmail} onCommit={onCommitVendorEmail} />
           </span>
+        </CaseField>
+        <CaseField fieldKey="clientEmail" label="Client email">
+          <InlineEmailControl label="Client email" storedValue={caseRecord.clientEmail} onCommit={onCommitClientEmail} />
         </CaseField>
         <CaseField fieldKey="destinationCountry" label="Country">
           {caseRecord.destinationCountry}
@@ -445,16 +471,71 @@ function AppointmentDateControl({
 }
 
 /**
- * R45 again (Task 13's ruling, unchanged here): a `CaseApplicant` carries no
- * name. The name lives on a separate `CrmTraveller` record this app has no
- * route to read by `travellerId`, so this renders what exists --
- * `applicantRef`, passport, custody, outcome, courier -- and invents nothing.
+ * One email address, committed when the human confirms it: the
+ * `AppointmentDateControl` contract (blur or Enter commits, Escape reverts,
+ * an unchanged draft is not a write). Unlike the date, an EMPTY draft IS a
+ * write: it is how the desk clears an address, and `onCommit` receives
+ * `null` for it so the caller sends `null`, never `""`, which the server
+ * would reject as a malformed address.
+ */
+function InlineEmailControl({
+  label,
+  storedValue,
+  onCommit,
+}: {
+  label: string;
+  storedValue: string | undefined;
+  onCommit: (confirmedValue: string | null) => void;
+}) {
+  const [draftValue, setDraftValue] = useState(storedValue ?? "");
+  const [lastSeenStoredValue, setLastSeenStoredValue] = useState(storedValue);
+  if (storedValue !== lastSeenStoredValue) {
+    setLastSeenStoredValue(storedValue);
+    setDraftValue(storedValue ?? "");
+  }
+
+  function commitDraft() {
+    const trimmedDraft = draftValue.trim();
+    if (trimmedDraft === (storedValue ?? "")) return;
+    onCommit(trimmedDraft === "" ? null : trimmedDraft);
+  }
+
+  return (
+    <input
+      type="email"
+      aria-label={label}
+      value={draftValue}
+      placeholder="Add an address"
+      onChange={(changeEvent) => setDraftValue(changeEvent.target.value)}
+      onBlur={commitDraft}
+      onKeyDown={(keyboardEvent) => {
+        if (keyboardEvent.key === "Enter") {
+          keyboardEvent.preventDefault();
+          commitDraft();
+        } else if (keyboardEvent.key === "Escape") {
+          keyboardEvent.preventDefault();
+          setDraftValue(storedValue ?? "");
+        }
+      }}
+      className={CONTROL_CLASS}
+    />
+  );
+}
+
+/**
+ * Names arrive on the single-case read (`CaseView.travellers`, spec
+ * 2026-09-25 D7), which lifts the old R45 ruling on evidence. A traveller the
+ * server could not resolve shows the shared "Unnamed applicant" placeholder;
+ * a mutation response without the map falls back the same way until the
+ * refetch lands.
  */
 function ApplicantsTable({
   caseRecord,
+  travellers,
   onCommitApplicantEdit,
 }: {
   caseRecord: crm.CrmCase;
+  travellers: crm.CaseTravellerMap | undefined;
   onCommitApplicantEdit: (edit: ApplicantEdit) => void;
 }) {
   return (
@@ -463,7 +544,8 @@ function ApplicantsTable({
         <table className="w-full border-collapse text-left text-sm">
           <thead>
             <tr className="mrz border-b border-line bg-mist text-[10px] text-ink-soft">
-              <th className="px-4 py-2.5 font-medium">Applicant</th>
+              <th className="px-4 py-2.5 font-medium">REF NO</th>
+              <th className="px-4 py-2.5 font-medium">Name</th>
               <th className="px-4 py-2.5 font-medium">Passport</th>
               <th className="px-4 py-2.5 font-medium">Custody</th>
               <th className="px-4 py-2.5 font-medium">Outcome</th>
@@ -477,7 +559,10 @@ function ApplicantsTable({
                 data-testid="case-applicant-row"
                 className="border-t border-line"
               >
-                <td className="px-4 py-2.5 font-medium text-ink">{applicant.applicantRef}</td>
+                <td className="mrz px-4 py-2.5 text-xs font-semibold text-ink">
+                  {crm.displayApplicantRef(caseRecord.caseRef, caseRecord.applicants.length, applicant)}
+                </td>
+                <td className="px-4 py-2.5 font-medium text-ink">{crm.displayApplicantName(travellers, applicant)}</td>
                 <td className="px-4 py-2.5 text-ink-soft">
                   {applicant.passportNumber === undefined ? (
                     "No passport on file"
