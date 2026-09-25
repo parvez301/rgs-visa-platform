@@ -36,6 +36,7 @@ const ROUTE_ACCESS: RouteAccess[] = [
   { method: "POST", pathPattern: "/api/v1/admin/staff/{username}/enable", screen: "adminUsers", mode: "write" },
   { method: "GET", pathPattern: "/api/v1/admin/crm/partners", screen: "crm", mode: "read" },
   { method: "POST", pathPattern: "/api/v1/admin/crm/partners", screen: "crm", mode: "write" },
+  { method: "PUT", pathPattern: "/api/v1/admin/crm/partners/{partnerId}/contact", screen: "crm", mode: "write" },
   { method: "POST", pathPattern: "/api/v1/admin/crm/travellers", screen: "crm", mode: "write" },
   { method: "GET", pathPattern: "/api/v1/admin/crm/travellers/by-passport/{passportNumber}", screen: "crm", mode: "read" },
   { method: "GET", pathPattern: "/api/v1/admin/crm/travellers/by-name/{fullName}", screen: "crm", mode: "read" },

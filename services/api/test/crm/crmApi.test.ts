@@ -1470,4 +1470,36 @@ describe("crm cases family group fields over HTTP", () => {
 
     expect(rejected.statusCode).toBe(400);
   });
+
+  it("updates a partner's contact email through PUT /partners/{partnerId}/contact", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const { payload: partner } = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Skyline Travels",
+    });
+
+    const response = await call(router, "PUT", `/api/v1/admin/crm/partners/${partner.partnerId}/contact`, {
+      contactEmail: "desk@skyline.test",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.contactEmail).toBe("desk@skyline.test");
+
+    const listing = await call(router, "GET", "/api/v1/admin/crm/partners");
+    expect(listing.payload.partners[0].contactEmail).toBe("desk@skyline.test");
+  });
+
+  it("rejects a malformed contact email on the partner contact route with 400", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const { payload: partner } = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Skyline Travels",
+    });
+
+    const response = await call(router, "PUT", `/api/v1/admin/crm/partners/${partner.partnerId}/contact`, {
+      contactEmail: "desk at skyline",
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
 });

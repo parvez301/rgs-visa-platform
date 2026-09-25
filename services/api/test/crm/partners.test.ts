@@ -8,6 +8,7 @@ import {
   findPartnerByName,
   getPartnerOrThrow,
   listPartners,
+  updatePartnerContact,
 } from "../../src/domain/crm/partners";
 
 /**
@@ -491,5 +492,43 @@ describe("crm partners", () => {
     expect(reloaded.contactPhone).toBe("+919810000001");
     expect(reloaded.contactEmail).toBe("desk@ozzytravels.test");
     expect(reloaded.contactWhatsapp).toBe("+919810000002");
+  });
+
+  describe("updatePartnerContact", () => {
+    it("sets the contact email on a partner created without one, leaving everything else intact", async () => {
+      const context = buildTestContext();
+      const created = await createPartner(context, "rgs", { canonicalName: "Skyline Travels", aliases: ["Skyline"] }, "ops@rgs.test");
+
+      const updated = await updatePartnerContact(context, "rgs", created.partnerId, { contactEmail: "desk@skyline.test" });
+
+      expect(updated.contactEmail).toBe("desk@skyline.test");
+      expect(updated.canonicalName).toBe("Skyline Travels");
+      expect(updated.aliases).toEqual(["Skyline"]);
+      expect(await getPartnerOrThrow(context, "rgs", created.partnerId)).toEqual(updated);
+      // The listing index key survives the rewrite: the partner is still findable by name.
+      expect((await findPartnerByName(context, "rgs", "Skyline Travels"))?.partnerId).toBe(created.partnerId);
+    });
+
+    it("clears a contact field when given null and leaves an omitted field alone", async () => {
+      const context = buildTestContext();
+      const created = await createPartner(
+        context,
+        "rgs",
+        { canonicalName: "Ozzy Travels", contactEmail: "old@ozzy.test", contactPhone: "+91 98100 00000" },
+        "ops@rgs.test",
+      );
+
+      const updated = await updatePartnerContact(context, "rgs", created.partnerId, { contactEmail: null });
+
+      expect(updated).not.toHaveProperty("contactEmail");
+      expect(updated.contactPhone).toBe("+91 98100 00000");
+    });
+
+    it("404s for a partner that does not exist", async () => {
+      const context = buildTestContext();
+      await expect(
+        updatePartnerContact(context, "rgs", "prt_missing", { contactEmail: "x@y.test" }),
+      ).rejects.toMatchObject({ statusCode: 404 });
+    });
   });
 });

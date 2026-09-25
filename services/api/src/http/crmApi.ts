@@ -32,7 +32,7 @@ import {
   resolveReviewGroup,
   type ResolveReviewGroupInput,
 } from "../domain/crm/reviewGroups";
-import { createPartner, listPartners } from "../domain/crm/partners";
+import { createPartner, listPartners, updatePartnerContact } from "../domain/crm/partners";
 import {
   getReviewItemOrThrow,
   listReviewItems,
@@ -56,6 +56,12 @@ const CreatePartnerBody = z.object({
   contactPhone: z.string().optional(),
   contactEmail: z.string().email().optional(),
   contactWhatsapp: z.string().optional(),
+});
+
+const UpdatePartnerContactBody = z.object({
+  contactEmail: z.string().trim().email().nullable().optional(),
+  contactPhone: z.string().trim().min(1).nullable().optional(),
+  contactWhatsapp: z.string().trim().min(1).nullable().optional(),
 });
 
 const CreateCaseBody = z.object({
@@ -193,6 +199,11 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       requireWrite(requestContext, "crm");
       const body = parseBody(CreatePartnerBody, requestContext.body);
       return createPartner(context, tenantId, body, requestContext.callerEmail);
+    })
+    .add("PUT", "/api/v1/admin/crm/partners/{partnerId}/contact", async (requestContext) => {
+      requireWrite(requestContext, "crm");
+      const body = parseBody(UpdatePartnerContactBody, requestContext.body);
+      return updatePartnerContact(context, tenantId, requestContext.pathParams["partnerId"]!, body);
     })
     .add("POST", "/api/v1/admin/crm/travellers", async (requestContext) => {
       requireWrite(requestContext, "crm");

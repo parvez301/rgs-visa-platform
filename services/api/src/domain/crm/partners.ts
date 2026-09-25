@@ -173,6 +173,58 @@ function parseStoredPartner(partnerItem: TableItem): crm.Partner {
   );
 }
 
+export interface UpdatePartnerContactInput {
+  /** `null` clears the field; `undefined` leaves it alone. */
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  contactWhatsapp?: string | null;
+}
+
+/**
+ * The desk types a vendor's email onto the system by hand (owner, 2026-09-25),
+ * usually well after the partner was created by the importer with no contact
+ * details at all. Only the three contact fields move; the name, aliases and
+ * type have their own rules and stay exactly as stored. The raw item is
+ * re-put with its GSI1 keys intact so the partner stays listed and findable.
+ */
+export async function updatePartnerContact(
+  context: AppContext,
+  tenantId: string,
+  partnerId: string,
+  input: UpdatePartnerContactInput,
+): Promise<crm.Partner> {
+  const partnerItem = await context.table.get(partnerPartitionKey(tenantId, partnerId), META_SORT_KEY);
+  if (!partnerItem) throw notFound("Partner");
+  const currentPartner = parseStoredPartner(partnerItem);
+
+  const { contactEmail: _email, contactPhone: _phone, contactWhatsapp: _whatsapp, ...partnerWithoutContact } = currentPartner;
+  const resolveField = (next: string | null | undefined, current: string | undefined): string | undefined =>
+    next === undefined ? current : next === null ? undefined : next;
+  const contactEmail = resolveField(input.contactEmail, currentPartner.contactEmail);
+  const contactPhone = resolveField(input.contactPhone, currentPartner.contactPhone);
+  const contactWhatsapp = resolveField(input.contactWhatsapp, currentPartner.contactWhatsapp);
+
+  const updatedPartner = crm.PartnerSchema.parse({
+    ...partnerWithoutContact,
+    ...(contactEmail !== undefined ? { contactEmail } : {}),
+    ...(contactPhone !== undefined ? { contactPhone } : {}),
+    ...(contactWhatsapp !== undefined ? { contactWhatsapp } : {}),
+  });
+
+  // `TableItem` (lib/db.ts) types PK/SK as strings and GSI1PK/GSI1SK as
+  // optional strings, so these read back typed. GSI1SK is the canonical name
+  // key createPartner stored; it is not on PartnerSchema and must be carried
+  // over by hand or the partner drops out of every by-name lookup.
+  await context.table.put({
+    PK: partnerItem.PK,
+    SK: partnerItem.SK,
+    GSI1PK: partnerListGsi1Pk(tenantId),
+    ...(partnerItem.GSI1SK !== undefined ? { GSI1SK: partnerItem.GSI1SK } : {}),
+    ...updatedPartner,
+  });
+  return updatedPartner;
+}
+
 /** The aliases on a raw stored item, ignoring anything that is not a string. */
 function storedAliasesOf(partnerItem: Record<string, unknown>): string[] {
   const storedAliases = partnerItem["aliases"];
