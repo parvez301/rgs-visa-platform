@@ -22,9 +22,10 @@ const NEW_PARTNER_CHOICE = "__new_partner__";
 interface ApplicantDraft {
   fullName: string;
   passportNumber: string;
+  refNo: string;
 }
 
-const EMPTY_APPLICANT: ApplicantDraft = { fullName: "", passportNumber: "" };
+const EMPTY_APPLICANT: ApplicantDraft = { fullName: "", passportNumber: "", refNo: "" };
 
 /** Today in the desk's own calendar, not UTC's -- a case received at 1am IST is received today. */
 function todayIsoDate(): string {
@@ -70,6 +71,8 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
   const [receivedDate, setReceivedDate] = useState(todayIsoDate);
   const [expectedCollectionDate, setExpectedCollectionDate] = useState("");
   const [remarks, setRemarks] = useState("");
+  const [groupName, setGroupName] = useState("");
+  const [clientEmail, setClientEmail] = useState("");
   const [applicantDrafts, setApplicantDrafts] = useState<ApplicantDraft[]>([EMPTY_APPLICANT]);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
 
@@ -106,10 +109,12 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
             fullName: applicantDraft.fullName.trim(),
             ...(passportNumber === undefined ? {} : { passportNumber }),
           }));
+        const refNo = applicantDraft.refNo.trim();
         applicants.push({
           applicantRef: `A${applicantIndex + 1}`,
           travellerId: traveller.travellerId,
           ...(passportNumber === undefined ? {} : { passportNumber }),
+          ...(refNo === "" ? {} : { refNo }),
         });
       }
 
@@ -124,6 +129,8 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
         receivedDate,
         ...(expectedCollectionDate !== "" ? { expectedCollectionDate } : {}),
         ...(trimmedRemarks !== "" ? { remarks: trimmedRemarks } : {}),
+        ...(groupName.trim() !== "" ? { groupName: groupName.trim() } : {}),
+        ...(clientEmail.trim() !== "" ? { clientEmail: clientEmail.trim() } : {}),
         applicants,
       });
     },
@@ -150,6 +157,10 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
     }
     if (expectedCollectionDate !== "" && expectedCollectionDate < receivedDate) {
       return "Collection date cannot be before the received date.";
+    }
+    const trimmedClientEmail = clientEmail.trim();
+    if (trimmedClientEmail !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedClientEmail)) {
+      return "Enter the client email as a full address.";
     }
     const nameMissingIndex = applicantDrafts.findIndex((applicantDraft) => applicantDraft.fullName.trim() === "");
     if (nameMissingIndex !== -1) return `Applicant ${nameMissingIndex + 1} needs a name.`;
@@ -181,6 +192,7 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
         aria-modal="true"
         aria-labelledby="new-case-title"
         onSubmit={submit}
+        noValidate
         className="crm-root fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col bg-paper shadow-2xl"
       >
         <header className="flex items-start justify-between gap-4 border-b border-line px-6 py-5">
@@ -350,10 +362,32 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
             />
           </label>
 
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className={FIELD_LABEL_CLASS}>Group name</span>
+              <input
+                value={groupName}
+                onChange={(changeEvent) => setGroupName(changeEvent.target.value)}
+                placeholder="e.g. Sharma Family (optional)"
+                className={FIELD_CLASS}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className={FIELD_LABEL_CLASS}>Client email</span>
+              <input
+                type="email"
+                value={clientEmail}
+                onChange={(changeEvent) => setClientEmail(changeEvent.target.value)}
+                placeholder="For status updates (optional)"
+                className={FIELD_CLASS}
+              />
+            </label>
+          </div>
+
           <fieldset className="flex flex-col gap-3">
             <legend className="mb-2 text-sm font-semibold text-ink">Applicants</legend>
             {applicantDrafts.map((applicantDraft, applicantIndex) => (
-              <div key={applicantIndex} className="grid gap-3 rounded-xl border border-line bg-mist/50 p-3 sm:grid-cols-[1fr_1fr_auto]">
+              <div key={applicantIndex} className="grid gap-3 rounded-xl border border-line bg-mist/50 p-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
                 <label className="flex flex-col gap-1">
                   <span className={FIELD_LABEL_CLASS}>Applicant {applicantIndex + 1} name</span>
                   <input
@@ -371,6 +405,15 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
                       updateApplicant(applicantIndex, { passportNumber: changeEvent.target.value })
                     }
                     placeholder="Optional"
+                    className={`${FIELD_CLASS} mrz`}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className={FIELD_LABEL_CLASS}>Applicant {applicantIndex + 1} REF NO</span>
+                  <input
+                    value={applicantDraft.refNo}
+                    onChange={(changeEvent) => updateApplicant(applicantIndex, { refNo: changeEvent.target.value })}
+                    placeholder="Own REF (optional)"
                     className={`${FIELD_CLASS} mrz`}
                   />
                 </label>

@@ -235,4 +235,55 @@ describe("NewCaseDrawer", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("sends group name, trimmed client email and each applicant's REF NO", async () => {
+    const { requestLog } = renderDrawer();
+    await fillTheCommonFields();
+    fireEvent.change(screen.getByLabelText("Partner"), { target: { value: "partner_1" } });
+    fireEvent.change(screen.getByLabelText("Group name"), { target: { value: "  Sharma Family " } });
+    fireEvent.change(screen.getByLabelText("Client email"), { target: { value: "  Priya@Example.com " } });
+    fireEvent.change(screen.getByLabelText("Applicant 1 REF NO"), { target: { value: " RGS-2026-0912 " } });
+    fireEvent.click(screen.getByRole("button", { name: "Add another applicant" }));
+    fireEvent.change(screen.getByLabelText("Applicant 2 name"), { target: { value: "Priya Sharma" } });
+    fireEvent.change(screen.getByLabelText("Applicant 2 REF NO"), { target: { value: "RGS-2026-0913" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create case" }));
+    await screen.findByText("Landed on the case page");
+
+    const caseWrite = requestLog.find((request) => request.method === "POST" && request.url.endsWith("/cases"));
+    expect(caseWrite!.body).toMatchObject({
+      groupName: "Sharma Family",
+      clientEmail: "Priya@Example.com",
+      applicants: [
+        { applicantRef: "A1", refNo: "RGS-2026-0912" },
+        { applicantRef: "A2", refNo: "RGS-2026-0913" },
+      ],
+    });
+  });
+
+  it("omits group name, client email and REF NO when left blank", async () => {
+    const { requestLog } = renderDrawer();
+    await fillTheCommonFields();
+    fireEvent.change(screen.getByLabelText("Partner"), { target: { value: "partner_1" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create case" }));
+    await screen.findByText("Landed on the case page");
+
+    const caseWrite = requestLog.find((request) => request.method === "POST" && request.url.endsWith("/cases"));
+    expect(caseWrite!.body).not.toHaveProperty("groupName");
+    expect(caseWrite!.body).not.toHaveProperty("clientEmail");
+    expect((caseWrite!.body as { applicants: object[] }).applicants[0]).not.toHaveProperty("refNo");
+  });
+
+  it("refuses a client email with no @ before sending anything", async () => {
+    const { requestLog } = renderDrawer();
+    await fillTheCommonFields();
+    fireEvent.change(screen.getByLabelText("Partner"), { target: { value: "partner_1" } });
+    fireEvent.change(screen.getByLabelText("Client email"), { target: { value: "priya at example" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create case" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Enter the client email as a full address.");
+    expect(requestLog.filter((request) => request.method === "POST")).toHaveLength(0);
+  });
 });
