@@ -45,8 +45,15 @@ function countryNameOf(destinationCountry: string): string {
  * `REF – STATUS – NAME – COUNTRY`: the desk's own filing convention for
  * status mail (feedback round 1, 2026-09-24). NAME is the group name when the
  * case has one (spec 2026-09-25 §5.2), otherwise the first applicant plus a
- * head-count for the rest.
+ * head-count for the rest. Built exactly once here so the exported async
+ * wrapper below and `notifyOnCaseStatusChange` can never drift apart (fix
+ * round 1, 2026-09-25).
  */
+function subjectFor(crmCase: crm.CrmCase, toStatus: crm.CaseStatus, travellers: crm.CaseTravellerMap): string {
+  return `${crmCase.caseRef} – ${CASE_STATUS_EMAIL_LABELS[toStatus]} – ${subjectName(crmCase, travellers)} – ${countryNameOf(crmCase.destinationCountry)}`;
+}
+
+/** Async wrapper around `subjectFor` for callers that only have a caseId's applicants to resolve. */
 export async function buildStatusEmailSubject(
   context: AppContext,
   tenantId: string,
@@ -54,7 +61,7 @@ export async function buildStatusEmailSubject(
   toStatus: crm.CaseStatus,
 ): Promise<string> {
   const travellers = await resolveCaseTravellers(context, tenantId, crmCase.applicants);
-  return `${crmCase.caseRef} – ${CASE_STATUS_EMAIL_LABELS[toStatus]} – ${subjectName(crmCase, travellers)} – ${countryNameOf(crmCase.destinationCountry)}`;
+  return subjectFor(crmCase, toStatus, travellers);
 }
 
 function subjectName(crmCase: crm.CrmCase, travellers: crm.CaseTravellerMap): string {
@@ -116,7 +123,7 @@ export async function notifyOnCaseStatusChange(
 ): Promise<void> {
   const partner = await getPartnerOrThrow(context, tenantId, crmCase.partnerId);
   const travellers = await resolveCaseTravellers(context, tenantId, crmCase.applicants);
-  const subject = `${crmCase.caseRef} – ${CASE_STATUS_EMAIL_LABELS[toStatus]} – ${subjectName(crmCase, travellers)} – ${countryNameOf(crmCase.destinationCountry)}`;
+  const subject = subjectFor(crmCase, toStatus, travellers);
   const bodyText = buildStatusEmailBody(crmCase, fromStatus, toStatus, travellers);
 
   const recipients: { eventType: "PARTNER_NOTIFIED" | "CLIENT_NOTIFIED"; toAddress: string | undefined }[] = [

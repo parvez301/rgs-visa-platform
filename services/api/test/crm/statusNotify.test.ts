@@ -4,7 +4,7 @@ import { changeCaseStatus, createCase, updateCaseDetails } from "../../src/domai
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import { META_SORT_KEY, travellerPartitionKey } from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
-import { buildStatusEmailBody } from "../../src/domain/crm/statusNotify";
+import { buildStatusEmailBody, buildStatusEmailSubject } from "../../src/domain/crm/statusNotify";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 
 const TENANT_ID = "rgs";
@@ -390,5 +390,29 @@ describe("status-change email", () => {
         "— Rays Global Services",
       ].join("\n"),
     );
+  });
+
+  it("builds the same subject through the exported buildStatusEmailSubject wrapper, resolving travellers itself", async () => {
+    const context = buildTestContext();
+    const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" }, ACTOR);
+    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
+    const created = await createCase(
+      context,
+      TENANT_ID,
+      {
+        caseRef: "RGS-MAIL-8",
+        caseType: "VISA",
+        partnerId: partner.partnerId,
+        destinationCountry: "AE",
+        visaType: "TOURIST",
+        receivedDate: "2026-09-16",
+        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
+      },
+      ACTOR,
+    );
+
+    const subject = await buildStatusEmailSubject(context, TENANT_ID, created, "IN_PROGRESS");
+
+    expect(subject).toBe("RGS-MAIL-8 – In progress – Asha Rao – United Arab Emirates");
   });
 });
