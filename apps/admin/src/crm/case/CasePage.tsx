@@ -108,7 +108,7 @@ function CaseScreen({ caseId }: { caseId: string }) {
     onSettled: () => void queryClient.invalidateQueries({ queryKey: crmQueryKeys.partners() }),
   });
 
-  const caseRecord = caseQuery.data;
+  const caseRecord: CaseView | undefined = caseQuery.data;
 
   return (
     // R62: the Case screen's "selection" is the one case it is showing.
@@ -489,15 +489,24 @@ function InlineEmailControl({
 }) {
   const [draftValue, setDraftValue] = useState(storedValue ?? "");
   const [lastSeenStoredValue, setLastSeenStoredValue] = useState(storedValue);
+  const alreadyCommittedValueRef = useRef<string | null | undefined>(undefined);
   if (storedValue !== lastSeenStoredValue) {
     setLastSeenStoredValue(storedValue);
     setDraftValue(storedValue ?? "");
+    alreadyCommittedValueRef.current = undefined;
   }
 
   function commitDraft() {
     const trimmedDraft = draftValue.trim();
     if (trimmedDraft === (storedValue ?? "")) return;
-    onCommit(trimmedDraft === "" ? null : trimmedDraft);
+    const confirmedValue = trimmedDraft === "" ? null : trimmedDraft;
+    // Enter commits and then the input is usually blurred (by the human, or by
+    // the browser). Without this the second event would send the same address
+    // a second time, because the optimistic patch that makes `storedValue`
+    // agree is a microtask behind.
+    if (alreadyCommittedValueRef.current === confirmedValue) return;
+    alreadyCommittedValueRef.current = confirmedValue;
+    onCommit(confirmedValue);
   }
 
   return (

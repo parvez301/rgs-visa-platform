@@ -506,6 +506,24 @@ describe("CasePage", () => {
     expect(requestLog.filter((request) => request.method === "PUT")).toHaveLength(0);
   });
 
+  it("commits the client email once, not twice, when Enter is followed by blur", async () => {
+    const { requestLog } = renderCasePage({ caseRecord: buildCase({ clientEmail: "old@example.com" }) });
+    const clientEmailInput = await screen.findByLabelText("Client email");
+
+    fireEvent.change(clientEmailInput, { target: { value: "priya@example.com" } });
+    fireEvent.keyDown(clientEmailInput, { key: "Enter" });
+    fireEvent.blur(clientEmailInput);
+
+    await waitFor(() =>
+      expect(
+        requestLog.find((request) => request.method === "PUT" && request.url.endsWith("/cases/case_1")),
+      ).toMatchObject({ body: { clientEmail: "priya@example.com" } }),
+    );
+    expect(
+      requestLog.filter((request) => request.method === "PUT" && request.url.endsWith("/cases/case_1")),
+    ).toHaveLength(1);
+  });
+
   it("saves the vendor email through PUT /partners/{partnerId}/contact", async () => {
     const { requestLog } = renderCasePage();
     const vendorEmailInput = await screen.findByLabelText("Vendor email");
