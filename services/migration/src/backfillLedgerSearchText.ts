@@ -74,6 +74,7 @@ export async function backfillLedgerSearchText(
         context,
         tenantId,
         loadedCase.applicants,
+        loadedCase.groupName === undefined ? [] : [loadedCase.groupName],
       );
       const storedSearchText =
         typeof storedMetaItem?.["searchText"] === "string" ? storedMetaItem["searchText"] : undefined;

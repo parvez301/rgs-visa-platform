@@ -90,4 +90,24 @@ describe("backfillLedgerSearchText", () => {
 
     expect(secondReport).toMatchObject({ scanned: 1, written: 0, alreadyCurrent: 1 });
   });
+
+  it("is re-runnable for a case with a groupName: a second run writes nothing", async () => {
+    const context = buildContext();
+    const crmCase = await seedCaseWithTravellers(context, "case_1");
+    // writeCase already folded groupName into searchText on the seed write
+    // (caseStore.ts). The point of this test is that resolveLedgerSearchText,
+    // called fresh here on the second run, must compute that same text --
+    // not a shorter one missing the group name -- or every re-run rewrites
+    // every grouped case forever.
+    await writeCase(context, { ...crmCase, groupName: "Rao Family" });
+
+    const firstReport = await backfillLedgerSearchText(context, "rgs");
+    expect(firstReport).toMatchObject({ scanned: 1, alreadyCurrent: 1 });
+
+    const secondReport = await backfillLedgerSearchText(context, "rgs");
+
+    expect(secondReport).toMatchObject({ scanned: 1, written: 0, alreadyCurrent: 1 });
+    const metaItem = await context.table.get(casePartitionKey("rgs", "case_1"), META_SORT_KEY);
+    expect(String(metaItem?.["searchText"])).toContain("rao family");
+  });
 });

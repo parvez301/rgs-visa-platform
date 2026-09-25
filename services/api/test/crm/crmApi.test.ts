@@ -1367,3 +1367,107 @@ describe("GET /api/v1/admin/crm/review/summary", () => {
     expect(statusCode).toBe(403);
   });
 });
+
+describe("crm cases family group fields over HTTP", () => {
+  it("trims groupName, clientEmail and applicant refNo on create", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Skyline Travels",
+    });
+    const travellerId = await seedTraveller(router, "Rahul Sharma");
+
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "RGS-2026-0912",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "FR",
+      visaType: "TOURIST",
+      receivedDate: "2026-09-20",
+      groupName: "  Sharma Family ",
+      clientEmail: " priya@example.com ",
+      applicants: [{ applicantRef: "A1", travellerId, refNo: " RGS-2026-0912 " }],
+    });
+
+    expect(created.statusCode).toBe(200);
+    expect(created.payload.groupName).toBe("Sharma Family");
+    expect(created.payload.clientEmail).toBe("priya@example.com");
+    expect(created.payload.applicants[0].refNo).toBe("RGS-2026-0912");
+  });
+
+  it("clears groupName and clientEmail over PUT when sent as null", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Skyline Travels",
+    });
+    const travellerId = await seedTraveller(router, "Priya Sharma");
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "RGS-2026-0913",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "FR",
+      visaType: "TOURIST",
+      receivedDate: "2026-09-20",
+      groupName: "Sharma Family",
+      clientEmail: "priya@example.com",
+      applicants: [{ applicantRef: "A1", travellerId }],
+    });
+    const caseId = created.payload.caseId;
+
+    const cleared = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}`, {
+      groupName: null,
+      clientEmail: null,
+    });
+
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.payload).not.toHaveProperty("groupName");
+    expect(cleared.payload).not.toHaveProperty("clientEmail");
+  });
+
+  it("returns 400 for a malformed clientEmail on PUT", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Skyline Travels",
+    });
+    const travellerId = await seedTraveller(router, "Priya Sharma");
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "RGS-2026-0914",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "FR",
+      visaType: "TOURIST",
+      receivedDate: "2026-09-20",
+      applicants: [{ applicantRef: "A1", travellerId }],
+    });
+    const caseId = created.payload.caseId;
+
+    const rejected = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}`, {
+      clientEmail: "not an address",
+    });
+
+    expect(rejected.statusCode).toBe(400);
+  });
+
+  it("returns 400 for an applicant refNo over 40 characters on create", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Skyline Travels",
+    });
+    const travellerId = await seedTraveller(router, "Rahul Sharma");
+
+    const rejected = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "RGS-2026-0915",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "FR",
+      visaType: "TOURIST",
+      receivedDate: "2026-09-20",
+      applicants: [{ applicantRef: "A1", travellerId, refNo: "R".repeat(41) }],
+    });
+
+    expect(rejected.statusCode).toBe(400);
+  });
+});
