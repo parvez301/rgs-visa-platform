@@ -87,3 +87,34 @@ describe("LedgerRowSchema", () => {
     ).toThrow();
   });
 });
+
+describe("LedgerRow groupName", () => {
+  it("accepts an optional groupName on the row", () => {
+    const row = LedgerRowSchema.parse({
+      caseId: "case_1",
+      caseRef: "RGS-1",
+      partnerId: "partner_1",
+      destinationCountry: "AE",
+      caseType: "VISA",
+      caseStatus: "NEW",
+      billingStatus: "UNBILLED",
+      receivedDate: "2026-09-01",
+      totalInr: 0,
+      updatedAt: "2026-09-01T00:00:00.000Z",
+      groupName: "Sharma Family",
+    });
+    expect(row.groupName).toBe("Sharma Family");
+  });
+});
+
+describe("buildLedgerSearchText extra terms", () => {
+  it("appends lowercased extra terms after the applicant tokens", () => {
+    expect(
+      buildLedgerSearchText([{ fullName: "Asha Rao", passportNumber: "Z1" }], ["Sharma Family"]),
+    ).toBe("asha rao z1 sharma family");
+  });
+
+  it("ignores blank extra terms and still returns undefined when nothing is searchable", () => {
+    expect(buildLedgerSearchText([], ["  "])).toBeUndefined();
+  });
+});

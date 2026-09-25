@@ -290,6 +290,46 @@ describe("CrmMemorySchema", () => {
   });
 });
 
+describe("family group fields", () => {
+  it("round-trips groupName, clientEmail and a per-applicant refNo", () => {
+    const parsed = CrmCaseSchema.parse({
+      ...validCase,
+      groupName: "Sharma Family",
+      clientEmail: "priya@example.com",
+      applicants: [{ ...validApplicant, refNo: "RGS-2026-0912" }],
+    });
+    expect(parsed.groupName).toBe("Sharma Family");
+    expect(parsed.clientEmail).toBe("priya@example.com");
+    expect(parsed.applicants[0]!.refNo).toBe("RGS-2026-0912");
+  });
+
+  it("trims groupName and clientEmail", () => {
+    const parsed = CrmCaseSchema.parse({
+      ...validCase,
+      groupName: "  Sharma Family ",
+      clientEmail: " priya@example.com ",
+    });
+    expect(parsed.groupName).toBe("Sharma Family");
+    expect(parsed.clientEmail).toBe("priya@example.com");
+  });
+
+  it("rejects a clientEmail that is not an email address", () => {
+    expect(() => CrmCaseSchema.parse({ ...validCase, clientEmail: "priya at example" })).toThrow();
+  });
+
+  it("rejects a groupName over 120 characters and a refNo over 40", () => {
+    expect(() => CrmCaseSchema.parse({ ...validCase, groupName: "x".repeat(121) })).toThrow();
+    expect(() => CaseApplicantSchema.parse({ ...validApplicant, refNo: "x".repeat(41) })).toThrow();
+  });
+
+  it("leaves every one of the three fields absent when not supplied", () => {
+    const parsed = CrmCaseSchema.parse(validCase);
+    expect(parsed).not.toHaveProperty("groupName");
+    expect(parsed).not.toHaveProperty("clientEmail");
+    expect(parsed.applicants[0]).not.toHaveProperty("refNo");
+  });
+});
+
 describe("line item catalog", () => {
   it("knows the services the workbook already sells", () => {
     expect(getLineItemDefinition("PHOTO_MAKING")?.kind).toBe("ADDON");

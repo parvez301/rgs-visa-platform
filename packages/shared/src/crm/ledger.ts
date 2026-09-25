@@ -84,6 +84,7 @@ export function summariseApplicants(
  */
 export function buildLedgerSearchText(
   applicants: readonly { fullName?: string; passportNumber?: string }[],
+  extraTerms: readonly string[] = [],
 ): string | undefined {
   const tokens: string[] = [];
   for (const applicant of applicants) {
@@ -91,6 +92,10 @@ export function buildLedgerSearchText(
     if (fullName !== undefined && fullName.length > 0) tokens.push(fullName);
     const passportNumber = applicant.passportNumber?.trim().toLowerCase();
     if (passportNumber !== undefined && passportNumber.length > 0) tokens.push(passportNumber);
+  }
+  for (const extraTerm of extraTerms) {
+    const normalizedTerm = extraTerm.trim().toLowerCase();
+    if (normalizedTerm.length > 0) tokens.push(normalizedTerm);
   }
   if (tokens.length === 0) return undefined;
   return [...new Set(tokens)].join(" ");
@@ -119,6 +124,7 @@ export const LedgerRowSchema = z.object({
   destinationCountry: z.string().regex(/^[A-Z]{2}$/, "expected ISO-3166 alpha-2"),
   caseType: z.enum(CASE_TYPES),
   visaType: z.enum(VISA_TYPES).optional(),
+  groupName: z.string().min(1).optional(),
   caseStatus: z.enum(CASE_STATUSES),
   billingStatus: z.enum(BILLING_STATUSES),
   receivedDate: isoDate,

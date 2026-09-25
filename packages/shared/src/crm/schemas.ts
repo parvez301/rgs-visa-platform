@@ -83,6 +83,12 @@ export type LineItem = z.infer<typeof LineItemSchema>;
 
 export const CaseApplicantSchema = z.object({
   applicantRef: z.string().min(1),
+  /**
+   * The person's own REF NO, typed by the desk (spec 2026-09-25 D4). Optional:
+   * a single-applicant case leaves it blank and shows `caseRef`. `applicantRef`
+   * above stays the internal key.
+   */
+  refNo: z.string().trim().min(1).max(40).optional(),
   travellerId: z.string().min(1),
   passportNumber: z.string().optional(),
   custody: z.enum(CUSTODY_STATUSES).default("NOT_HELD"),
@@ -125,6 +131,10 @@ export const CrmCaseSchema = z
     expectedCollectionDate: isoDate.optional(),
     courierDate: isoDate.optional(),
     remarks: z.string().trim().min(1).max(2000).optional(),
+    /** "Sharma Family": one name over every applicant on the case (spec 2026-09-25 D1). */
+    groupName: z.string().trim().min(1).max(120).optional(),
+    /** The client's address for status mail, typed by the desk (spec 2026-09-25 D3). */
+    clientEmail: z.string().trim().email().optional(),
     lineItems: z.array(LineItemSchema).default([]),
     totalInr: z.number().int().nonnegative().default(0),
     /**
