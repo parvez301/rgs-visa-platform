@@ -85,6 +85,7 @@ export type CrmEventType =
   | "DOCUMENT_CHECKLIST_CHANGED"
   | "INVOICE_GENERATED"
   | "PARTNER_NOTIFIED"
+  | "CLIENT_NOTIFIED"
   | "APPOINTMENT_REMINDER_SENT";
 
 export interface CrmEventView {
@@ -112,6 +113,22 @@ export interface UpdateCaseDetailsBody {
   appointmentDate?: string;
   expectedCollectionDate?: string;
   remarks?: string;
+  /** `null` clears; mirrors `UpdateCaseDetailsBody`'s `.nullable()` on the server. */
+  groupName?: string | null;
+  clientEmail?: string | null;
+}
+
+/**
+ * `GET /cases/{caseId}` (crmApi.ts) attaches the resolved traveller names.
+ * Optional on the type because every mutation route still answers a bare
+ * CrmCase, and an optimistic patch spreads whatever the cache held.
+ */
+export type CaseView = crm.CrmCase & { travellers?: crm.CaseTravellerMap };
+
+export interface UpdatePartnerContactInput {
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  contactWhatsapp?: string | null;
 }
 
 /** Mirrors `OpenReviewSummaryEntry` (services/api/src/domain/crm/reviewQueue.ts). */
@@ -194,7 +211,9 @@ export interface CreateCaseInput {
   receivedDate: string;
   expectedCollectionDate?: string;
   remarks?: string;
-  applicants: Array<{ applicantRef: string; travellerId: string; passportNumber?: string }>;
+  groupName?: string;
+  clientEmail?: string;
+  applicants: Array<{ applicantRef: string; travellerId: string; passportNumber?: string; refNo?: string }>;
 }
 
 export interface CreatePartnerInput {
@@ -357,6 +376,14 @@ export const crmClient = {
     return apiFetch<crm.Partner>(`${CRM_BASE}/partners`, { method: "POST", body: input, idToken });
   },
 
+  updatePartnerContact(idToken: string, partnerId: string, input: UpdatePartnerContactInput): Promise<crm.Partner> {
+    return apiFetch<crm.Partner>(`${CRM_BASE}/partners/${encodeURIComponent(partnerId)}/contact`, {
+      method: "PUT",
+      body: input,
+      idToken,
+    });
+  },
+
   upsertTraveller(idToken: string, input: UpsertTravellerInput): Promise<crm.CrmTraveller> {
     return apiFetch<crm.CrmTraveller>(`${CRM_BASE}/travellers`, { method: "POST", body: input, idToken });
   },
@@ -374,8 +401,8 @@ export const crmClient = {
     }
   },
 
-  getCase(idToken: string, caseId: string): Promise<crm.CrmCase> {
-    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}`, { idToken });
+  getCase(idToken: string, caseId: string): Promise<CaseView> {
+    return apiFetch<CaseView>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}`, { idToken });
   },
 
   async listCaseEvents(idToken: string, caseId: string): Promise<CrmEventView[]> {

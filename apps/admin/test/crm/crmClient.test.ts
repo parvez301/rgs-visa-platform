@@ -330,3 +330,27 @@ describe("crmClient.listMemories", () => {
     expect(listing.unreadableMemoryKeys).toEqual(["mem_bad"]);
   });
 });
+
+describe("crmClient.updatePartnerContact", () => {
+  it("PUTs to /partners/{partnerId}/contact with the id encoded and the body as given", async () => {
+    const recorded = stubFetch([{ partnerId: "prt_1", canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" }]);
+
+    const partner = await crmClient.updatePartnerContact("token", "prt 1/x", { contactEmail: "desk@skyline.test" });
+
+    expect(partner.contactEmail).toBe("desk@skyline.test");
+    expect(recorded[0]).toMatchObject({
+      method: "PUT",
+      url: expect.stringMatching(/\/api\/v1\/admin\/crm\/partners\/prt%201%2Fx\/contact$/),
+      body: { contactEmail: "desk@skyline.test" },
+      authorization: "Bearer token",
+    });
+  });
+
+  it("sends null through untouched so the server clears the address", async () => {
+    const recorded = stubFetch([{ partnerId: "prt_1", canonicalName: "Skyline Travels" }]);
+
+    await crmClient.updatePartnerContact("token", "prt_1", { contactEmail: null });
+
+    expect(recorded[0]!.body).toEqual({ contactEmail: null });
+  });
+});
