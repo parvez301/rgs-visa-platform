@@ -94,10 +94,7 @@ describe("ApplicantSubRows", () => {
     const applicantRows = screen.getAllByTestId("applicant-subrow");
     expect(applicantRows).toHaveLength(2);
 
-    // R45: the line is keyed by `applicantRef`, NOT a traveller name --
-    // `CaseApplicantSchema` carries no name and this app has no by-id
-    // traveller read. A test asserting on a name would be asserting on
-    // something the component cannot obtain.
+    // Two applicants, no refNo: the display rule falls back to applicantRef.
     expect(within(applicantRows[0]!).getByText("A1")).toBeInTheDocument();
     expect(within(applicantRows[0]!).getByText("Z1234567")).toBeInTheDocument();
     expect(within(applicantRows[0]!).getByText("With us")).toBeInTheDocument();
@@ -203,5 +200,24 @@ describe("ApplicantSubRows", () => {
     render(<ApplicantSubRows caseId="case_1" />);
 
     expect(screen.getByText("No passport on file")).toBeInTheDocument();
+  });
+
+  it("shows each applicant's own REF NO when set, and the case REF for a lone applicant without one", () => {
+    stubLoadedCase([
+      buildApplicant({ applicantRef: "A1", refNo: "RGS-2026-0912" }),
+      buildApplicant({ applicantRef: "A2", travellerId: "traveller_2", refNo: "RGS-2026-0913" }),
+    ]);
+    render(<ApplicantSubRows caseId="case_1" />);
+    const groupRows = screen.getAllByTestId("applicant-subrow");
+    expect(within(groupRows[0]!).getByText("RGS-2026-0912")).toBeInTheDocument();
+    expect(within(groupRows[1]!).getByText("RGS-2026-0913")).toBeInTheDocument();
+    expect(screen.queryByText("A1")).not.toBeInTheDocument();
+  });
+
+  it("shows the case REF, not the internal '1', for an imported single-applicant case", () => {
+    stubLoadedCase([buildApplicant({ applicantRef: "1" })]);
+    render(<ApplicantSubRows caseId="case_1" />);
+    expect(within(screen.getByTestId("applicant-subrow")).getByText("RGS-1001")).toBeInTheDocument();
+    expect(screen.queryByText("1")).not.toBeInTheDocument();
   });
 });

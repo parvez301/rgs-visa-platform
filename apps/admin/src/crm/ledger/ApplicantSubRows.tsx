@@ -43,14 +43,11 @@ function describeCourier(applicant: crm.CaseApplicant): string {
  * on the Ledger row, so this fetches the full case on mount (brief:
  * "Expanding fetches").
  *
- * R45 -- what this renders, corrected: `applicantRef · passportNumber ·
- * custody · outcome · courierMode + trackingNumber`. NOT a traveller name.
- * `CaseApplicantSchema` (packages/shared/src/crm/schemas.ts:83-93) carries no
- * name field; the name lives on a separate `CrmTraveller` record
- * (`fullName`, schemas.ts:61) that this app has no route to read by
- * `travellerId` -- `crmApi.ts` only exposes traveller lookups by passport
- * number or by full name, and the CRM client has no traveller methods at
- * all. Adding that read is explicitly out of scope for this task.
+ * The first token is the applicant's display reference (spec 2026-09-25
+ * §3.2, `crm.displayApplicantRef`): their own REF NO when set, the case REF
+ * for a lone applicant, otherwise the internal `applicantRef`. Still no
+ * traveller name here: the ledger row has no traveller map and the case
+ * screen is one click away.
  */
 export function ApplicantSubRows({ caseId, onLineCountChange }: ApplicantSubRowsProps) {
   const caseQuery = useCase(caseId);
@@ -103,6 +100,8 @@ export function ApplicantSubRows({ caseId, onLineCountChange }: ApplicantSubRows
     );
   }
 
+  const loadedCase = caseQuery.data!;
+
   // A labelled GROUP containing a LIST, not grid structure (fix round 1, F5).
   // `rowgroup` is only valid as a child of a table/grid/treegrid, and this
   // renders inside a `role="row"`; the nested `role="row"`s it used to hold
@@ -126,7 +125,9 @@ export function ApplicantSubRows({ caseId, onLineCountChange }: ApplicantSubRows
             className="flex items-center gap-3 border-t border-line px-4 text-[12px] text-ink"
             style={{ height: APPLICANT_SUBROW_LINE_HEIGHT }}
           >
-            <span className="font-medium">{applicant.applicantRef}</span>
+            <span className="mrz font-medium">
+              {crm.displayApplicantRef(loadedCase.caseRef, loadedApplicants.length, applicant)}
+            </span>
             <span className="text-ink-soft">{applicant.passportNumber ?? "No passport on file"}</span>
             <AxisChip axis="custody" value={applicant.custody} />
             <AxisChip axis="outcome" value={applicant.outcome} />

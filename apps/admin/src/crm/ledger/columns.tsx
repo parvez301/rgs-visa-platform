@@ -83,13 +83,20 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
     // ROVES with the grid's focus -- `isFocusedRow` is what makes it roam.
     render: (row, _partnerName, cellContext) => (
       <>
-        <Link
-          to={`/crm/cases/${row.caseId}`}
-          tabIndex={-1}
-          className="mrz text-xs font-semibold text-rgs-red-deep hover:underline"
-        >
-          {row.caseRef}
-        </Link>
+        <span className="flex flex-col leading-tight">
+          <Link
+            to={`/crm/cases/${row.caseId}`}
+            tabIndex={-1}
+            className="mrz text-xs font-semibold text-rgs-red-deep hover:underline"
+          >
+            {row.caseRef}
+          </Link>
+          {row.groupName !== undefined && (
+            <span data-testid="ledger-group-name" className="truncate text-[10px] text-ink-soft">
+              {row.groupName}
+            </span>
+          )}
+        </span>
         <ReviewMarker
           caseRef={row.caseRef}
           entry={cellContext.reviewEntry}
