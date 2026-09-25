@@ -1118,6 +1118,30 @@ describe("crm admin routes", () => {
     );
     expect(patched.statusCode).toBe(404);
   });
+
+  it("attaches resolved traveller names to GET /cases/{caseId}", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const { payload: partner } = await call(router, "POST", "/api/v1/admin/crm/partners", { canonicalName: "Skyline Travels" });
+    const { payload: traveller } = await call(router, "POST", "/api/v1/admin/crm/travellers", { fullName: "Asha Rao", passportNumber: "Z1" });
+    const { payload: created } = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "RGS-T-1",
+      caseType: "VISA",
+      visaType: "TOURIST",
+      partnerId: partner.partnerId,
+      destinationCountry: "AE",
+      receivedDate: "2026-09-16",
+      applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId, passportNumber: "Z1" }],
+    });
+
+    const response = await call(router, "GET", `/api/v1/admin/crm/cases/${created.caseId}`);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.caseRef).toBe("RGS-T-1");
+    expect(response.payload.travellers).toEqual({
+      [traveller.travellerId]: { fullName: "Asha Rao", passportNumber: "Z1" },
+    });
+  });
 });
 
 describe("PUT /api/v1/admin/crm/cases/{caseId}", () => {

@@ -45,6 +45,7 @@ import {
   findTravellerByPassport,
   upsertTraveller,
 } from "../domain/crm/travellers";
+import { resolveCaseTravellers } from "../domain/crm/caseTravellers";
 import { Router, parseBody, parseQueryParam } from "./router";
 import { requireScreen, requireWrite } from "./adminAccess";
 
@@ -299,7 +300,12 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
     })
     .add("GET", "/api/v1/admin/crm/cases/{caseId}", async (requestContext) => {
       requireScreen(requestContext, "crm");
-      return getCase(context, tenantId, requestContext.pathParams["caseId"]!);
+      const crmCase = await getCase(context, tenantId, requestContext.pathParams["caseId"]!);
+      // Names ride on the single-case read only (spec 2026-09-25 §4.4). The
+      // mutation routes still answer a bare CrmCase; the admin refetches this
+      // route after every settled write, so the names come back on their own.
+      const travellers = await resolveCaseTravellers(context, tenantId, crmCase.applicants);
+      return { ...crmCase, travellers };
     })
     .add("PUT", "/api/v1/admin/crm/cases/{caseId}", async (requestContext) => {
       requireWrite(requestContext, "crm");
