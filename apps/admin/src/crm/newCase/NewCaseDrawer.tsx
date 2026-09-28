@@ -373,73 +373,83 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
             />
           </label>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className={FIELD_LABEL_CLASS}>Group name</span>
-              <input
-                value={groupName}
-                onChange={(changeEvent) => setGroupName(changeEvent.target.value)}
-                placeholder="e.g. Sharma Family (optional)"
-                className={FIELD_CLASS}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className={FIELD_LABEL_CLASS}>Client email</span>
-              <input
-                type="email"
-                value={clientEmail}
-                onChange={(changeEvent) => setClientEmail(changeEvent.target.value)}
-                placeholder="For status updates (optional)"
-                className={FIELD_CLASS}
-              />
-            </label>
-          </div>
+          <fieldset className="flex flex-col gap-3">
+            <legend className="mb-1 text-sm font-semibold text-ink">Group &amp; client</legend>
+            <p className="text-xs text-ink-soft">
+              Optional. One name over every applicant, and the address status updates go to.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="flex flex-col gap-1">
+                <span className={FIELD_LABEL_CLASS}>Group name</span>
+                <input
+                  value={groupName}
+                  onChange={(changeEvent) => setGroupName(changeEvent.target.value)}
+                  placeholder="e.g. Sharma Family"
+                  className={FIELD_CLASS}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className={FIELD_LABEL_CLASS}>Client email</span>
+                <input
+                  type="email"
+                  value={clientEmail}
+                  onChange={(changeEvent) => setClientEmail(changeEvent.target.value)}
+                  placeholder="name@example.com"
+                  className={FIELD_CLASS}
+                />
+              </label>
+            </div>
+          </fieldset>
 
           <fieldset className="flex flex-col gap-3">
             <legend className="mb-2 text-sm font-semibold text-ink">Applicants</legend>
             {applicantDrafts.map((applicantDraft, applicantIndex) => (
-              <div key={applicantIndex} className="grid gap-3 rounded-xl border border-line bg-mist/50 p-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
-                <label className="flex flex-col gap-1">
-                  <span className={FIELD_LABEL_CLASS}>Applicant {applicantIndex + 1} name</span>
-                  <input
-                    value={applicantDraft.fullName}
-                    onChange={(changeEvent) => updateApplicant(applicantIndex, { fullName: changeEvent.target.value })}
-                    placeholder="As printed in the passport"
-                    className={FIELD_CLASS}
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className={FIELD_LABEL_CLASS}>Passport</span>
-                  <input
-                    value={applicantDraft.passportNumber}
-                    onChange={(changeEvent) =>
-                      updateApplicant(applicantIndex, { passportNumber: changeEvent.target.value })
-                    }
-                    placeholder="Optional"
-                    className={`${FIELD_CLASS} mrz`}
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className={FIELD_LABEL_CLASS}>Applicant {applicantIndex + 1} REF NO</span>
-                  <input
-                    value={applicantDraft.refNo}
-                    onChange={(changeEvent) => updateApplicant(applicantIndex, { refNo: changeEvent.target.value })}
-                    placeholder="Own REF (optional)"
-                    className={`${FIELD_CLASS} mrz`}
-                  />
-                </label>
-                <div className="flex items-end">
-                  <button
-                    type="button"
-                    disabled={applicantDrafts.length === 1}
-                    aria-label={`Remove applicant ${applicantIndex + 1}`}
-                    onClick={() =>
-                      setApplicantDrafts((currentDrafts) => currentDrafts.filter((_, index) => index !== applicantIndex))
-                    }
-                    className={COMPACT_BUTTON_CLASS}
-                  >
-                    Remove
-                  </button>
+              <div key={applicantIndex} className="flex flex-col gap-3 rounded-xl border border-line bg-mist/50 p-3">
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <label className="flex flex-col gap-1">
+                    <span className={FIELD_LABEL_CLASS}>Applicant {applicantIndex + 1} name</span>
+                    <input
+                      value={applicantDraft.fullName}
+                      onChange={(changeEvent) => updateApplicant(applicantIndex, { fullName: changeEvent.target.value })}
+                      placeholder="As printed in the passport"
+                      className={FIELD_CLASS}
+                    />
+                  </label>
+                  <div className="flex items-end">
+                    <button
+                      type="button"
+                      disabled={applicantDrafts.length === 1}
+                      aria-label={`Remove applicant ${applicantIndex + 1}`}
+                      onClick={() =>
+                        setApplicantDrafts((currentDrafts) => currentDrafts.filter((_, index) => index !== applicantIndex))
+                      }
+                      className={COMPACT_BUTTON_CLASS}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <span className={FIELD_LABEL_CLASS}>Passport</span>
+                    <input
+                      value={applicantDraft.passportNumber}
+                      onChange={(changeEvent) =>
+                        updateApplicant(applicantIndex, { passportNumber: changeEvent.target.value })
+                      }
+                      placeholder="Optional"
+                      className={`${FIELD_CLASS} mrz`}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className={FIELD_LABEL_CLASS}>Applicant {applicantIndex + 1} REF NO</span>
+                    <input
+                      value={applicantDraft.refNo}
+                      onChange={(changeEvent) => updateApplicant(applicantIndex, { refNo: changeEvent.target.value })}
+                      placeholder="Optional, this person's own REF"
+                      className={`${FIELD_CLASS} mrz`}
+                    />
+                  </label>
                 </div>
               </div>
             ))}
