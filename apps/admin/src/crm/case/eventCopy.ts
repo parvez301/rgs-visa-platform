@@ -43,6 +43,9 @@ export interface CrmEventCopy {
  * | CASE_STATUS_CHANGED       | fromStatus, toStatus                                  | crm/cases.ts:234, :397    |
  * | CUSTODY_CHANGED           | applicantRef, fromCustody, toCustody                  | crm/cases.ts:273          |
  * | APPLICANT_OUTCOME_CHANGED | applicantRef, fromOutcome, toOutcome                  | crm/cases.ts:321          |
+ * | APPLICANT_UPDATED         | applicantRef, changedFields (comma-joined)            | crm/cases.ts              |
+ * | APPLICANT_ADDED           | applicantRef                                          | crm/cases.ts              |
+ * | APPLICANT_REMOVED         | applicantRef                                          | crm/cases.ts              |
  * | DOCUMENT_CHECKLIST_CHANGED| documentLabel, fromState, toState OR action=stamped | caseDocumentChecklist.ts |
  * | INVOICE_GENERATED         | fileName, totalInr, lineItemCount                   | caseInvoice.ts           |
  * | PARTNER_NOTIFIED          | channel, toAddress, fromStatus, toStatus            | statusNotify.ts          |
@@ -220,6 +223,27 @@ export function describeCrmEvent(event: CrmEventView): CrmEventCopy {
       return {
         title: `Outcome changed by ${actorEmail}`,
         detail: `${describeApplicant(meta)} · ${describeTransition(meta, "fromOutcome", "toOutcome", OUTCOME_LABELS)}`,
+        isAutoApplied: false,
+      };
+
+    case "APPLICANT_UPDATED":
+      return {
+        title: `Applicant ${String(meta["applicantRef"] ?? "")} updated by ${actorEmail}`,
+        detail: describeChangedFields(meta),
+        isAutoApplied: false,
+      };
+
+    case "APPLICANT_ADDED":
+      return {
+        title: `Applicant ${String(meta["applicantRef"] ?? "")} added by ${actorEmail}`,
+        detail: "",
+        isAutoApplied: false,
+      };
+
+    case "APPLICANT_REMOVED":
+      return {
+        title: `Applicant ${String(meta["applicantRef"] ?? "")} removed by ${actorEmail}`,
+        detail: "",
         isAutoApplied: false,
       };
 

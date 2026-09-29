@@ -209,4 +209,26 @@ describe("describeCrmEvent", () => {
 
     expect(lineItemAdded.detail).toBe("VISA_FEE · 2 × ₹5,000 · ₹10,000 added to the case total");
   });
+
+  it("describes applicant add, update and remove", () => {
+    const baseEvent = {
+      eventId: "e1",
+      caseId: "case_1",
+      actorEmail: "desk@rgs.local",
+      createdAt: "2026-09-29T10:00:00.000Z",
+    };
+    expect(
+      describeCrmEvent({ ...baseEvent, eventType: "APPLICANT_ADDED", meta: { applicantRef: "A3" } }).title,
+    ).toBe("Applicant A3 added by desk@rgs.local");
+    expect(
+      describeCrmEvent({ ...baseEvent, eventType: "APPLICANT_REMOVED", meta: { applicantRef: "A2" } }).title,
+    ).toBe("Applicant A2 removed by desk@rgs.local");
+    expect(
+      describeCrmEvent({
+        ...baseEvent,
+        eventType: "APPLICANT_UPDATED",
+        meta: { applicantRef: "A1", changedFields: "refNo" },
+      }).title,
+    ).toBe("Applicant A1 updated by desk@rgs.local");
+  });
 });

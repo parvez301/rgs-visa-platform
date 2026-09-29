@@ -283,6 +283,11 @@ export const MEMORY_AUTHOR_LABELS: Record<"agent" | "human", string> = {
  * sentence ("Changed appointment date and visa type"), never as a heading.
  */
 export const CASE_FIELD_LABELS: Record<string, string> = {
+  caseRef: "REF",
+  caseType: "Type",
+  partnerId: "Partner",
+  destinationCountry: "Country",
+  receivedDate: "Received",
   visaType: "visa type",
   entryType: "entry type",
   processing: "processing speed",
@@ -290,6 +295,9 @@ export const CASE_FIELD_LABELS: Record<string, string> = {
   appointmentDate: "appointment date",
   expectedCollectionDate: "expected collection date",
   remarks: "remarks",
+  fullName: "Name",
+  passportNumber: "Passport",
+  refNo: "REF NO",
 };
 
 /**

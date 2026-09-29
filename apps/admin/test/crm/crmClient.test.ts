@@ -197,6 +197,36 @@ describe("crmClient write methods", () => {
     });
   });
 
+  it("sends the applicant and export calls to the right routes", async () => {
+    const recorded = stubFetch([{}, {}, {}, { rows: [], missingCaseIds: [] }]);
+
+    await crmClient.updateApplicant("token", "case_1", "A1", { refNo: null });
+    await crmClient.addApplicant("token", "case_1", { travellerId: "trv_1" });
+    await crmClient.removeApplicant("token", "case_1", "A2");
+    await crmClient.fetchExportRows("token", ["case_1"]);
+
+    expect(recorded[0]).toMatchObject({
+      url: expect.stringContaining("/api/v1/admin/crm/cases/case_1/applicants/A1"),
+      method: "PUT",
+      body: { refNo: null },
+    });
+    expect(recorded[1]).toMatchObject({
+      url: expect.stringContaining("/api/v1/admin/crm/cases/case_1/applicants"),
+      method: "POST",
+      body: { travellerId: "trv_1" },
+    });
+    expect(recorded[2]).toMatchObject({
+      url: expect.stringContaining("/api/v1/admin/crm/cases/case_1/applicants/A2"),
+      method: "DELETE",
+      body: undefined,
+    });
+    expect(recorded[3]).toMatchObject({
+      url: expect.stringContaining("/api/v1/admin/crm/cases/export-rows"),
+      method: "POST",
+      body: { caseIds: ["case_1"] },
+    });
+  });
+
   // F3: this used to assert only method and url. The reviewer mutated the
   // client to drop `resolvedValue` from the body and the suite stayed green
   // -- a resolve that silently drops it applies the review item with no

@@ -78,6 +78,9 @@ export type CrmEventType =
   | "BILLING_CHANGED"
   | "CASE_UPDATED"
   | "APPLICANT_OUTCOME_CHANGED"
+  | "APPLICANT_UPDATED"
+  | "APPLICANT_ADDED"
+  | "APPLICANT_REMOVED"
   | "LINE_ITEM_ADDED"
   | "PROPOSAL_APPROVED"
   | "PROPOSAL_DISCARDED"
@@ -106,20 +109,33 @@ export interface CrmEventView {
  * around all four.
  */
 export interface UpdateCaseDetailsBody {
-  visaType?: crm.VisaType;
-  entryType?: crm.EntryType;
-  processing?: crm.ProcessingSpeed;
-  submissionDate?: string;
-  appointmentDate?: string;
-  expectedCollectionDate?: string;
-  remarks?: string;
-  /**
-   * `null` clears; mirrors `UpdateCaseDetailsBody`'s `.nullable()` in
-   * `services/api/src/http/crmApi.ts`, the server-side schema this interface
-   * is the wire-level mirror of.
-   */
+  caseRef?: string;
+  caseType?: crm.CaseType;
+  partnerId?: string;
+  destinationCountry?: string;
+  receivedDate?: string;
+  /** For every field below, `null` clears; mirrors `.nullable()` in crmApi.ts. */
+  visaType?: crm.VisaType | null;
+  entryType?: crm.EntryType | null;
+  processing?: crm.ProcessingSpeed | null;
+  submissionDate?: string | null;
+  appointmentDate?: string | null;
+  expectedCollectionDate?: string | null;
+  remarks?: string | null;
   groupName?: string | null;
   clientEmail?: string | null;
+}
+
+export interface UpdateApplicantBody {
+  fullName?: string;
+  passportNumber?: string | null;
+  refNo?: string | null;
+}
+
+export interface AddApplicantBody {
+  travellerId: string;
+  passportNumber?: string;
+  refNo?: string;
 }
 
 /**
@@ -498,6 +514,40 @@ export const crmClient = {
       `${CRM_BASE}/cases/${encodeURIComponent(caseId)}/applicants/${encodeURIComponent(applicantRef)}/outcome`,
       { method: "PUT", body: { toOutcome }, idToken },
     );
+  },
+
+  updateApplicant(
+    idToken: string,
+    caseId: string,
+    applicantRef: string,
+    input: UpdateApplicantBody,
+  ): Promise<crm.CrmCase> {
+    return apiFetch<crm.CrmCase>(
+      `${CRM_BASE}/cases/${encodeURIComponent(caseId)}/applicants/${encodeURIComponent(applicantRef)}`,
+      { method: "PUT", body: input, idToken },
+    );
+  },
+
+  addApplicant(idToken: string, caseId: string, input: AddApplicantBody): Promise<crm.CrmCase> {
+    return apiFetch<crm.CrmCase>(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}/applicants`, {
+      method: "POST",
+      body: input,
+      idToken,
+    });
+  },
+
+  removeApplicant(idToken: string, caseId: string, applicantRef: string): Promise<crm.CrmCase> {
+    return apiFetch<crm.CrmCase>(
+      `${CRM_BASE}/cases/${encodeURIComponent(caseId)}/applicants/${encodeURIComponent(applicantRef)}`,
+      { method: "DELETE", idToken },
+    );
+  },
+
+  fetchExportRows(
+    idToken: string,
+    caseIds: string[],
+  ): Promise<{ rows: crm.CaseExportRow[]; missingCaseIds: string[] }> {
+    return apiFetch(`${CRM_BASE}/cases/export-rows`, { method: "POST", body: { caseIds }, idToken });
   },
 
   listPartners,
