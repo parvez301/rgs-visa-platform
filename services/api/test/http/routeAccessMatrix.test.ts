@@ -44,6 +44,7 @@ const ROUTE_ACCESS: RouteAccess[] = [
   { method: "GET", pathPattern: "/api/v1/admin/crm/cases/by-partner/{partnerId}", screen: "crm", mode: "read" },
   { method: "POST", pathPattern: "/api/v1/admin/crm/cases", screen: "crm", mode: "write" },
   { method: "GET", pathPattern: "/api/v1/admin/crm/cases/ledger", screen: "crm", mode: "read" },
+  { method: "POST", pathPattern: "/api/v1/admin/crm/cases/export-rows", screen: "crm", mode: "read" },
   { method: "GET", pathPattern: "/api/v1/admin/crm/cases/{caseId}", screen: "crm", mode: "read" },
   { method: "PUT", pathPattern: "/api/v1/admin/crm/cases/{caseId}", screen: "crm", mode: "write" },
   { method: "GET", pathPattern: "/api/v1/admin/crm/cases/{caseId}/events", screen: "crm", mode: "read" },

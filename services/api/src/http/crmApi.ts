@@ -19,6 +19,7 @@ import {
   setCaseDocumentCheckState,
 } from "../domain/crm/caseDocumentChecklist";
 import { addApplicant, removeApplicant, updateApplicantDetails } from "../domain/crm/applicantEdits";
+import { buildCaseExportRows } from "../domain/crm/caseExport";
 import { generateCaseInvoice } from "../domain/crm/caseInvoice";
 import { runAppointmentReminders } from "../domain/crm/appointmentReminders";
 import { listCaseEvents } from "../domain/crm/crmEvents";
@@ -137,6 +138,9 @@ const AddApplicantBody = z.object({
   refNo: z.string().trim().min(1).max(40).optional(),
 });
 
+const ExportRowsBody = z.object({
+  caseIds: z.array(z.string().min(1)).min(1).max(crm.MAX_EXPORT_CASE_IDS),
+});
 const CaseStatusBody = z.object({ toStatus: z.enum(crm.CASE_STATUSES) });
 const BillingStatusBody = z.object({ toBillingStatus: z.enum(crm.BILLING_STATUSES) });
 const CustodyBody = z.object({ toCustody: z.enum(crm.CUSTODY_STATUSES) });
@@ -315,6 +319,15 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
           limit,
         },
       };
+    })
+    // A POST only because the id list does not fit a query string. Reads
+    // only, so gated on the screen, not on write. Registered BEFORE
+    // POST "/cases/{caseId}"-shaped routes for the same first-match reason
+    // as the ledger route above.
+    .add("POST", "/api/v1/admin/crm/cases/export-rows", async (requestContext) => {
+      requireScreen(requestContext, "crm");
+      const body = parseBody(ExportRowsBody, requestContext.body);
+      return buildCaseExportRows(context, tenantId, [...new Set(body.caseIds)]);
     })
     .add("GET", "/api/v1/admin/crm/cases/{caseId}", async (requestContext) => {
       requireScreen(requestContext, "crm");

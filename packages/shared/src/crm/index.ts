@@ -3,6 +3,7 @@ export * from "./stateMachines";
 export * from "./schemas";
 export * from "./lineItems";
 export * from "./ledger";
+export * from "./caseExport";
 export * from "./applicantDisplay";
 export * from "./normalize/country";
 export * from "./normalize/entries";

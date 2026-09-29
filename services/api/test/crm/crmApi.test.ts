@@ -1625,4 +1625,14 @@ describe("applicant routes", () => {
     expect(deleteResponse.statusCode).toBe(200);
     expect(deleteResponse.payload.applicants).toHaveLength(2);
   });
+
+  it("POST /cases/export-rows refuses an empty or oversized batch and is not shadowed by /cases/{caseId}", async () => {
+    const router = buildRouter(buildTestContext());
+    expect((await call(router, "POST", "/api/v1/admin/crm/cases/export-rows", { caseIds: [] })).statusCode).toBe(400);
+    const tooMany = Array.from({ length: 501 }, (_, index) => `case_${index}`);
+    expect((await call(router, "POST", "/api/v1/admin/crm/cases/export-rows", { caseIds: tooMany })).statusCode).toBe(400);
+    const okResponse = await call(router, "POST", "/api/v1/admin/crm/cases/export-rows", { caseIds: ["case_nope"] });
+    expect(okResponse.statusCode).toBe(200);
+    expect(okResponse.payload).toEqual({ rows: [], missingCaseIds: ["case_nope"] });
+  });
 });
