@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertApplicantRefNosDistinct,
   claimNewRefs,
@@ -8,6 +8,7 @@ import {
   releaseRefKeys,
   staleRefKeys,
 } from "../../src/domain/crm/refClaims";
+import { refClaimPartitionKey } from "../../src/domain/crm/keys";
 import { buildTestContext } from "../helpers";
 
 const TENANT_ID = "rgs";
@@ -81,6 +82,24 @@ describe("claimNewRefs / releaseRefKeys", () => {
     const newlyClaimed = await claimNewRefs(context, TENANT_ID, "case_A", caseShape("OLD"), caseShape("OLD", ["NEW-1"]));
     expect(newlyClaimed).toEqual(["NEW-1"]);
     expect(await readRefClaim(context, TENANT_ID, "OLD")).toBeUndefined();
+  });
+
+  it("retries the claim when the holder released it between our put and our read", async () => {
+    const context = buildTestContext();
+    await claimNewRefs(context, TENANT_ID, "case_B", undefined, caseShape("RACE-1"));
+
+    // The holder lets go after our putIfAbsent lost but before our read lands.
+    const realGet = context.table.get.bind(context.table);
+    const getSpy = vi.spyOn(context.table, "get").mockImplementationOnce(async () => {
+      await context.table.delete(refClaimPartitionKey(TENANT_ID, "RACE-1"), "META");
+      return undefined;
+    });
+    getSpy.mockImplementation(realGet);
+
+    await expect(claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("RACE-1"))).resolves.toEqual([
+      "RACE-1",
+    ]);
+    expect((await readRefClaim(context, TENANT_ID, "RACE-1"))?.caseId).toBe("case_A");
   });
 
   it("release deletes only claims that name this case", async () => {

@@ -67,6 +67,38 @@ export async function readRefClaim(
   return storedItem === undefined ? undefined : (stripStorageKeys(storedItem) as unknown as RefClaim);
 }
 
+/**
+ * A claim can be released between our losing putIfAbsent and our read of the
+ * winner. Reading "nobody" then means the key is free again, not that another
+ * case holds it, so we try the put again. Bounded so a key flapping under
+ * contention cannot spin forever.
+ */
+const MAX_CLAIM_ATTEMPTS = 3;
+
+type ClaimOutcome = "written" | "already_ours" | "held_by_other_case";
+
+async function claimRefKey(
+  context: AppContext,
+  tenantId: string,
+  caseId: string,
+  refKey: string,
+  refValue: string,
+): Promise<ClaimOutcome> {
+  for (let attempt = 1; attempt <= MAX_CLAIM_ATTEMPTS; attempt += 1) {
+    const refClaim: RefClaim = { tenantId, refKey, refValue, caseId, claimedAt: context.now().toISOString() };
+    const wasWritten = await context.table.putIfAbsent({
+      PK: refClaimPartitionKey(tenantId, refKey),
+      SK: META_SORT_KEY,
+      ...refClaim,
+    });
+    if (wasWritten) return "written";
+    const existingClaim = await readRefClaim(context, tenantId, refKey);
+    if (existingClaim === undefined) continue;
+    return existingClaim.caseId === caseId ? "already_ours" : "held_by_other_case";
+  }
+  return "held_by_other_case";
+}
+
 export async function claimNewRefs(
   context: AppContext,
   tenantId: string,
@@ -78,18 +110,12 @@ export async function claimNewRefs(
   const newlyClaimedKeys: string[] = [];
   for (const [refKey, refValue] of refKeysOfCase(nextCase)) {
     if (previousRefKeys.has(refKey)) continue;
-    const refClaim: RefClaim = { tenantId, refKey, refValue, caseId, claimedAt: context.now().toISOString() };
-    const wasWritten = await context.table.putIfAbsent({
-      PK: refClaimPartitionKey(tenantId, refKey),
-      SK: META_SORT_KEY,
-      ...refClaim,
-    });
-    if (wasWritten) {
+    const claimOutcome = await claimRefKey(context, tenantId, caseId, refKey, refValue);
+    if (claimOutcome === "written") {
       newlyClaimedKeys.push(refKey);
       continue;
     }
-    const existingClaim = await readRefClaim(context, tenantId, refKey);
-    if (existingClaim?.caseId === caseId) continue;
+    if (claimOutcome === "already_ours") continue;
     await releaseRefKeys(context, tenantId, caseId, newlyClaimedKeys);
     throw conflict(`REF "${refValue}" is already used by another case.`);
   }
