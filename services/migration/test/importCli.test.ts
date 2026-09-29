@@ -99,6 +99,9 @@ function tableThatMustNotBeWrittenTo(table: TableClient): TableClient {
     put: (item: TableItem) => {
       throw new Error(`a dry run wrote to the table: put ${item.PK} / ${item.SK}`);
     },
+    putIfAbsent: (item: TableItem) => {
+      throw new Error(`a dry run wrote to the table: putIfAbsent ${item.PK} / ${item.SK}`);
+    },
     delete: (partitionKey: string, sortKey: string) => {
       throw new Error(`a dry run wrote to the table: delete ${partitionKey} / ${sortKey}`);
     },
@@ -118,6 +121,7 @@ function tableFailingAfterWrites(table: TableClient, allowedWriteCount: number):
       if (writesSoFar > allowedWriteCount) throw new Error("simulated write timeout");
       await table.put(item);
     },
+    putIfAbsent: (item: TableItem) => table.putIfAbsent(item),
     delete: (partitionKey: string, sortKey: string) => table.delete(partitionKey, sortKey),
   };
 }
@@ -149,6 +153,7 @@ function tableThrottlingAfterWrites(table: TableClient, allowedWriteCount: numbe
       if (writesSoFar > allowedWriteCount) throw buildThrottlingError();
       await table.put(item);
     },
+    putIfAbsent: (item: TableItem) => table.putIfAbsent(item),
     delete: (partitionKey: string, sortKey: string) => table.delete(partitionKey, sortKey),
   };
 }
@@ -169,6 +174,7 @@ function tableThrottlingFirstWrites(
       if (attemptLog.putAttempts <= failureCount) throw buildThrottlingError();
       await table.put(item);
     },
+    putIfAbsent: (item: TableItem) => table.putIfAbsent(item),
     delete: (partitionKey: string, sortKey: string) => table.delete(partitionKey, sortKey),
   };
 }

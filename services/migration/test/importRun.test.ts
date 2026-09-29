@@ -531,6 +531,7 @@ describe("runImport", () => {
       get: (partitionKey, sortKey, options) => context.table.get(partitionKey, sortKey, options),
       put: (item) => context.table.put(item),
       delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
+      putIfAbsent: (item) => context.table.putIfAbsent(item),
       query: (partitionKey, options) => context.table.query(partitionKey, options),
       queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) => {
         if (indexName === "GSI1" && partitionKey === partnerListPartitionKey) partnerListQueryCount += 1;
@@ -570,6 +571,7 @@ describe("runImport", () => {
       get: (partitionKey, sortKey, options) => context.table.get(partitionKey, sortKey, options),
       put: (item) => context.table.put(item),
       delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
+      putIfAbsent: (item) => context.table.putIfAbsent(item),
       query: (partitionKey, options) => context.table.query(partitionKey, options),
       queryGsi: (indexName, partitionKey, options) => {
         if (partitionKey.includes("#TRAVELLER_NAME#") || partitionKey.includes("#PASSPORT#")) {
@@ -1103,6 +1105,7 @@ describe("runImport", () => {
         return table.put(item);
       },
       delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
+      putIfAbsent: (item) => table.putIfAbsent(item),
       query: (partitionKey, options) => table.query(partitionKey, options),
       queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
       queryGsiPage: (indexName, partitionKey, options) =>
@@ -1116,6 +1119,7 @@ describe("runImport", () => {
       get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
       put: (item) => table.put(item),
       delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
+      putIfAbsent: (item) => table.putIfAbsent(item),
       query: (partitionKey, options) => table.query(partitionKey, options),
       queryGsi: async (indexName, partitionKey, options) =>
         indexName === "GSI1" && partitionKey.includes("#CASE_STATUS#")
@@ -1152,6 +1156,7 @@ describe("runImport", () => {
       },
       put: (item) => table.put(item),
       delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
+      putIfAbsent: (item) => table.putIfAbsent(item),
       queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
       queryGsiPage: (indexName, partitionKey, options) =>
         table.queryGsiPage(indexName, partitionKey, options),

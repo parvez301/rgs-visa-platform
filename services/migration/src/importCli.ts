@@ -106,6 +106,10 @@ function tableRecordingWrites(table: TableClient, observation: WriteObservation)
       observation.anyWriteAttempted = true;
       return table.put(item);
     },
+    putIfAbsent: (item: TableItem) => {
+      observation.anyWriteAttempted = true;
+      return table.putIfAbsent(item);
+    },
     delete: (partitionKey: string, sortKey: string) => {
       observation.anyWriteAttempted = true;
       return table.delete(partitionKey, sortKey);
