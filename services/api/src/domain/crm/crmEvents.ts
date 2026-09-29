@@ -9,6 +9,9 @@ export type CrmEventType =
   | "BILLING_CHANGED"
   | "CASE_UPDATED"
   | "APPLICANT_OUTCOME_CHANGED"
+  | "APPLICANT_UPDATED"
+  | "APPLICANT_ADDED"
+  | "APPLICANT_REMOVED"
   | "LINE_ITEM_ADDED"
   // Widening this union is safe here: the admin activity feed switches on
   // ActivityEventType (packages/shared/src/statuses.ts), a different union,

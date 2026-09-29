@@ -18,6 +18,7 @@ import {
   ensureCaseDocumentChecklist,
   setCaseDocumentCheckState,
 } from "../domain/crm/caseDocumentChecklist";
+import { addApplicant, removeApplicant, updateApplicantDetails } from "../domain/crm/applicantEdits";
 import { generateCaseInvoice } from "../domain/crm/caseInvoice";
 import { runAppointmentReminders } from "../domain/crm/appointmentReminders";
 import { listCaseEvents } from "../domain/crm/crmEvents";
@@ -122,6 +123,18 @@ const UpdateCaseDetailsBody = z.object({
   remarks: z.string().trim().min(1).max(2000).nullable().optional(),
   groupName: z.string().trim().min(1).max(120).nullable().optional(),
   clientEmail: z.string().trim().email().nullable().optional(),
+});
+
+const UpdateApplicantBody = z.object({
+  fullName: z.string().trim().min(1).max(120).optional(),
+  passportNumber: z.string().trim().min(1).max(20).nullable().optional(),
+  refNo: z.string().trim().min(1).max(40).nullable().optional(),
+});
+
+const AddApplicantBody = z.object({
+  travellerId: z.string().min(1),
+  passportNumber: z.string().trim().min(1).max(20).optional(),
+  refNo: z.string().trim().min(1).max(40).optional(),
 });
 
 const CaseStatusBody = z.object({ toStatus: z.enum(crm.CASE_STATUSES) });
@@ -425,6 +438,33 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
         );
       },
     )
+    .add("PUT", "/api/v1/admin/crm/cases/{caseId}/applicants/{applicantRef}", async (requestContext) => {
+      requireWrite(requestContext, "crm");
+      const body = parseBody(UpdateApplicantBody, requestContext.body);
+      return updateApplicantDetails(
+        context,
+        tenantId,
+        requestContext.pathParams["caseId"]!,
+        requestContext.pathParams["applicantRef"]!,
+        body,
+        requestContext.callerEmail,
+      );
+    })
+    .add("POST", "/api/v1/admin/crm/cases/{caseId}/applicants", async (requestContext) => {
+      requireWrite(requestContext, "crm");
+      const body = parseBody(AddApplicantBody, requestContext.body);
+      return addApplicant(context, tenantId, requestContext.pathParams["caseId"]!, body, requestContext.callerEmail);
+    })
+    .add("DELETE", "/api/v1/admin/crm/cases/{caseId}/applicants/{applicantRef}", async (requestContext) => {
+      requireWrite(requestContext, "crm");
+      return removeApplicant(
+        context,
+        tenantId,
+        requestContext.pathParams["caseId"]!,
+        requestContext.pathParams["applicantRef"]!,
+        requestContext.callerEmail,
+      );
+    })
     .add("GET", "/api/v1/admin/crm/review", async (requestContext) => {
       requireScreen(requestContext, "crmReview");
       const requestedStatus = requestContext.queryParams["status"] ?? "OPEN";

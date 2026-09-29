@@ -1581,3 +1581,48 @@ describe("crm cases family group fields over HTTP", () => {
     expect(response.payload.caseStatus).toBe("NEW");
   });
 });
+
+describe("applicant routes", () => {
+  it("PUT edits, POST adds, and DELETE removes an applicant", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", { canonicalName: "Family Tours" });
+    const firstTravellerId = await seedTraveller(router, "Anil Sharma");
+    const secondTravellerId = await seedTraveller(router, "Sita Sharma");
+    const extraTravellerId = await seedTraveller(router, "Riya Sharma");
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "FAM-9",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "JP",
+      visaType: "TOURIST",
+      receivedDate: "2026-09-01",
+      applicants: [
+        { applicantRef: "A1", travellerId: firstTravellerId },
+        { applicantRef: "A2", travellerId: secondTravellerId },
+      ],
+    });
+    expect(created.statusCode).toBe(200);
+    const seededCaseId = created.payload.caseId;
+
+    const putResponse = await call(router, "PUT", `/api/v1/admin/crm/cases/${seededCaseId}/applicants/A1`, {
+      refNo: "R-A1",
+    });
+    expect(putResponse.statusCode).toBe(200);
+    expect(putResponse.payload.applicants[0].refNo).toBe("R-A1");
+
+    const postResponse = await call(router, "POST", `/api/v1/admin/crm/cases/${seededCaseId}/applicants`, {
+      travellerId: extraTravellerId,
+    });
+    expect(postResponse.statusCode).toBe(200);
+    const addedRef = postResponse.payload.applicants.at(-1).applicantRef;
+
+    const deleteResponse = await call(
+      router,
+      "DELETE",
+      `/api/v1/admin/crm/cases/${seededCaseId}/applicants/${addedRef}`,
+    );
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(deleteResponse.payload.applicants).toHaveLength(2);
+  });
+});

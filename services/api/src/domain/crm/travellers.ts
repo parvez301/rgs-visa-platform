@@ -2,7 +2,7 @@ import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import type { TableItem } from "../../lib/db";
-import { badRequest, notFound } from "../../lib/errors";
+import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import {
   parseStoredRecord,
@@ -130,6 +130,63 @@ export async function getTravellerOrThrow(
   );
   if (!travellerItem) throw notFound("Traveller");
   return parseStoredTraveller(travellerItem);
+}
+
+export interface UpdateTravellerDetailsInput {
+  fullName?: string;
+  /** `null` clears the passport. */
+  passportNumber?: string | null;
+}
+
+/**
+ * A traveller is one person across every case, so a corrected name shows on
+ * all of them -- the edit drawer says so. The name and passport indexes
+ * (GSI2, GSI3) are rewritten with the item, and a passport already on file
+ * for SOMEONE ELSE is refused: silently re-pointing it would merge two people.
+ */
+export async function updateTravellerDetails(
+  context: AppContext,
+  tenantId: string,
+  travellerId: string,
+  input: UpdateTravellerDetailsInput,
+): Promise<crm.CrmTraveller> {
+  const currentTraveller = await getTravellerOrThrow(context, tenantId, travellerId);
+  const nextPassportNumber =
+    input.passportNumber === undefined ? currentTraveller.passportNumber : (input.passportNumber ?? undefined);
+  if (nextPassportNumber !== undefined && nextPassportNumber !== currentTraveller.passportNumber) {
+    const passportHolder = await findTravellerByPassport(context, tenantId, nextPassportNumber);
+    if (passportHolder !== undefined && passportHolder.travellerId !== travellerId) {
+      throw conflict(`Passport ${nextPassportNumber} is already on file for ${passportHolder.fullName}.`);
+    }
+  }
+  const nextFullName = input.fullName ?? currentTraveller.fullName;
+  const { passportNumber: _previousPassportNumber, ...travellerWithoutPassport } = currentTraveller;
+  let updatedTraveller: crm.CrmTraveller;
+  try {
+    updatedTraveller = crm.CrmTravellerSchema.parse({
+      ...travellerWithoutPassport,
+      fullName: nextFullName,
+      normalizedName: normalizeTravellerName(nextFullName),
+      ...(nextPassportNumber !== undefined ? { passportNumber: nextPassportNumber } : {}),
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const firstIssue = error.issues[0];
+      throw badRequest(firstIssue ? `${firstIssue.path.join(".")}: ${firstIssue.message}` : "Invalid traveller");
+    }
+    throw error;
+  }
+  await context.table.put({
+    PK: travellerPartitionKey(tenantId, travellerId),
+    SK: META_SORT_KEY,
+    GSI2PK: travellerNameGsi2Pk(tenantId, updatedTraveller.normalizedName),
+    GSI2SK: travellerId,
+    ...(updatedTraveller.passportNumber !== undefined
+      ? { GSI3PK: passportGsi3Pk(tenantId, updatedTraveller.passportNumber), GSI3SK: travellerId }
+      : {}),
+    ...updatedTraveller,
+  });
+  return updatedTraveller;
 }
 
 /**
