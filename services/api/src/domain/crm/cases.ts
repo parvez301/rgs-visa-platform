@@ -14,7 +14,7 @@ import {
   partnerCasesGsi2Pk,
 } from "./keys";
 import { getPartnerOrThrow } from "./partners";
-import { assertApplicantRefNosDistinct, claimNewRefs, releaseRefKeys } from "./refClaims";
+import { assertApplicantRefNosDistinct, claimNewRefs, releaseRefKeys, staleRefKeys } from "./refClaims";
 import { getTravellerOrThrow } from "./travellers";
 import { findCountryChecklist } from "./countryChecklist";
 import { stampDocumentChecklistFromCountry } from "./caseDocumentChecklist";
@@ -156,35 +156,58 @@ export async function getCase(
 }
 
 /**
- * The fields `updateCaseDetails` is allowed to touch. `caseStatus`, per-
- * applicant `custody`, per-applicant `outcome` and `billingStatus` each have a
- * state machine and their own mutator (`changeCaseStatus`,
- * `changeApplicantCustody`, `changeApplicantOutcome`, `changeBillingStatus`
- * below) -- a general "update any field" route would let a caller walk around
- * every one of them.
+ * The fields `updateCaseDetails` may move. `caseStatus`, per-applicant
+ * `custody`, per-applicant `outcome` and `billingStatus` each have a state
+ * machine and their own mutator (`changeCaseStatus`, `changeApplicantCustody`,
+ * `changeApplicantOutcome`, `changeBillingStatus` below) -- a general "update
+ * any field" route would let a caller walk around every one of them.
  */
 export interface UpdateCaseDetailsInput {
-  visaType?: crm.VisaType;
-  entryType?: crm.EntryType;
-  processing?: crm.ProcessingSpeed;
-  submissionDate?: string;
-  appointmentDate?: string;
-  expectedCollectionDate?: string;
-  remarks?: string;
-  /** `null` clears the field; `undefined` leaves it alone. */
+  caseRef?: string;
+  caseType?: crm.CaseType;
+  partnerId?: string;
+  destinationCountry?: string;
+  receivedDate?: string;
+  /** For every field below, `null` clears it; `undefined` leaves it alone. */
+  visaType?: crm.VisaType | null;
+  entryType?: crm.EntryType | null;
+  processing?: crm.ProcessingSpeed | null;
+  submissionDate?: string | null;
+  appointmentDate?: string | null;
+  expectedCollectionDate?: string | null;
+  remarks?: string | null;
   groupName?: string | null;
   clientEmail?: string | null;
 }
 
 /**
- * Updates the plain-field, non-state-machine details on a case.
- *
- * The update is built one named field at a time -- never by spreading `input`
- * onto the case and deleting the axes it must not touch -- because a
- * delete-list is one forgotten key away from letting `caseStatus` or
- * `billingStatus` move through this route. Picking each name explicitly
- * means a caller cannot smuggle either axis through no matter what extra
- * properties its input object carries. `remarks` is one of those named fields.
+ * Every field this route may move, by name. A closed list, never a spread of
+ * the input: caseStatus, billingStatus, custody and outcome each have a state
+ * machine and their own route, and anything not named here cannot reach the
+ * case whatever extra keys the caller sends.
+ */
+const EDITABLE_CASE_FIELDS = [
+  "caseRef",
+  "caseType",
+  "partnerId",
+  "destinationCountry",
+  "receivedDate",
+  "visaType",
+  "entryType",
+  "processing",
+  "submissionDate",
+  "appointmentDate",
+  "expectedCollectionDate",
+  "remarks",
+  "groupName",
+  "clientEmail",
+] as const satisfies readonly (keyof UpdateCaseDetailsInput & keyof crm.CrmCase)[];
+type EditableCaseField = (typeof EDITABLE_CASE_FIELDS)[number];
+
+/**
+ * Updates every plain (non-state-machine) field on a case, at any stage.
+ * A changed caseRef claims the new REF and frees the old one; a case type
+ * other than VISA drops the visa type in the same write.
  */
 export async function updateCaseDetails(
   context: AppContext,
@@ -196,95 +219,73 @@ export async function updateCaseDetails(
   const currentCase = await readCaseOrThrow(context, tenantId, caseId);
 
   // Named for the audit trail: a field that actually MOVED, not merely one the
-  // caller supplied. Re-supplying a value the case already has must not read
-  // back as a change nobody made.
-  const changedFieldNames: string[] = [];
-  if (input.visaType !== undefined && input.visaType !== currentCase.visaType) {
+  // caller supplied. `null` reads as "absent", so clearing an absent field is
+  // no change at all.
+  const nextFieldValues: Partial<Record<EditableCaseField, unknown>> = {};
+  const changedFieldNames: EditableCaseField[] = [];
+  for (const fieldName of EDITABLE_CASE_FIELDS) {
+    const requestedValue = input[fieldName];
+    if (requestedValue === undefined) continue;
+    const nextValue = requestedValue ?? undefined;
+    if (nextValue === currentCase[fieldName]) continue;
+    nextFieldValues[fieldName] = nextValue;
+    changedFieldNames.push(fieldName);
+  }
+  const nextCaseType = (nextFieldValues.caseType ?? currentCase.caseType) as crm.CaseType;
+  if (nextCaseType !== "VISA" && currentCase.visaType !== undefined && !("visaType" in nextFieldValues)) {
+    nextFieldValues.visaType = undefined;
     changedFieldNames.push("visaType");
   }
-  if (input.entryType !== undefined && input.entryType !== currentCase.entryType) {
-    changedFieldNames.push("entryType");
-  }
-  if (input.processing !== undefined && input.processing !== currentCase.processing) {
-    changedFieldNames.push("processing");
-  }
-  if (input.submissionDate !== undefined && input.submissionDate !== currentCase.submissionDate) {
-    changedFieldNames.push("submissionDate");
-  }
-  const appointmentDateChanging =
-    input.appointmentDate !== undefined && input.appointmentDate !== currentCase.appointmentDate;
-  if (appointmentDateChanging) {
-    changedFieldNames.push("appointmentDate");
-  }
-  if (
-    input.expectedCollectionDate !== undefined &&
-    input.expectedCollectionDate !== currentCase.expectedCollectionDate
-  ) {
-    changedFieldNames.push("expectedCollectionDate");
-  }
-  if (input.remarks !== undefined && input.remarks !== currentCase.remarks) {
-    changedFieldNames.push("remarks");
-  }
-  // `null` means "clear". Comparing through `?? undefined` makes "clear an
-  // absent field" read as no change, so it neither bumps updatedAt nor
-  // records an event naming a change nobody made.
-  const groupNameChanging =
-    input.groupName !== undefined && (input.groupName ?? undefined) !== currentCase.groupName;
-  if (groupNameChanging) changedFieldNames.push("groupName");
-  const clientEmailChanging =
-    input.clientEmail !== undefined && (input.clientEmail ?? undefined) !== currentCase.clientEmail;
-  if (clientEmailChanging) changedFieldNames.push("clientEmail");
 
-  // Nothing moved -- an empty input, or every supplied value already matches
-  // what's stored. Returning the case as-is, before the parse/write/event
-  // below, is what keeps a no-op call from bumping updatedAt and recording a
-  // CASE_UPDATED event that names no real change.
-  if (changedFieldNames.length === 0) {
-    return currentCase;
-  }
-  assertCollectionNotBeforeReceived(currentCase.receivedDate, input.expectedCollectionDate);
+  // Nothing moved: return before the parse/write/event so a no-op call does
+  // not bump updatedAt or record a CASE_UPDATED that names no real change.
+  if (changedFieldNames.length === 0) return currentCase;
 
-  // Unwrapped, a ZodError here is not an ApiError, and router.ts maps only
-  // ApiError subclasses -- so a caller-supplied date that fails CrmCaseSchema's
-  // isoDate check (or a visaType offered to a non-VISA case) would answer a
-  // bare 500 instead of a 400 naming the problem. Same guard as createCase.
+  if ("partnerId" in nextFieldValues) {
+    await getPartnerOrThrow(context, tenantId, nextFieldValues.partnerId as string);
+  }
+  const nextReceivedDate = (nextFieldValues.receivedDate ?? currentCase.receivedDate) as string;
+  const nextCollectionDate =
+    "expectedCollectionDate" in nextFieldValues
+      ? (nextFieldValues.expectedCollectionDate as string | undefined)
+      : currentCase.expectedCollectionDate;
+  assertCollectionNotBeforeReceived(nextReceivedDate, nextCollectionDate);
+
+  // Unwrapped, a ZodError is not an ApiError, and router.ts maps only ApiError
+  // subclasses -- a bad date or a VISA with no visa type would answer a bare
+  // 500 instead of a 400 naming the problem. Same guard as createCase.
   let updatedCase: crm.CrmCase;
   try {
-    const nextGroupName = groupNameChanging ? (input.groupName ?? undefined) : currentCase.groupName;
-    const nextClientEmail = clientEmailChanging ? (input.clientEmail ?? undefined) : currentCase.clientEmail;
-    const {
-      appointmentReminderSentFor,
-      groupName: _storedGroupName,
-      clientEmail: _storedClientEmail,
-      ...caseBase
-    } = currentCase;
-    const caseForParse = {
-      ...caseBase,
+    const { appointmentReminderSentFor, ...caseWithoutReminderStamp } = currentCase;
+    const appointmentDateChanging = "appointmentDate" in nextFieldValues;
+    const mergedCase: Record<string, unknown> = {
+      ...caseWithoutReminderStamp,
+      // A moved appointment must earn a fresh reminder; an unmoved one keeps its stamp.
       ...(appointmentDateChanging || appointmentReminderSentFor === undefined ? {} : { appointmentReminderSentFor }),
-      ...(nextGroupName !== undefined ? { groupName: nextGroupName } : {}),
-      ...(nextClientEmail !== undefined ? { clientEmail: nextClientEmail } : {}),
-    };
-    updatedCase = crm.CrmCaseSchema.parse({
-      ...caseForParse,
-      ...(input.visaType !== undefined ? { visaType: input.visaType } : {}),
-      ...(input.entryType !== undefined ? { entryType: input.entryType } : {}),
-      ...(input.processing !== undefined ? { processing: input.processing } : {}),
-      ...(input.submissionDate !== undefined ? { submissionDate: input.submissionDate } : {}),
-      ...(input.appointmentDate !== undefined ? { appointmentDate: input.appointmentDate } : {}),
-      ...(input.expectedCollectionDate !== undefined
-        ? { expectedCollectionDate: input.expectedCollectionDate }
-        : {}),
-      ...(input.remarks !== undefined ? { remarks: input.remarks } : {}),
+      ...nextFieldValues,
       updatedAt: context.now().toISOString(),
-    });
-  } catch (error) {
-    if (error instanceof ZodError) {
-      throw badRequest(describeFirstZodIssue(error));
+    };
+    // DynamoDB refuses an undefined attribute; a cleared field must be absent.
+    for (const [fieldName, fieldValue] of Object.entries(mergedCase)) {
+      if (fieldValue === undefined) delete mergedCase[fieldName];
     }
+    updatedCase = crm.CrmCaseSchema.parse(mergedCase);
+  } catch (error) {
+    if (error instanceof ZodError) throw badRequest(describeFirstZodIssue(error));
     throw error;
   }
 
-  await writeCase(context, updatedCase);
+  // Claimed BEFORE the write so two racing edits cannot both land; released
+  // again if the write fails. The OLD REF is freed only after the write lands.
+  const newlyClaimedRefKeys = await claimNewRefs(context, tenantId, caseId, currentCase, updatedCase);
+  try {
+    await writeCase(context, updatedCase);
+  } catch (error) {
+    await releaseRefKeys(context, tenantId, caseId, newlyClaimedRefKeys);
+    throw error;
+  }
+  await releaseRefKeys(context, tenantId, caseId, staleRefKeys(currentCase, updatedCase));
+
   await recordCrmEvent(context, tenantId, caseId, "CASE_UPDATED", actorEmail, {
     // meta values are scalars only (crmEvents.ts) -- a joined string is how an
     // array of changed field names travels through that constraint.

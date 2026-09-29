@@ -100,21 +100,26 @@ const UpsertTravellerBody = z.object({
 const isoDateBody = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
 
 /**
- * The plain fields `updateCaseDetails` is allowed to touch, written out by name.
+ * Every plain field `updateCaseDetails` may touch, written out by name.
  * NOT a passthrough of the request body: `caseStatus`, per-applicant `custody`,
  * per-applicant `outcome` and `billingStatus` each have a state machine and
  * their own route, and a general "update any field" body is one forgotten key
  * away from walking around all four. Typed as the domain's own interface below
- * so a drift between the two fails to compile.
+ * so a drift between the two fails to compile. `null` clears an optional field.
  */
 const UpdateCaseDetailsBody = z.object({
-  visaType: z.enum(crm.VISA_TYPES).optional(),
-  entryType: z.enum(crm.ENTRY_TYPES).optional(),
-  processing: z.enum(crm.PROCESSING_SPEEDS).optional(),
-  submissionDate: isoDateBody.optional(),
-  appointmentDate: isoDateBody.optional(),
-  expectedCollectionDate: isoDateBody.optional(),
-  remarks: z.string().trim().min(1).max(2000).optional(),
+  caseRef: z.string().trim().min(1).max(40).optional(),
+  caseType: z.enum(crm.CASE_TYPES).optional(),
+  partnerId: z.string().min(1).optional(),
+  destinationCountry: z.string().length(2).optional(),
+  receivedDate: isoDateBody.optional(),
+  visaType: z.enum(crm.VISA_TYPES).nullable().optional(),
+  entryType: z.enum(crm.ENTRY_TYPES).nullable().optional(),
+  processing: z.enum(crm.PROCESSING_SPEEDS).nullable().optional(),
+  submissionDate: isoDateBody.nullable().optional(),
+  appointmentDate: isoDateBody.nullable().optional(),
+  expectedCollectionDate: isoDateBody.nullable().optional(),
+  remarks: z.string().trim().min(1).max(2000).nullable().optional(),
   groupName: z.string().trim().min(1).max(120).nullable().optional(),
   clientEmail: z.string().trim().email().nullable().optional(),
 });

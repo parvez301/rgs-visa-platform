@@ -263,3 +263,98 @@ describe("updateCaseDetails", () => {
     ).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining("clientEmail") });
   });
 });
+
+describe("updateCaseDetails — every stage, every field", () => {
+  it("changes REF, partner, country, received date and type, and records them", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    const otherPartner = await createPartner(context, TENANT_ID, { canonicalName: "Blue Sky", partnerType: "AGENCY" }, ACTOR);
+
+    const updated = await updateCaseDetails(
+      context,
+      TENANT_ID,
+      seeded.caseId,
+      {
+        caseRef: "90001-B",
+        partnerId: otherPartner.partnerId,
+        destinationCountry: "FR",
+        receivedDate: "2026-08-30",
+        caseType: "ATTESTATION",
+      },
+      ACTOR,
+    );
+
+    expect(updated).toMatchObject({
+      caseRef: "90001-B",
+      partnerId: otherPartner.partnerId,
+      destinationCountry: "FR",
+      receivedDate: "2026-08-30",
+      caseType: "ATTESTATION",
+    });
+    // Leaving VISA drops the visa type without a second request.
+    expect(updated.visaType).toBeUndefined();
+    const events = await listCaseEvents(context, TENANT_ID, seeded.caseId);
+    const updateEvent = events.find((event) => event.eventType === "CASE_UPDATED");
+    expect(String(updateEvent?.meta["changedFields"]).split(",").sort()).toEqual(
+      ["caseRef", "caseType", "destinationCountry", "partnerId", "receivedDate", "visaType"].sort(),
+    );
+  });
+
+  it("clears an optional field when sent null", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    await updateCaseDetails(context, TENANT_ID, seeded.caseId, { remarks: "call first", processing: "EXPRESS" }, ACTOR);
+
+    const cleared = await updateCaseDetails(context, TENANT_ID, seeded.caseId, { remarks: null, processing: null }, ACTOR);
+    expect(cleared.remarks).toBeUndefined();
+    expect(cleared.processing).toBeUndefined();
+  });
+
+  it("frees the old REF after a rename, and refuses a REF another case holds", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    await updateCaseDetails(context, TENANT_ID, seeded.caseId, { caseRef: "RENAMED-1" }, ACTOR);
+
+    // 90001 is free again: a new case may take it.
+    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "NEW PERSON" });
+    const newCase = await createCase(
+      context,
+      TENANT_ID,
+      {
+        caseRef: "90001",
+        caseType: "VISA",
+        visaType: "TOURIST",
+        partnerId: seeded.partnerId,
+        destinationCountry: "JP",
+        receivedDate: "2026-09-02",
+        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
+      },
+      ACTOR,
+    );
+    await expect(
+      updateCaseDetails(context, TENANT_ID, newCase.caseId, { caseRef: "renamed-1" }, ACTOR),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("checks the collection date against the NEW received date", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    await updateCaseDetails(context, TENANT_ID, seeded.caseId, { expectedCollectionDate: "2026-09-10" }, ACTOR);
+
+    await expect(
+      updateCaseDetails(context, TENANT_ID, seeded.caseId, { receivedDate: "2026-09-15" }, ACTOR),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("404s on an unknown partner and 400s on VISA without a visa type", async () => {
+    const context = buildTestContext();
+    const seeded = await seedOneCase(context);
+    await expect(
+      updateCaseDetails(context, TENANT_ID, seeded.caseId, { partnerId: "ptn_missing" }, ACTOR),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    await updateCaseDetails(context, TENANT_ID, seeded.caseId, { caseType: "ATTESTATION" }, ACTOR);
+    await expect(
+      updateCaseDetails(context, TENANT_ID, seeded.caseId, { caseType: "VISA" }, ACTOR),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+});

@@ -1550,4 +1550,34 @@ describe("crm cases family group fields over HTTP", () => {
     expect(secondResponse.statusCode).toBe(409);
     expect(secondResponse.payload.message).toBe(`REF "${createBody.caseRef}" is already used by another case.`);
   });
+
+  it("PUT /cases/{caseId} accepts caseRef and null-clears remarks, and still ignores caseStatus", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31380",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      remarks: "call first",
+      applicants: [{ applicantRef: "31380", travellerId }],
+    });
+    const seededCaseId = created.payload.caseId;
+
+    const response = await call(router, "PUT", `/api/v1/admin/crm/cases/${seededCaseId}`, {
+      caseRef: "EDITED-REF",
+      remarks: null,
+      caseStatus: "CLOSED",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.caseRef).toBe("EDITED-REF");
+    expect(response.payload).not.toHaveProperty("remarks");
+    expect(response.payload.caseStatus).toBe("NEW");
+  });
 });
