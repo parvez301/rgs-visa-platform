@@ -8,7 +8,8 @@
     "test": "vitest run",
     "import": "tsx src/cli.ts",
     "backfill:summary": "tsx src/backfillCli.ts",
-    "backfill:search-text": "tsx src/backfillSearchTextCli.ts"
+    "backfill:search-text": "tsx src/backfillSearchTextCli.ts",
+    "backfill:ref-claims": "tsx src/backfillRefClaimsCli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",
