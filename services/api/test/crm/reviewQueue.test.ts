@@ -322,6 +322,7 @@ describe("crm review queue", () => {
       table: {
         get: (partitionKey: string, sortKey: string) => context.table.get(partitionKey, sortKey),
         put: (item: TableItem) => context.table.put(item),
+        putIfAbsent: (item: TableItem) => context.table.putIfAbsent(item),
         delete: (partitionKey: string, sortKey: string) =>
           context.table.delete(partitionKey, sortKey),
         query: (partitionKey: string) => context.table.query(partitionKey),
@@ -587,6 +588,7 @@ describe("summariseOpenReviewItems", () => {
       get: context.table.get.bind(context.table),
       query: context.table.query.bind(context.table),
       put: context.table.put.bind(context.table),
+      putIfAbsent: context.table.putIfAbsent.bind(context.table),
       delete: context.table.delete.bind(context.table),
     };
 

@@ -62,6 +62,9 @@ function refuseWrites(context: TestContext & { llm: FakeLlmProvider }): AppConte
       put: () => {
         throw new Error("extractIntake reached table.put() -- intake must never write");
       },
+      putIfAbsent: () => {
+        throw new Error("extractIntake reached table.putIfAbsent() -- intake must never write");
+      },
       delete: () => {
         throw new Error("extractIntake reached table.delete() -- intake must never write");
       },

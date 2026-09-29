@@ -221,6 +221,10 @@ export function withWriteRetries(
     queryGsiPage: (indexName, partitionKey, queryOptions) =>
       table.queryGsiPage(indexName, partitionKey, queryOptions),
     put: (item: TableItem) => withRetries(() => table.put(item)),
+    // Retried like put. A retry after a write that DID land (timeout on the
+    // response) comes back false; callers that care read the item and check
+    // it is theirs -- refClaims.ts does exactly that.
+    putIfAbsent: (item: TableItem) => withRetries(() => table.putIfAbsent(item)),
     delete: (partitionKey: string, sortKey: string) =>
       withRetries(() => table.delete(partitionKey, sortKey)),
   };

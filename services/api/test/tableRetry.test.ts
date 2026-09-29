@@ -61,6 +61,11 @@ function tableFailingFirstWrites(
       if (attemptLog.putAttempts <= failureCount) throw error;
       await table.put(item);
     },
+    putIfAbsent: async (item: TableItem) => {
+      attemptLog.putAttempts += 1;
+      if (attemptLog.putAttempts <= failureCount) throw error;
+      return table.putIfAbsent(item);
+    },
     delete: async (partitionKey: string, sortKey: string) => {
       attemptLog.deleteAttempts += 1;
       if (attemptLog.deleteAttempts <= failureCount) throw error;
@@ -161,6 +166,7 @@ describe("withWriteRetries", () => {
       queryGsi: async () => [],
       queryGsiPage: async () => ({ items: [] }),
       put: async () => undefined,
+      putIfAbsent: async () => true,
       delete: async () => undefined,
     };
     const retryingTable = withWriteRetries(failingReads, {
@@ -221,6 +227,14 @@ describe("withWriteRetries", () => {
     await retryingTable.put(buildItem());
 
     expect(retryNotices).toEqual(["ProvisionedThroughputExceededException attempt 1 wait 0"]);
+  });
+
+  it("delegates putIfAbsent, so the production wrapper has the method the in-memory client has", async () => {
+    const storage = new InMemoryTableClient();
+    const retryingTable = withWriteRetries(storage, { onRetry: () => undefined });
+
+    expect(await retryingTable.putIfAbsent(buildItem())).toBe(true);
+    expect(await retryingTable.putIfAbsent(buildItem())).toBe(false);
   });
 });
 

@@ -944,6 +944,7 @@ describe("listCaseRefsByStatus", () => {
           return context.table.query(partitionKey, options);
         },
         put: (item: TableItem) => context.table.put(item),
+        putIfAbsent: (item: TableItem) => context.table.putIfAbsent(item),
         delete: (partitionKey: string, sortKey: string) => context.table.delete(partitionKey, sortKey),
         queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) =>
           context.table.queryGsi(indexName, partitionKey, options),
@@ -1063,6 +1064,7 @@ describe("countCasesByField", () => {
           return context.table.query(partitionKey, options);
         },
         put: (item: TableItem) => context.table.put(item),
+        putIfAbsent: (item: TableItem) => context.table.putIfAbsent(item),
         delete: (partitionKey: string, sortKey: string) => context.table.delete(partitionKey, sortKey),
         queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) =>
           context.table.queryGsi(indexName, partitionKey, options),

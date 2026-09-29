@@ -271,6 +271,7 @@ describe("listLedgerRows", () => {
       queryGsiPage: context.table.queryGsiPage.bind(context.table),
       queryGsi: context.table.queryGsi.bind(context.table),
       put: context.table.put.bind(context.table),
+      putIfAbsent: context.table.putIfAbsent.bind(context.table),
       delete: context.table.delete.bind(context.table),
     };
 

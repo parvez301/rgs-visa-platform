@@ -78,6 +78,12 @@ export interface TableClient {
     options?: GetOptions,
   ): Promise<TableItem | undefined>;
   put(item: TableItem): Promise<void>;
+  /**
+   * Writes `item` only when no item with the same PK+SK exists. Returns false
+   * (and writes nothing) when one does. The building block for uniqueness:
+   * two writers racing for one key cannot both see `true`.
+   */
+  putIfAbsent(item: TableItem): Promise<boolean>;
   delete(partitionKey: string, sortKey: string): Promise<void>;
   query(partitionKey: string, options?: QueryOptions): Promise<TableItem[]>;
   queryGsi(
@@ -130,6 +136,22 @@ export class DynamoTableClient implements TableClient {
 
   async put(item: TableItem): Promise<void> {
     await this.documentClient.send(new PutCommand({ TableName: this.tableName, Item: item }));
+  }
+
+  async putIfAbsent(item: TableItem): Promise<boolean> {
+    try {
+      await this.documentClient.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: item,
+          ConditionExpression: "attribute_not_exists(PK)",
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof Error && error.name === "ConditionalCheckFailedException") return false;
+      throw error;
+    }
   }
 
   async delete(partitionKey: string, sortKey: string): Promise<void> {
@@ -327,6 +349,13 @@ export class InMemoryTableClient implements TableClient {
 
   async put(item: TableItem): Promise<void> {
     this.items.set(InMemoryTableClient.itemKey(item.PK, item.SK), structuredClone(item));
+  }
+
+  async putIfAbsent(item: TableItem): Promise<boolean> {
+    const itemKey = InMemoryTableClient.itemKey(item.PK, item.SK);
+    if (this.items.has(itemKey)) return false;
+    this.items.set(itemKey, structuredClone(item));
+    return true;
   }
 
   async delete(partitionKey: string, sortKey: string): Promise<void> {

@@ -64,6 +64,9 @@ function refuseWrites(context: TestContext, toolNameForMessage: string): AppCont
       put: () => {
         throw new Error(`read tool "${toolNameForMessage}"'s execute reached put()`);
       },
+      putIfAbsent: () => {
+        throw new Error(`read tool "${toolNameForMessage}"'s execute reached putIfAbsent()`);
+      },
       delete: () => {
         throw new Error(`read tool "${toolNameForMessage}"'s execute reached delete()`);
       },

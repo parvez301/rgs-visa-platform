@@ -580,3 +580,42 @@ describe("DynamoTableClient.queryGsiPage", () => {
     expect(capturedInputs).toEqual([]);
   });
 });
+
+describe("putIfAbsent", () => {
+  it("InMemoryTableClient writes a new item and refuses to overwrite an existing one", async () => {
+    const tableClient = new InMemoryTableClient();
+    const firstWriteSucceeded = await tableClient.putIfAbsent({ PK: "CLAIM#1", SK: "META", owner: "first" });
+    const secondWriteSucceeded = await tableClient.putIfAbsent({ PK: "CLAIM#1", SK: "META", owner: "second" });
+
+    expect(firstWriteSucceeded).toBe(true);
+    expect(secondWriteSucceeded).toBe(false);
+    expect((await tableClient.get("CLAIM#1", "META"))?.["owner"]).toBe("first");
+  });
+
+  it("DynamoTableClient sends attribute_not_exists(PK) and maps a failed condition to false", async () => {
+    const capturedInputs: Record<string, unknown>[] = [];
+    const dynamoClient = new DynamoDBClient({
+      region: "us-east-1",
+      credentials: { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+    });
+    let requestCount = 0;
+    dynamoClient.middlewareStack.add(
+      () => async (handlerArguments) => {
+        capturedInputs.push(handlerArguments.input as Record<string, unknown>);
+        requestCount += 1;
+        if (requestCount === 2) {
+          const conditionFailure = new Error("The conditional request failed");
+          conditionFailure.name = "ConditionalCheckFailedException";
+          throw conditionFailure;
+        }
+        return { output: { $metadata: {} }, response: undefined };
+      },
+      { step: "initialize", priority: "high", name: "stubbedTransport" },
+    );
+    const tableClient = new DynamoTableClient("rgs-test-table", dynamoClient);
+
+    expect(await tableClient.putIfAbsent({ PK: "CLAIM#1", SK: "META" })).toBe(true);
+    expect(await tableClient.putIfAbsent({ PK: "CLAIM#1", SK: "META" })).toBe(false);
+    expect(capturedInputs[0]?.["ConditionExpression"]).toBe("attribute_not_exists(PK)");
+  });
+});

@@ -909,6 +909,7 @@ describe("the single-row memory reads are strongly consistent", () => {
           return context.table.get(partitionKey, sortKey, options);
         },
         put: (item) => context.table.put(item),
+        putIfAbsent: (item) => context.table.putIfAbsent(item),
         delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
         query: (partitionKey, options) => context.table.query(partitionKey, options),
         queryGsi: (indexName, partitionKey, options) =>
