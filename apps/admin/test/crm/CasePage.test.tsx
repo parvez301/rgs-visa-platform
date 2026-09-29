@@ -91,6 +91,7 @@ function renderCasePage(
     events?: CrmEventView[];
     caseReadFails?: boolean;
     caseDetailsWriteFails?: boolean;
+    authState?: AuthState;
   } = {},
 ) {
   const caseRecord = options.caseRecord ?? buildCase();
@@ -179,7 +180,7 @@ function renderCasePage(
   });
 
   const result = render(
-    <AuthContext.Provider value={TEST_AUTH_STATE}>
+    <AuthContext.Provider value={options.authState ?? TEST_AUTH_STATE}>
       <QueryClientProvider client={queryClient}>
         <UndoToastProvider>
           {/*
@@ -213,6 +214,21 @@ afterEach(() => {
 });
 
 describe("CasePage", () => {
+  it("offers Edit details to a write role and opens the Edit case drawer", async () => {
+    renderCasePage({ caseRecord: buildCase() });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit details" }));
+    expect(screen.getByRole("dialog", { name: "Edit case" })).toBeInTheDocument();
+  });
+
+  it("does not offer Edit details to a read-only role", async () => {
+    renderCasePage({
+      caseRecord: buildCase(),
+      authState: { ...TEST_AUTH_STATE, roles: ["Viewer"], primaryRole: "Viewer" },
+    });
+    await screen.findByRole("heading", { name: "RGS-1001" });
+    expect(screen.queryByRole("button", { name: "Edit details" })).not.toBeInTheDocument();
+  });
+
   it("shows the shared case fields once, not repeated down the applicants", async () => {
     renderCasePage({ caseRecord: buildCase() });
 

@@ -2,6 +2,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { crm } from "@rgs/shared";
+import { useAdminAccess } from "../../lib/adminAccess";
 import { useAuth } from "../../lib/auth";
 import { CrmLayout } from "../CrmLayout";
 import { AgentPanel } from "../agent/AgentPanel";
@@ -38,6 +39,7 @@ import {
 } from "../transitions";
 import { Timeline } from "./Timeline";
 import { DocumentChecklistSection } from "./DocumentChecklistSection";
+import { EditCaseDrawer } from "./EditCaseDrawer";
 
 const NOT_RECORDED = "—";
 
@@ -97,7 +99,10 @@ function CaseScreen({ caseId }: { caseId: string }) {
   } = useApplicantEdit();
 
   const { idToken } = useAuth();
+  const { canWrite } = useAdminAccess();
+  const canWriteCrm = canWrite("crm");
   const queryClient = useQueryClient();
+  const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
   const [clientEmailErrorMessage, setClientEmailErrorMessage] = useState<string | null>(null);
   const [vendorEmailErrorMessage, setVendorEmailErrorMessage] = useState<string | null>(null);
   const clientEmailMutation = useMutation({
@@ -168,6 +173,7 @@ function CaseScreen({ caseId }: { caseId: string }) {
               }
               clientEmailErrorMessage={clientEmailErrorMessage}
               vendorEmailErrorMessage={vendorEmailErrorMessage}
+              onOpenEdit={canWriteCrm ? () => setIsEditDrawerOpen(true) : undefined}
             />
 
             <ApplicantsTable
@@ -195,6 +201,9 @@ function CaseScreen({ caseId }: { caseId: string }) {
           </div>
         )}
 
+        {isEditDrawerOpen && canWriteCrm && caseRecord !== undefined && (
+          <EditCaseDrawer caseRecord={caseRecord} onClose={() => setIsEditDrawerOpen(false)} />
+        )}
         {caseConflict !== undefined && (
           <ConflictPrompt
             serverMessage={caseConflict.serverMessage}
@@ -278,6 +287,7 @@ function CaseHeader({
   onCommitVendorEmail,
   clientEmailErrorMessage,
   vendorEmailErrorMessage,
+  onOpenEdit,
 }: {
   caseRecord: crm.CrmCase;
   partnerName: string;
@@ -287,6 +297,8 @@ function CaseHeader({
   onCommitVendorEmail: (contactEmail: string | null) => void;
   clientEmailErrorMessage: string | null;
   vendorEmailErrorMessage: string | null;
+  /** Absent for a read-only role: the button is not offered at all. */
+  onOpenEdit?: () => void;
 }) {
   const caseStatusOptions = allowedCaseStatusOptions(caseRecord.caseStatus);
   const billingStatusOptions = allowedBillingStatusOptions(caseRecord.billingStatus);
@@ -301,6 +313,11 @@ function CaseHeader({
         )}
         <AxisChip axis="caseStatus" value={caseRecord.caseStatus} />
         <AxisChip axis="billing" value={caseRecord.billingStatus} />
+        {onOpenEdit !== undefined && (
+          <button type="button" onClick={onOpenEdit} className={`${SECONDARY_BUTTON_CLASS} ml-auto`}>
+            Edit details
+          </button>
+        )}
       </div>
 
       <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
