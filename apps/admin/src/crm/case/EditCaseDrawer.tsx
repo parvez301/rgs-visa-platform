@@ -70,6 +70,9 @@ export function EditCaseDrawer({ caseRecord, onClose }: EditCaseDrawerProps) {
       const caseDetailsPatch = buildCaseDetailsPatch(originalDraft, caseDraft);
       const applicantPlan = planApplicantChanges(originalDraft, caseDraft);
       const completedSteps: string[] = [];
+      const knownApplicantRefs = new Set(
+        caseRecord.applicants.map((applicant) => applicant.applicantRef),
+      );
       try {
         if (Object.keys(caseDetailsPatch).length > 0) {
           await crmClient.updateCaseDetails(idToken!, caseRecord.caseId, caseDetailsPatch);
@@ -92,11 +95,28 @@ export function EditCaseDrawer({ caseRecord, onClose }: EditCaseDrawerProps) {
               ...(passportNumber === undefined ? {} : { passportNumber }),
             }));
           const refNo = newApplicantRow.refNo.trim();
-          await crmClient.addApplicant(idToken!, caseRecord.caseId, {
+          const caseWithNewApplicant = await crmClient.addApplicant(idToken!, caseRecord.caseId, {
             travellerId: traveller.travellerId,
             ...(passportNumber === undefined ? {} : { passportNumber }),
             ...(refNo === "" ? {} : { refNo }),
           });
+          // The row is no longer "new": give it the ref the server assigned, so a
+          // retry after a later step fails updates this person instead of adding them again.
+          const addedApplicant = caseWithNewApplicant.applicants.find(
+            (applicant) =>
+              applicant.travellerId === traveller.travellerId && !knownApplicantRefs.has(applicant.applicantRef),
+          );
+          if (addedApplicant !== undefined) {
+            knownApplicantRefs.add(addedApplicant.applicantRef);
+            setCaseDraft((currentDraft) => ({
+              ...currentDraft,
+              applicants: currentDraft.applicants.map((applicantRow) =>
+                applicantRow === newApplicantRow
+                  ? { ...applicantRow, applicantRef: addedApplicant.applicantRef }
+                  : applicantRow,
+              ),
+            }));
+          }
           completedSteps.push(`new applicant ${newApplicantRow.fullName.trim()}`);
         }
         for (const removedApplicantRef of applicantPlan.removals) {

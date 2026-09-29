@@ -60,7 +60,9 @@ function jsonResponse(status: number, payload: unknown) {
  * A URL-routed `fetch` stub. What matters here is which writes the drawer
  * makes, in what order, and with what body -- so every request is logged.
  */
-function renderEditDrawer(options: { caseWriteStatus?: number; caseWriteMessage?: string } = {}) {
+function renderEditDrawer(
+  options: { caseWriteStatus?: number; caseWriteMessage?: string; applicantRemovalIsRefused?: boolean } = {},
+) {
   const requestLog: LoggedRequest[] = [];
   const fetchMock = vi.fn((url: string, init: RequestInit = {}) => {
     const requestMethod = init.method ?? "GET";
@@ -87,6 +89,21 @@ function renderEditDrawer(options: { caseWriteStatus?: number; caseWriteMessage?
         code: "CONFLICT",
         message: options.caseWriteMessage ?? "Refused",
       });
+    }
+    if (requestMethod === "POST" && requestUrl.endsWith("/crm/travellers")) {
+      return jsonResponse(201, { travellerId: "trv_new", fullName: "RIYA SHARMA" });
+    }
+    if (requestMethod === "POST" && requestUrl.endsWith("/cases/case_1/applicants")) {
+      return jsonResponse(200, {
+        ...CASE_VIEW,
+        applicants: [
+          ...CASE_VIEW.applicants,
+          { applicantRef: "A3", travellerId: "trv_new", custody: "WITH_RGS", outcome: "PENDING" },
+        ],
+      });
+    }
+    if (requestMethod === "DELETE" && options.applicantRemovalIsRefused === true) {
+      return jsonResponse(409, { code: "CONFLICT", message: "Applicant A2 cannot be removed." });
     }
     if (requestMethod === "PUT" || requestMethod === "POST" || requestMethod === "DELETE") {
       return jsonResponse(200, CASE_VIEW);
@@ -152,5 +169,25 @@ describe("EditCaseDrawer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByText("Nothing changed.")).toBeInTheDocument();
     expect(requestLog.filter((request) => request.method !== "GET")).toHaveLength(0);
+  });
+
+  it("does not add an applicant twice when a later step fails and the desk retries", async () => {
+    const { requestLog, onClose } = renderEditDrawer({ applicantRemovalIsRefused: true });
+    fireEvent.click(screen.getByRole("button", { name: "Add another applicant" }));
+    fireEvent.change(screen.getByLabelText("Applicant 3 name"), { target: { value: "RIYA SHARMA" } });
+    fireEvent.click(screen.getByRole("button", { name: "Remove applicant 2" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(/Applicant A2 cannot be removed\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(requestLog.filter((request) => request.method === "DELETE")).toHaveLength(2),
+    );
+
+    const applicantAdditions = requestLog.filter(
+      (request) => request.method === "POST" && request.url.endsWith("/cases/case_1/applicants"),
+    );
+    expect(applicantAdditions).toHaveLength(1);
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
