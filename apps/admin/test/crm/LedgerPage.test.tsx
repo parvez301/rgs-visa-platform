@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider, type UseQueryResult } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
 import { LedgerPage } from "../../src/crm/ledger/LedgerPage";
 import { useLedgerRows, usePartners } from "../../src/crm/api/hooks";
-import type { LedgerLoad, OpenReviewSummaryEntry } from "../../src/crm/api/crmClient";
+import { crmClient, type LedgerLoad, type OpenReviewSummaryEntry } from "../../src/crm/api/crmClient";
 import { UndoToastProvider } from "../../src/crm/UndoToast";
 import { AgentPanelProvider } from "../../src/crm/agent/AgentPanelProvider";
 import { mountedCell } from "./virtual";
@@ -451,5 +451,64 @@ describe("LedgerPage — the issue filter", () => {
     fireEvent.change(issueSelect, { target: { value: "__no_issue__" } });
     expect(screen.getByText("RGS-1003")).toBeInTheDocument();
     expect(screen.queryByText("RGS-1001")).toBeNull();
+  });
+});
+
+describe("LedgerPage — Export to Excel", () => {
+  function stubExportEnvironment() {
+    const exportedCaseIdBatches: string[][] = [];
+    vi.spyOn(crmClient, "fetchExportRows").mockImplementation(async (_idToken, caseIds) => {
+      exportedCaseIdBatches.push(caseIds);
+      return { rows: [], missingCaseIds: [] };
+    });
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    return exportedCaseIdBatches;
+  }
+
+  it("exports exactly the visible case ids when Export to Excel is clicked", async () => {
+    const exportedCaseIdBatches = stubExportEnvironment();
+    stubLedgerLoad({
+      rows: [
+        buildLedgerRow({ caseId: "case_0001", caseRef: "RGS-1001" }),
+        buildLedgerRow({ caseId: "case_0002", caseRef: "RGS-1002" }),
+      ],
+    });
+    stubPartners();
+    renderLedgerPage();
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "RGS-1002" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Export to Excel" }));
+
+    await waitFor(() => expect(exportedCaseIdBatches).toEqual([["case_0002"]]));
+    await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledTimes(1));
+  });
+
+  it("says the export holds only the loaded rows when the ledger is partial", () => {
+    stubLedgerLoad({ truncated: true });
+    stubPartners();
+
+    renderLedgerPage();
+
+    expect(screen.getByText("Export holds only the loaded rows.")).toBeInTheDocument();
+  });
+
+  it("says nothing about partial export on a fully loaded ledger", () => {
+    stubLedgerLoad();
+    stubPartners();
+
+    renderLedgerPage();
+
+    expect(screen.queryByText("Export holds only the loaded rows.")).not.toBeInTheDocument();
+  });
+
+  it("disables the button when no rows are visible", () => {
+    stubLedgerLoad({ rows: [] });
+    stubPartners();
+
+    renderLedgerPage();
+
+    expect(screen.getByRole("button", { name: "Export to Excel" })).toBeDisabled();
   });
 });

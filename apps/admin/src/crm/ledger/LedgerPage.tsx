@@ -5,7 +5,7 @@ import { useAdminAccess } from "../../lib/adminAccess";
 import { useAuth } from "../../lib/auth";
 import { CrmLayout } from "../CrmLayout";
 import { AgentPanel } from "../agent/AgentPanel";
-import type { OpenReviewSummaryEntry } from "../api/crmClient";
+import { crmClient, type OpenReviewSummaryEntry } from "../api/crmClient";
 import { useLedgerRows, usePartners, useReviewSummary } from "../api/hooks";
 import {
   CARD_CLASS,
@@ -22,6 +22,7 @@ import { applyFilters, applySort, localTodayIso, type LedgerFilters, type Ledger
 import { BulkActionsBar } from "./BulkActionsBar";
 import { LedgerSkeleton } from "./LedgerSkeleton";
 import { LedgerTable } from "./LedgerTable";
+import { buildLedgerWorkbookBytes, exportFileName, fetchAllExportRows } from "./ledgerExport";
 import { countOpsDashboard } from "./opsDashboard";
 import {
   appointmentsTodayViewId,
@@ -78,7 +79,7 @@ function clientFiltersFromView(viewFilters: LedgerFilters): ClientOnlyLedgerFilt
 }
 
 export function LedgerPage() {
-  const { email: signedInUserEmail } = useAuth();
+  const { email: signedInUserEmail, idToken } = useAuth();
   const { canWrite } = useAdminAccess();
   const canWriteCrm = canWrite("crm");
   // Default Live work: smaller first fetch and matches the daily work queue.
@@ -202,6 +203,40 @@ export function LedgerPage() {
     applyLedgerView(builtInView.filters, builtInView.sort);
   }
 
+  const [exportProgressText, setExportProgressText] = useState<string | null>(null);
+  const [exportErrorText, setExportErrorText] = useState<string | null>(null);
+
+  async function exportVisibleRowsToExcel() {
+    if (idToken === null || visibleLedgerRows.length === 0) return;
+    setExportErrorText(null);
+    const visibleCaseIds = visibleLedgerRows.map((ledgerRow) => ledgerRow.caseId);
+    try {
+      setExportProgressText(`Exporting 0 of ${visibleCaseIds.length.toLocaleString("en-IN")}…`);
+      const exportResult = await fetchAllExportRows(
+        (batchCaseIds) => crmClient.fetchExportRows(idToken, batchCaseIds),
+        visibleCaseIds,
+        (doneCount, totalCount) =>
+          setExportProgressText(`Exporting ${doneCount.toLocaleString("en-IN")} of ${totalCount.toLocaleString("en-IN")}…`),
+      );
+      const workbookBytes = await buildLedgerWorkbookBytes(exportResult.rows);
+      const downloadUrl = URL.createObjectURL(
+        new Blob([workbookBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+      );
+      const downloadLink = document.createElement("a");
+      downloadLink.href = downloadUrl;
+      downloadLink.download = exportFileName(localTodayIso());
+      downloadLink.click();
+      URL.revokeObjectURL(downloadUrl);
+      if (exportResult.missingCaseIds.length > 0) {
+        setExportErrorText(`${exportResult.missingCaseIds.length} case(s) could not be read and are not in the file.`);
+      }
+    } catch (error) {
+      setExportErrorText(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setExportProgressText(null);
+    }
+  }
+
   const statusSummaryLabel =
     selectedCaseStatuses.length === 0
       ? "All statuses"
@@ -231,6 +266,20 @@ export function LedgerPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {isLedgerPartial && <span className="text-xs text-ink-soft">Export holds only the loaded rows.</span>}
+            <button
+              type="button"
+              onClick={() => void exportVisibleRowsToExcel()}
+              disabled={exportProgressText !== null || visibleLedgerRows.length === 0}
+              title={
+                isLedgerPartial
+                  ? "Exports the rows loaded so far — the Ledger is not fully loaded."
+                  : "Exports every row matching the current view."
+              }
+              className={SECONDARY_BUTTON_CLASS}
+            >
+              {exportProgressText ?? "Export to Excel"}
+            </button>
             <Link to="/crm/review" className={SECONDARY_BUTTON_CLASS}>
               Review queue
             </Link>
@@ -241,6 +290,12 @@ export function LedgerPage() {
             )}
           </div>
         </div>
+
+        {exportErrorText !== null && (
+          <p role="alert" className="text-sm text-rgs-red-deep">
+            {exportErrorText}
+          </p>
+        )}
 
         <div
           className="flex flex-wrap items-baseline gap-x-5 gap-y-1 border-b border-line pb-2 text-sm"
