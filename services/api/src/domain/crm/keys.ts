@@ -48,6 +48,16 @@ export function caseRefIndexPartitionKey(tenantId: string, caseRef: string): str
   return `TENANT#${tenantId}#CASE_REF#${caseRef}`;
 }
 
+/**
+ * The uniqueness claim for one normalized reference value (a case REF or an
+ * applicant REF NO -- one namespace). Distinct from caseRefIndexPartitionKey:
+ * that is the importer's idempotency anchor keyed on the raw ref; this is
+ * the "no two cases share a reference" rule, keyed on the normalized one.
+ */
+export function refClaimPartitionKey(tenantId: string, refKey: string): string {
+  return `TENANT#${tenantId}#REF_CLAIM#${refKey}`;
+}
+
 export function partnerPartitionKey(tenantId: string, partnerId: string): string {
   return `TENANT#${tenantId}#PARTNER#${partnerId}`;
 }
