@@ -5,7 +5,7 @@ import { badRequest, conflict, notFound } from "../../lib/errors";
 import { readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
 import { assertApplicantRefNosDistinct, claimNewRefs, releaseRefKeys, staleRefKeys } from "./refClaims";
-import { getTravellerOrThrow, updateTravellerDetails } from "./travellers";
+import { assertPassportFreeForTraveller, getTravellerOrThrow, updateTravellerDetails } from "./travellers";
 
 /**
  * Custody states in which the passport is physically with RGS or on its way
@@ -94,13 +94,13 @@ export async function updateApplicantDetails(
 
   if (changedFieldNames.length === 0) return currentCase;
 
-  // Traveller first: its passport clash check is the one refusal that can
-  // come from outside this case, so it must fail before the case is touched.
-  if (fullNameChanging || passportChanging) {
-    await updateTravellerDetails(context, tenantId, currentApplicant.travellerId, {
-      ...(fullNameChanging ? { fullName: trimmedFullName } : {}),
-      ...(passportChanging ? { passportNumber: nextPassportNumber ?? null } : {}),
-    });
+  // The passport clash is the one refusal that comes from outside this case,
+  // so it is checked (no write) before anything is touched. The traveller
+  // itself is written LAST, after the case and its REF claims are safely
+  // persisted: a 400/409 from the case path must not leave the traveller
+  // changed and the case not (passport drift).
+  if (passportChanging && nextPassportNumber !== undefined && nextPassportNumber !== traveller.passportNumber) {
+    await assertPassportFreeForTraveller(context, tenantId, currentApplicant.travellerId, nextPassportNumber);
   }
 
   const { passportNumber: _previousPassport, refNo: _previousRefNo, ...applicantBase } = currentApplicant;
@@ -115,6 +115,17 @@ export async function updateApplicantDetails(
   // Always rewritten, even for a name-only change: writeCase recomputes the
   // Ledger's search haystack from the traveller names.
   const updatedCase = await persistApplicantChange(context, tenantId, currentCase, nextApplicants);
+  if (fullNameChanging || passportChanging) {
+    await updateTravellerDetails(context, tenantId, currentApplicant.travellerId, {
+      ...(fullNameChanging ? { fullName: trimmedFullName } : {}),
+      ...(passportChanging ? { passportNumber: nextPassportNumber ?? null } : {}),
+    });
+    // writeCase stamped searchText from the traveller as it was BEFORE this
+    // write; stamp again so the Ledger finds the new name/passport. Idempotent
+    // and claim-free: a failure here leaves case and traveller consistent,
+    // only the haystack stale until the next write.
+    await writeCase(context, updatedCase);
+  }
   await recordCrmEvent(context, tenantId, caseId, "APPLICANT_UPDATED", actorEmail, {
     applicantRef,
     changedFields: changedFieldNames.join(","),

@@ -71,10 +71,21 @@ describe("claimNewRefs / releaseRefKeys", () => {
     expect(await readRefClaim(context, TENANT_ID, "FRESH")).toBeUndefined();
   });
 
-  it("treats a claim that already names this case as its own (idempotent retry)", async () => {
+  it("treats a claim that already names this case as its own, and still reports it for rollback", async () => {
+    // A putIfAbsent that landed but whose response was lost: the retry sees our
+    // own claim. It must come back in the list, or a later writeCase failure
+    // would never release it and the REF would be orphaned forever.
     const context = buildTestContext();
     await claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("R-1"));
-    await expect(claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("R-1"))).resolves.toEqual([]);
+    await expect(claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("R-1"))).resolves.toEqual(["R-1"]);
+  });
+
+  it("does not report keys the previous version already held", async () => {
+    const context = buildTestContext();
+    await claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("HELD"));
+    await expect(
+      claimNewRefs(context, TENANT_ID, "case_A", caseShape("HELD"), caseShape("HELD", ["NEW-2"])),
+    ).resolves.toEqual(["NEW-2"]);
   });
 
   it("claims only keys the previous version did not have", async () => {

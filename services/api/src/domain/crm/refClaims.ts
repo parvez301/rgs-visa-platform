@@ -111,11 +111,15 @@ export async function claimNewRefs(
   for (const [refKey, refValue] of refKeysOfCase(nextCase)) {
     if (previousRefKeys.has(refKey)) continue;
     const claimOutcome = await claimRefKey(context, tenantId, caseId, refKey, refValue);
-    if (claimOutcome === "written") {
+    if (claimOutcome !== "held_by_other_case") {
+      // "already_ours" is reported too: keys the previous version held were
+      // skipped above, so a claim of ours that reaches here is a putIfAbsent
+      // that landed but whose response was lost (or an orphan of this case).
+      // Rollback must be able to release it, or a failed writeCase leaves the
+      // REF claimed forever.
       newlyClaimedKeys.push(refKey);
       continue;
     }
-    if (claimOutcome === "already_ours") continue;
     await releaseRefKeys(context, tenantId, caseId, newlyClaimedKeys);
     throw conflict(`REF "${refValue}" is already used by another case.`);
   }

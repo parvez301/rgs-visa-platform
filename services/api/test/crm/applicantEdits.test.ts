@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCase, changeApplicantCustody } from "../../src/domain/crm/cases";
 import { createPartner } from "../../src/domain/crm/partners";
 import { getTravellerOrThrow, upsertTraveller } from "../../src/domain/crm/travellers";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import { addApplicant, removeApplicant, updateApplicantDetails } from "../../src/domain/crm/applicantEdits";
-import { readRefClaim } from "../../src/domain/crm/refClaims";
+import { casePartitionKey } from "../../src/domain/crm/keys";
+import { claimNewRefs, readRefClaim } from "../../src/domain/crm/refClaims";
 import { buildTestContext, type TestContext } from "../helpers";
 
 const TENANT_ID = "rgs";
@@ -79,6 +80,76 @@ describe("updateApplicantDetails", () => {
     await expect(
       updateApplicantDetails(context, TENANT_ID, crmCase.caseId, "A2", { refNo: "fam-1-a" }, ACTOR),
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("releases a landed-but-unacked claim when the case write then fails", async () => {
+    const context = buildTestContext();
+    const { crmCase } = await seedFamilyCase(context);
+    // The earlier attempt's putIfAbsent landed; its response never came back.
+    await claimNewRefs(context, TENANT_ID, crmCase.caseId, undefined, { caseRef: "ORPHAN-1", applicants: [] });
+    const realPut = context.table.put.bind(context.table);
+    vi.spyOn(context.table, "put").mockImplementation(async (item) => {
+      if (item.PK === casePartitionKey(TENANT_ID, crmCase.caseId)) throw new Error("write lost");
+      return realPut(item);
+    });
+
+    await expect(
+      updateApplicantDetails(context, TENANT_ID, crmCase.caseId, "A2", { refNo: "ORPHAN-1" }, ACTOR),
+    ).rejects.toThrow("write lost");
+    expect(await readRefClaim(context, TENANT_ID, "ORPHAN-1")).toBeUndefined();
+  });
+
+  it("leaves the traveller untouched when the case change is refused (duplicate REF NO)", async () => {
+    const context = buildTestContext();
+    const { crmCase, secondTraveller } = await seedFamilyCase(context);
+    await expect(
+      updateApplicantDetails(
+        context,
+        TENANT_ID,
+        crmCase.caseId,
+        "A2",
+        { fullName: "SITA RENAMED", passportNumber: "P3333333", refNo: "fam-1-a" },
+        ACTOR,
+      ),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    const traveller = await getTravellerOrThrow(context, TENANT_ID, secondTraveller.travellerId);
+    expect(traveller.fullName).toBe("SITA SHARMA");
+    expect(traveller.passportNumber).toBeUndefined();
+  });
+
+  it("leaves the traveller untouched when another case holds the REF (409)", async () => {
+    const context = buildTestContext();
+    const { crmCase, secondTraveller } = await seedFamilyCase(context);
+    await claimNewRefs(context, TENANT_ID, "case_other", undefined, { caseRef: "TAKEN-9", applicants: [] });
+    await expect(
+      updateApplicantDetails(
+        context,
+        TENANT_ID,
+        crmCase.caseId,
+        "A2",
+        { fullName: "SITA RENAMED", passportNumber: "P3333333", refNo: "TAKEN-9" },
+        ACTOR,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    const traveller = await getTravellerOrThrow(context, TENANT_ID, secondTraveller.travellerId);
+    expect(traveller.fullName).toBe("SITA SHARMA");
+    expect(traveller.passportNumber).toBeUndefined();
+  });
+
+  it("stamps the Ledger search haystack with the NEW name and passport (traveller is written after the case)", async () => {
+    const context = buildTestContext();
+    const { crmCase } = await seedFamilyCase(context);
+    await updateApplicantDetails(
+      context,
+      TENANT_ID,
+      crmCase.caseId,
+      "A2",
+      { fullName: "SITA RENAMED", passportNumber: "P3333333" },
+      ACTOR,
+    );
+    const caseItem = await context.table.get(casePartitionKey(TENANT_ID, crmCase.caseId), "META");
+    expect(String(caseItem?.searchText)).toMatch(/SITA RENAMED/i);
+    expect(String(caseItem?.searchText)).toMatch(/P3333333/i);
   });
 
   it("404s on an unknown applicant", async () => {

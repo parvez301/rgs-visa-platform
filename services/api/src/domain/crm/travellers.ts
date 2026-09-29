@@ -139,6 +139,23 @@ export interface UpdateTravellerDetailsInput {
 }
 
 /**
+ * Clash check without a write: a passport already on file for SOMEONE ELSE is
+ * refused, because re-pointing it would merge two people. Callers that must
+ * order other writes around the traveller write use this to fail early.
+ */
+export async function assertPassportFreeForTraveller(
+  context: AppContext,
+  tenantId: string,
+  travellerId: string,
+  passportNumber: string,
+): Promise<void> {
+  const passportHolder = await findTravellerByPassport(context, tenantId, passportNumber);
+  if (passportHolder !== undefined && passportHolder.travellerId !== travellerId) {
+    throw conflict(`Passport ${passportNumber} is already on file for ${passportHolder.fullName}.`);
+  }
+}
+
+/**
  * A traveller is one person across every case, so a corrected name shows on
  * all of them -- the edit drawer says so. The name and passport indexes
  * (GSI2, GSI3) are rewritten with the item, and a passport already on file
@@ -154,10 +171,7 @@ export async function updateTravellerDetails(
   const nextPassportNumber =
     input.passportNumber === undefined ? currentTraveller.passportNumber : (input.passportNumber ?? undefined);
   if (nextPassportNumber !== undefined && nextPassportNumber !== currentTraveller.passportNumber) {
-    const passportHolder = await findTravellerByPassport(context, tenantId, nextPassportNumber);
-    if (passportHolder !== undefined && passportHolder.travellerId !== travellerId) {
-      throw conflict(`Passport ${nextPassportNumber} is already on file for ${passportHolder.fullName}.`);
-    }
+    await assertPassportFreeForTraveller(context, tenantId, travellerId, nextPassportNumber);
   }
   const nextFullName = input.fullName ?? currentTraveller.fullName;
   const { passportNumber: _previousPassportNumber, ...travellerWithoutPassport } = currentTraveller;
