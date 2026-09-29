@@ -1526,4 +1526,28 @@ describe("crm cases family group fields over HTTP", () => {
 
     expect(response.statusCode).toBe(400);
   });
+
+  it("POST /cases answers 409 with a readable message for a duplicate REF", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
+    const createBody = {
+      caseRef: "31377",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31377", travellerId }],
+    };
+
+    const firstResponse = await call(router, "POST", "/api/v1/admin/crm/cases", createBody);
+    expect(firstResponse.statusCode).toBe(200);
+    const secondResponse = await call(router, "POST", "/api/v1/admin/crm/cases", createBody);
+    expect(secondResponse.statusCode).toBe(409);
+    expect(secondResponse.payload.message).toBe(`REF "${createBody.caseRef}" is already used by another case.`);
+  });
 });

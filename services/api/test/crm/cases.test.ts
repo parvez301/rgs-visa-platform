@@ -9,6 +9,7 @@ import {
 } from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
+import { readRefClaim } from "../../src/domain/crm/refClaims";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import type { PagedQueryOptions, QueryOptions, QueryPage, TableItem } from "../../src/lib/db";
 import {
@@ -1115,5 +1116,72 @@ describe("createCase family group fields", () => {
 
     const reloaded = await getCase(context, "rgs", created.caseId);
     expect(reloaded).toEqual(created);
+  });
+});
+
+describe("createCase reference uniqueness", () => {
+  async function seedPartnerAndTraveller(context: ReturnType<typeof buildTestContext>) {
+    const partner = await createPartner(context, "rgs", { canonicalName: "Unique Travels", partnerType: "AGENCY" }, "desk@rgs.local");
+    const traveller = await upsertTraveller(context, "rgs", { fullName: "RAVI KUMAR" });
+    return { partnerId: partner.partnerId, travellerId: traveller.travellerId };
+  }
+
+  function caseInput(ids: { partnerId: string; travellerId: string }, caseRef: string, refNo?: string) {
+    return {
+      caseRef,
+      caseType: "VISA" as const,
+      visaType: "TOURIST" as const,
+      partnerId: ids.partnerId,
+      destinationCountry: "JP",
+      receivedDate: "2026-09-01",
+      applicants: [{ applicantRef: "A1", travellerId: ids.travellerId, ...(refNo === undefined ? {} : { refNo }) }],
+    };
+  }
+
+  it("refuses a second case with the same REF, ignoring case and spaces", async () => {
+    const context = buildTestContext();
+    const ids = await seedPartnerAndTraveller(context);
+    await createCase(context, "rgs", caseInput(ids, "rgs-100"), "desk@rgs.local");
+
+    await expect(createCase(context, "rgs", caseInput(ids, " RGS-100"), "desk@rgs.local")).rejects.toMatchObject({
+      statusCode: 409,
+    });
+  });
+
+  it("refuses a REF NO that is another case's REF", async () => {
+    const context = buildTestContext();
+    const ids = await seedPartnerAndTraveller(context);
+    await createCase(context, "rgs", caseInput(ids, "50001"), "desk@rgs.local");
+
+    await expect(createCase(context, "rgs", caseInput(ids, "50002", "50001"), "desk@rgs.local")).rejects.toMatchObject({
+      statusCode: 409,
+    });
+  });
+
+  it("lets exactly one of two racing creates win the same REF", async () => {
+    const context = buildTestContext();
+    const ids = await seedPartnerAndTraveller(context);
+    const outcomes = await Promise.allSettled([
+      createCase(context, "rgs", caseInput(ids, "RACE-1"), "desk@rgs.local"),
+      createCase(context, "rgs", caseInput(ids, "RACE-1"), "desk@rgs.local"),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+  });
+
+  it("releases its claims when the case write fails, so the REF is not burned", async () => {
+    const context = buildTestContext();
+    const ids = await seedPartnerAndTraveller(context);
+    // Fail only the case META write. Claims go through putIfAbsent, so they
+    // still land -- which is exactly the state the rollback must undo.
+    const originalPut = context.table.put.bind(context.table);
+    context.table.put = async (item) => {
+      if (item.SK === "META" && String(item.PK).includes("#CASE#")) throw new Error("dynamo down");
+      return originalPut(item);
+    };
+
+    await expect(createCase(context, "rgs", caseInput(ids, "BURN-1", "BURN-1-P"), "desk@rgs.local")).rejects.toThrow("dynamo down");
+    context.table.put = originalPut;
+    expect(await readRefClaim(context, "rgs", "BURN-1")).toBeUndefined();
+    expect(await readRefClaim(context, "rgs", "BURN-1-P")).toBeUndefined();
   });
 });

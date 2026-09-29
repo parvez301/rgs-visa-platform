@@ -14,6 +14,7 @@ import {
   partnerCasesGsi2Pk,
 } from "./keys";
 import { getPartnerOrThrow } from "./partners";
+import { assertApplicantRefNosDistinct, claimNewRefs, releaseRefKeys } from "./refClaims";
 import { getTravellerOrThrow } from "./travellers";
 import { findCountryChecklist } from "./countryChecklist";
 import { stampDocumentChecklistFromCountry } from "./caseDocumentChecklist";
@@ -128,7 +129,17 @@ export async function createCase(
     throw error;
   }
 
-  await writeCase(context, crmCase);
+  assertApplicantRefNosDistinct(crmCase);
+  // Claimed BEFORE the write so two racing creates cannot both land; released
+  // again if the write fails, or the REF would stay taken by a case that does
+  // not exist.
+  const newlyClaimedRefKeys = await claimNewRefs(context, tenantId, crmCase.caseId, undefined, crmCase);
+  try {
+    await writeCase(context, crmCase);
+  } catch (error) {
+    await releaseRefKeys(context, tenantId, crmCase.caseId, newlyClaimedRefKeys);
+    throw error;
+  }
   await recordCrmEvent(context, tenantId, crmCase.caseId, "CASE_CREATED", actorEmail, {
     caseRef: crmCase.caseRef,
     caseType: crmCase.caseType,
