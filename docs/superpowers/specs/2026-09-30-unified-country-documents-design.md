@@ -1,6 +1,6 @@
 # Unified country documents — Design
 
-**Status:** draft (awaiting review)  
+**Status:** approved  
 **Date:** 2026-09-30  
 **Repo:** `rgs`
 
