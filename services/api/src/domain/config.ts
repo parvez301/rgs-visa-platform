@@ -2,13 +2,13 @@ import {
   COUNTRY_PRODUCTS,
   CountryProductSchema,
   UnknownCountryProductError,
+  requiredDocumentsFromLegacyDocTypes,
   type CountryProduct,
+  type DocType,
 } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
-import { CorruptRecordError, badRequest, corruptRecord } from "../lib/errors";
-import { findCountryChecklist } from "./crm/countryChecklist";
-import { DEFAULT_TENANT_ID } from "./crm/keys";
+import { badRequest, corruptRecord } from "../lib/errors";
 import {
   collectReadableRecords,
   describeFirstZodIssue,
@@ -23,6 +23,38 @@ function configSortKey(countryCode: string, productCode: string): string {
 }
 
 /**
+ * Rows written before `requiredDocuments` existed carry `docsRequired` (portal
+ * DocTypes) instead. Until the `migrate:country-documents-to-products` script
+ * has run, read such a row as if it had been migrated: one checklist line per
+ * legacy DocType. A row that already has a non-empty `requiredDocuments` wins,
+ * and the legacy/read-time-only attributes are dropped either way so they never
+ * reach the schema or the response.
+ */
+export function coerceLegacyCountryProduct(raw: Record<string, unknown>): unknown {
+  if (Array.isArray(raw["requiredDocuments"]) && raw["requiredDocuments"].length > 0) {
+    const {
+      docsRequired: _legacyDocTypes,
+      requiredDocumentLabels: _readTimeLabels,
+      ...withoutLegacyAttributes
+    } = raw;
+    return withoutLegacyAttributes;
+  }
+  if (Array.isArray(raw["docsRequired"])) {
+    const {
+      docsRequired,
+      requiredDocumentLabels: _readTimeLabels,
+      ...withoutLegacyAttributes
+    } = raw;
+    return {
+      ...withoutLegacyAttributes,
+      requiredDocuments: requiredDocumentsFromLegacyDocTypes(docsRequired as DocType[]),
+    };
+  }
+  const { docsRequired: _legacyDocTypes, requiredDocumentLabels: _readTimeLabels, ...rest } = raw;
+  return { ...rest, requiredDocuments: raw["requiredDocuments"] ?? [] };
+}
+
+/**
  * The single place a stored row becomes a CountryProduct.
  *
  * This used to end in `throw directParse.error` — a bare ZodError, which
@@ -33,7 +65,10 @@ function configSortKey(countryCode: string, productCode: string): string {
  * and named while the rest of the catalog serves.
  */
 function itemToCountryProduct(item: Record<string, unknown>): CountryProduct {
-  const productAttributes = stripStorageKeys(item);
+  const productAttributes = coerceLegacyCountryProduct(stripStorageKeys(item)) as Record<
+    string,
+    unknown
+  >;
   const directParse = CountryProductSchema.safeParse(productAttributes);
   if (directParse.success) return directParse.data;
   // Schema evolution: rows written before newer fields existed are healed by
@@ -42,10 +77,13 @@ function itemToCountryProduct(item: Record<string, unknown>): CountryProduct {
     (seedProduct) => seedProduct.productCode === productAttributes["productCode"],
   );
   if (seedDefaults) {
+    const hasStoredDocuments =
+      Array.isArray(productAttributes["requiredDocuments"]) &&
+      productAttributes["requiredDocuments"].length > 0;
     const mergedParse = CountryProductSchema.safeParse({
       ...seedDefaults,
-      docsRequired: [...seedDefaults.docsRequired],
       ...productAttributes,
+      ...(hasStoredDocuments ? {} : { requiredDocuments: seedDefaults.requiredDocuments }),
     });
     if (mergedParse.success) return mergedParse.data;
   }
@@ -89,51 +127,10 @@ export async function listActiveCountryConfig(
   context: AppContext,
 ): Promise<CountryConfigListing> {
   const catalog = await listCountryConfig(context);
-  const activeProducts = catalog.countryProducts.filter((countryProduct) => countryProduct.active);
   return {
-    countryProducts: await withCrmChecklistLabels(context, activeProducts),
+    countryProducts: catalog.countryProducts.filter((countryProduct) => countryProduct.active),
     unreadableCountryProductIds: catalog.unreadableCountryProductIds,
   };
-}
-
-/**
- * Read-time merge of the CRM country checklist onto the public catalog. One
- * lookup per distinct country (several products can share a code), issued in
- * parallel: this runs on the unauthenticated price list every marketing country
- * page hits, and the catalog is ~34 products, so serialising the gets put ~30
- * round trips on that path. Nothing is written back to Config: a country with
- * no (or an empty) checklist gets no labels, and consumers fall back to
- * `docsRequired`.
- */
-async function withCrmChecklistLabels(
-  context: AppContext,
-  countryProducts: CountryProduct[],
-): Promise<CountryProduct[]> {
-  const countryCodes = [...new Set(countryProducts.map((product) => product.countryCode))];
-  const lookups = await Promise.all(
-    countryCodes.map(async (countryCode) => {
-      try {
-        return await findCountryChecklist(context, DEFAULT_TENANT_ID, countryCode);
-      } catch (error) {
-        // Unauthenticated price list: a hand-damaged checklist row must not take
-        // it down. That country just falls back to its docsRequired labels.
-        if (!(error instanceof CorruptRecordError)) throw error;
-        return undefined;
-      }
-    }),
-  );
-  const labelsByCountry = new Map<string, readonly string[]>();
-  for (const checklist of lookups) {
-    if (checklist !== undefined && checklist.requiredDocuments.length > 0) {
-      labelsByCountry.set(checklist.countryCode, [...checklist.requiredDocuments]);
-    }
-  }
-  return countryProducts.map((countryProduct) => {
-    const labels = labelsByCountry.get(countryProduct.countryCode);
-    return labels === undefined
-      ? countryProduct
-      : { ...countryProduct, requiredDocumentLabels: [...labels] };
-  });
 }
 
 export async function resolveCountryProduct(
@@ -157,7 +154,13 @@ export async function upsertCountryProduct(
   adminEmail: string,
   productInput: unknown,
 ): Promise<CountryProduct> {
-  const parseResult = CountryProductSchema.safeParse(productInput);
+  // Clients (and older admin builds) may still send the legacy or read-time
+  // attributes; persist `requiredDocuments` only.
+  const { docsRequired: _legacyDocTypes, requiredDocumentLabels: _readTimeLabels, ...sanitizedInput } =
+    typeof productInput === "object" && productInput !== null
+      ? (productInput as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  const parseResult = CountryProductSchema.safeParse(sanitizedInput);
   if (!parseResult.success) {
     const firstIssue = parseResult.error.issues[0];
     throw badRequest(
@@ -166,8 +169,7 @@ export async function upsertCountryProduct(
         : "Invalid country product",
     );
   }
-  // Labels are a read-time merge from the CRM checklist; never persist them.
-  const { requiredDocumentLabels: _readTimeLabels, ...countryProduct } = parseResult.data;
+  const countryProduct = parseResult.data;
 
   // First write on a fresh table: seed everything else so one edit
   // doesn't make the rest of the catalog vanish from DB reads.
@@ -210,7 +212,9 @@ export async function seedCountryConfig(context: AppContext): Promise<number> {
       PK: CONFIG_PARTITION_KEY,
       SK: sortKey,
       ...seedProduct,
-      docsRequired: [...seedProduct.docsRequired],
+      requiredDocuments: seedProduct.requiredDocuments.map((requiredDocument) => ({
+        ...requiredDocument,
+      })),
     });
     seededCount += 1;
   }

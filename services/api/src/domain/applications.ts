@@ -3,6 +3,7 @@ import {
   ApplicationEssentialsSchema,
   CompleteTravellerSchema,
   TravellerSchema,
+  portalDocTypesFromProduct,
   type Application,
   type ApplicationDocument,
   type CountryProduct,
@@ -204,7 +205,7 @@ export function missingDocuments(
   application: Application,
   uploadedDocuments: ApplicationDocument[],
 ): string[] {
-  const requiredDocTypes = countryProduct.docsRequired;
+  const requiredDocTypes = portalDocTypesFromProduct(countryProduct);
   const missing: string[] = [];
   application.travellers.forEach((_traveller, travellerIndex) => {
     for (const requiredDocType of requiredDocTypes) {

@@ -24,7 +24,7 @@ describe("listCountryConfig", () => {
     const context = buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
-      docsRequired: [...uaeSeed.docsRequired],
+      requiredDocuments: [...uaeSeed.requiredDocuments],
       governmentFeeInr: 7200,
     });
     const catalog = (await listCountryConfig(context)).countryProducts;
@@ -38,7 +38,7 @@ describe("upsertCountryProduct", () => {
     const context = buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
-      docsRequired: [...uaeSeed.docsRequired],
+      requiredDocuments: [...uaeSeed.requiredDocuments],
       serviceFeeInr: 1800,
     });
     const catalog = (await listCountryConfig(context)).countryProducts;
@@ -50,14 +50,14 @@ describe("upsertCountryProduct", () => {
     await expect(
       upsertCountryProduct(context, "admin_1", "admin@example.com", {
         ...uaeSeed,
-        docsRequired: [...uaeSeed.docsRequired],
+        requiredDocuments: [...uaeSeed.requiredDocuments],
         governmentFeeInr: -5,
       }),
     ).rejects.toMatchObject({ statusCode: 400 });
     await expect(
       upsertCountryProduct(context, "admin_1", "admin@example.com", {
         ...uaeSeed,
-        docsRequired: ["AADHAAR_CARD"],
+        requiredDocuments: [{ label: "Aadhaar", portalDocType: "AADHAAR_CARD" }],
       }),
     ).rejects.toMatchObject({ statusCode: 400 });
   });
@@ -66,7 +66,7 @@ describe("upsertCountryProduct", () => {
     const context = buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
-      docsRequired: [...uaeSeed.docsRequired],
+      requiredDocuments: [...uaeSeed.requiredDocuments],
       processingDays: 2,
     });
     const dayEvents = await context.table.query("EVENT#2026-07-23");
@@ -87,14 +87,12 @@ describe("schema evolution", () => {
     const context = buildTestContext();
     // Simulate a row seeded before the region/tier/officialUrl fields existed,
     // including an admin-edited fee that must survive the merge.
-    const { region, tier, officialUrl, ...legacyShape } = {
-      ...uaeSeed,
-      docsRequired: [...uaeSeed.docsRequired],
-    };
+    const { region, tier, officialUrl, requiredDocuments, ...legacyShape } = uaeSeed;
     await context.table.put({
       PK: "CONFIG#COUNTRY",
       SK: `${uaeSeed.countryCode}#${uaeSeed.productCode}`,
       ...legacyShape,
+      requiredDocuments: [...requiredDocuments],
       governmentFeeInr: 7777,
     });
     const catalog = (await listCountryConfig(context)).countryProducts;
@@ -110,7 +108,7 @@ describe("config drives pricing and document rules", () => {
     const context = buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
-      docsRequired: [...uaeSeed.docsRequired],
+      requiredDocuments: [...uaeSeed.requiredDocuments],
       governmentFeeInr: 9999,
       serviceFeeInr: 2001,
     });
@@ -123,7 +121,11 @@ describe("config drives pricing and document rules", () => {
     const context = buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
-      docsRequired: ["PASSPORT_BIO", "PHOTO", "HOTEL_BOOKING"],
+      requiredDocuments: [
+        { label: "Passport bio page", portalDocType: "PASSPORT_BIO" },
+        { label: "Photo", portalDocType: "PHOTO" },
+        { label: "Hotel booking", portalDocType: "HOTEL_BOOKING" },
+      ],
     });
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     const presignResult = await presignDocumentUpload(

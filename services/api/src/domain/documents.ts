@@ -1,4 +1,4 @@
-import type { ApplicationDocument, DocType } from "@rgs/shared";
+import { portalDocTypesFromProduct, type ApplicationDocument, type DocType } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
 import {
@@ -36,7 +36,7 @@ async function assertValidDocRequest(
     throw badRequest(`travellerIndex ${travellerIndex} is out of range`);
   }
   const countryProduct = await resolveCountryProduct(context, countryCode, productCode);
-  if (!countryProduct.docsRequired.includes(docType)) {
+  if (!portalDocTypesFromProduct(countryProduct).includes(docType)) {
     throw badRequest(`${docType} is not part of the ${countryCode} document checklist`);
   }
 }
