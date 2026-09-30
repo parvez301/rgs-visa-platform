@@ -1,14 +1,34 @@
-/** Every value a status-email template may reference as `{{name}}`. */
-export type StatusEmailVars = {
-  clientName: string;
-  countryVisaType: string;
-  applicationId: string;
-  appointmentDate: string;
-  appointmentTime: string;
-  centre: string;
-  applicantsBlock: string;
-  phone: string;
-};
+/**
+ * Every value a status-email template may reference as `{{name}}`. Shared
+ * because the admin template editor advertises this list to the desk while the
+ * API fills it: a name added on one side and missed on the other means the
+ * editor offers a placeholder that renders blank in real mail.
+ */
+export const STATUS_EMAIL_VAR_NAMES = [
+  "clientName",
+  "countryVisaType",
+  "applicationId",
+  "appointmentDate",
+  "appointmentTime",
+  "centre",
+  "applicantsBlock",
+  "phone",
+] as const;
+
+export type StatusEmailVarName = (typeof STATUS_EMAIL_VAR_NAMES)[number];
+
+export type StatusEmailVars = Record<StatusEmailVarName, string>;
+
+/**
+ * Vars no case field feeds yet (spec §4.2), so the server renders them blank on
+ * every send and any line holding only these is dropped. The admin preview
+ * reads this list rather than inventing samples, so it cannot show a desk agent
+ * an appointment time the client will never receive.
+ */
+export const STATUS_EMAIL_UNPOPULATED_VARS: readonly StatusEmailVarName[] = [
+  "appointmentTime",
+  "centre",
+];
 
 const TOKEN_PATTERN = /\{\{\s*(\w+)\s*\}\}/g;
 

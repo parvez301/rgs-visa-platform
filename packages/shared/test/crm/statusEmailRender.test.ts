@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderStatusEmail, type StatusEmailVars } from "../../src/domain/crm/statusEmailRender";
+import { renderStatusEmail, type StatusEmailVars } from "../../src/crm/statusEmailRender";
 
 const VARS: StatusEmailVars = {
   clientName: "Asha",

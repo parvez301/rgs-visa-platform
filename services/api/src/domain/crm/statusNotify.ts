@@ -4,7 +4,6 @@ import { CorruptRecordError } from "../../lib/errors";
 import { resolveCaseTravellers } from "./caseTravellers";
 import { recordCrmEvent } from "./crmEvents";
 import { getPartnerOrThrow } from "./partners";
-import { renderStatusEmail, type StatusEmailVars } from "./statusEmailRender";
 import { getStatusEmailTemplate } from "./statusEmailTemplates";
 
 /** Keep in sync with admin VISA_TYPE_LABELS. */
@@ -82,8 +81,16 @@ function applicantsBlockOf(crmCase: crm.CrmCase, travellers: crm.CaseTravellerMa
     .join("\n");
 }
 
-/** Spec 2026-09-30 §4.2. `appointmentTime` and `centre` stay blank until the case has such fields. */
-function buildStatusEmailVars(crmCase: crm.CrmCase, travellers: crm.CaseTravellerMap): StatusEmailVars {
+/**
+ * Spec 2026-09-30 §4.2. The vars listed in `crm.STATUS_EMAIL_UNPOPULATED_VARS`
+ * stay blank until the case has fields to feed them; `statusNotifyVars.test.ts`
+ * pins that this builder and that list agree, so the admin preview cannot
+ * promise the desk a value real mail leaves out.
+ */
+export function buildStatusEmailVars(
+  crmCase: crm.CrmCase,
+  travellers: crm.CaseTravellerMap,
+): crm.StatusEmailVars {
   return {
     clientName: clientNameOf(crmCase, travellers),
     countryVisaType: countryVisaTypeOf(crmCase),
@@ -132,8 +139,8 @@ async function sendStatusTemplateMail(
   const partner = await getPartnerOrThrow(context, tenantId, crmCase.partnerId);
   const travellers = await resolveCaseTravellers(context, tenantId, crmCase.applicants);
   const vars = buildStatusEmailVars(crmCase, travellers);
-  const subject = renderStatusEmail(template.subject, vars);
-  const bodyText = renderStatusEmail(template.body, vars);
+  const subject = crm.renderStatusEmail(template.subject, vars);
+  const bodyText = crm.renderStatusEmail(template.body, vars);
 
   const recipients: { eventType: "PARTNER_NOTIFIED" | "CLIENT_NOTIFIED"; toAddress: string | undefined }[] = [
     { eventType: "PARTNER_NOTIFIED", toAddress: partner.contactEmail },

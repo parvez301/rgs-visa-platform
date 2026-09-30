@@ -132,6 +132,27 @@ describe("StatusEmailsPage", () => {
     expect(screen.getByTestId("status-email-preview-body")).not.toHaveTextContent("{{");
   });
 
+  it("previews the placeholders the server never fills the way real mail renders them", async () => {
+    renderStatusEmailsPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Open Appointment Booked" }));
+    fireEvent.change(screen.getByLabelText("Body"), {
+      target: {
+        value: "Dear {{clientName}},\n\nAppointment date: {{appointmentDate}}\nAppointment time: {{appointmentTime}}\nCentre: {{centre}}",
+      },
+    });
+
+    // The server blanks appointmentTime/centre and drops any line whose
+    // placeholders all came out blank, so the preview must too -- otherwise the
+    // desk approves a time and a centre the client never receives.
+    const previewBody = screen.getByTestId("status-email-preview-body");
+    expect(previewBody).toHaveTextContent("Appointment date: 12 Oct 2026");
+    expect(previewBody).not.toHaveTextContent("Appointment time:");
+    expect(previewBody).not.toHaveTextContent("Centre:");
+    expect(screen.getByText("{{appointmentTime}}").closest("li")).toHaveTextContent(
+      "not captured yet, so this line is left out",
+    );
+  });
+
   it("re-renders the preview as the body is edited, and PUTs the edit on Save while staying on the row", async () => {
     const { requestLog } = renderStatusEmailsPage();
     fireEvent.click(await screen.findByRole("button", { name: "Open Application Received" }));

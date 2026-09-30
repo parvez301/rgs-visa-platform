@@ -228,7 +228,10 @@ function StatusEmailEditor({ template }: StatusEmailEditorProps) {
             {STATUS_EMAIL_PLACEHOLDERS.map((placeholder) => (
               <li key={placeholder.name} className="flex items-baseline gap-2">
                 <code className="mrz text-ink">{`{{${placeholder.name}}}`}</code>
-                <span className="text-ink-soft">{placeholder.description}</span>
+                <span className="text-ink-soft">
+                  {placeholder.description}
+                  {placeholder.omittedFromMail && " — not captured yet, so this line is left out"}
+                </span>
               </li>
             ))}
           </ul>
