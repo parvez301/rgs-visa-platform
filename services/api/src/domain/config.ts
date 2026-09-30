@@ -6,7 +6,9 @@ import {
 } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
-import { badRequest, corruptRecord } from "../lib/errors";
+import { CorruptRecordError, badRequest, corruptRecord } from "../lib/errors";
+import { findCountryChecklist } from "./crm/countryChecklist";
+import { DEFAULT_TENANT_ID } from "./crm/keys";
 import {
   collectReadableRecords,
   describeFirstZodIssue,
@@ -87,10 +89,43 @@ export async function listActiveCountryConfig(
   context: AppContext,
 ): Promise<CountryConfigListing> {
   const catalog = await listCountryConfig(context);
+  const activeProducts = catalog.countryProducts.filter((countryProduct) => countryProduct.active);
   return {
-    countryProducts: catalog.countryProducts.filter((countryProduct) => countryProduct.active),
+    countryProducts: await withCrmChecklistLabels(context, activeProducts),
     unreadableCountryProductIds: catalog.unreadableCountryProductIds,
   };
+}
+
+/**
+ * Read-time merge of the CRM country checklist onto the public catalog. One
+ * lookup per distinct country (several products can share a code). Nothing is
+ * written back to Config: a country with no (or an empty) checklist gets no
+ * labels, and consumers fall back to `docsRequired`.
+ */
+async function withCrmChecklistLabels(
+  context: AppContext,
+  countryProducts: CountryProduct[],
+): Promise<CountryProduct[]> {
+  const countryCodes = [...new Set(countryProducts.map((product) => product.countryCode))];
+  const labelsByCountry = new Map<string, string[]>();
+  for (const countryCode of countryCodes) {
+    try {
+      const checklist = await findCountryChecklist(context, DEFAULT_TENANT_ID, countryCode);
+      if (checklist !== undefined && checklist.requiredDocuments.length > 0) {
+        labelsByCountry.set(countryCode, [...checklist.requiredDocuments]);
+      }
+    } catch (error) {
+      // Unauthenticated price list: a hand-damaged checklist row must not take
+      // it down. That country just falls back to its docsRequired labels.
+      if (!(error instanceof CorruptRecordError)) throw error;
+    }
+  }
+  return countryProducts.map((countryProduct) => {
+    const labels = labelsByCountry.get(countryProduct.countryCode);
+    return labels === undefined
+      ? countryProduct
+      : { ...countryProduct, requiredDocumentLabels: [...labels] };
+  });
 }
 
 export async function resolveCountryProduct(
@@ -123,7 +158,8 @@ export async function upsertCountryProduct(
         : "Invalid country product",
     );
   }
-  const countryProduct = parseResult.data;
+  // Labels are a read-time merge from the CRM checklist; never persist them.
+  const { requiredDocumentLabels: _readTimeLabels, ...countryProduct } = parseResult.data;
 
   // First write on a fresh table: seed everything else so one edit
   // doesn't make the rest of the catalog vanish from DB reads.

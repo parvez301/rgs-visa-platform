@@ -38,6 +38,12 @@ export interface CountryProduct {
   serviceFeeInr: number;
   processingDays: number;
   docsRequired: readonly DocType[];
+  /**
+   * Public-catalog only: the CRM country checklist's document strings, merged in
+   * at read time by `GET /api/v1/config/countries`. Never stored in Config;
+   * absent/empty means "fall back to `docsRequired` labels".
+   */
+  requiredDocumentLabels?: string[];
   active: boolean;
   /** Official government source for the facts — shown for trust, used at review time. */
   officialUrl?: string;
@@ -59,6 +65,7 @@ export const CountryProductSchema = z
     serviceFeeInr: z.number().int().nonnegative(),
     processingDays: z.number().int().positive(),
     docsRequired: z.array(z.enum(DOC_TYPES)),
+    requiredDocumentLabels: z.array(z.string().min(1)).optional(),
     active: z.boolean(),
     officialUrl: z.string().url().optional(),
   })

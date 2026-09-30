@@ -1,7 +1,7 @@
 "use client";
 
-import type { CountryProduct, DocType } from "@rgs/shared";
-import { DOC_TYPE_LABELS } from "@/lib/countryContent";
+import type { CountryProduct } from "@rgs/shared";
+import { documentLabelsForMarketing } from "@/lib/documentLabels";
 import { applyUrl, formatInr } from "@/lib/site";
 import { findLiveProduct, useLiveCatalog } from "@/lib/useLiveCatalog";
 import { GetByDate } from "./GetByDate";
@@ -57,17 +57,17 @@ export function LiveDocsList({
 }) {
   const liveCatalog = useLiveCatalog();
   const liveProduct = findLiveProduct(liveCatalog, countryCode);
-  const docsRequired = (liveProduct?.docsRequired ?? countryProduct.docsRequired) as DocType[];
+  const documentLabels = documentLabelsForMarketing(liveProduct ?? countryProduct);
 
   return (
     <ul className="space-y-3">
-      {docsRequired.map((docType) => (
+      {documentLabels.map((documentLabel) => (
         <li
-          key={docType}
+          key={documentLabel}
           className="flex items-center gap-3 rounded-xl border border-line p-4"
         >
           <span className="h-2 w-2 rounded-full bg-rgs-red shrink-0" aria-hidden="true" />
-          <span className="font-medium">{DOC_TYPE_LABELS[docType]}</span>
+          <span className="font-medium">{documentLabel}</span>
         </li>
       ))}
     </ul>
