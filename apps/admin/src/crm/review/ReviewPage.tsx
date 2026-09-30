@@ -13,7 +13,6 @@ import {
   COMPACT_BUTTON_CLASS,
   COMPACT_PRIMARY_BUTTON_CLASS,
   INPUT_CLASS,
-  SECONDARY_BUTTON_CLASS,
 } from "../components/controls";
 import { CrmLayout } from "../CrmLayout";
 import { CASE_STATUS_LABELS, ENTRY_TYPE_LABELS, REVIEW_REASON_LABELS, VISA_TYPE_LABELS } from "../labels";
@@ -86,9 +85,6 @@ export function ReviewPage() {
                 : `${openItemTotal.toLocaleString()} open items, ${groups.length.toLocaleString()} distinct values`}
             </p>
           </div>
-          <Link to="/crm" className={SECONDARY_BUTTON_CLASS}>
-            Back to the ledger
-          </Link>
         </div>
 
         {groupsQuery.isError && (

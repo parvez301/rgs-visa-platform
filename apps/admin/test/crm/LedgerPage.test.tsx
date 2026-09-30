@@ -193,6 +193,23 @@ describe("LedgerPage — read-only access", () => {
   });
 });
 
+describe("LedgerPage — Cases chrome", () => {
+  it("titles the page Cases and leaves settings links to the sidebar shell", () => {
+    stubLedgerLoad();
+    stubPartners();
+
+    renderLedgerPage();
+
+    expect(screen.getByRole("heading", { level: 1, name: "Cases" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New case" })).toBeInTheDocument();
+    const pageMain = screen.getByRole("heading", { level: 1, name: "Cases" }).closest("main") ?? document.body;
+    expect(within(pageMain).queryByRole("link", { name: /status emails/i })).not.toBeInTheDocument();
+    expect(
+      within(pageMain).queryByRole("link", { name: /country checklists|doc checklists/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("LedgerPage — the partial-ledger banner", () => {
   it("renders no banner on a clean load", () => {
     stubLedgerLoad({ truncated: false, unreadableCaseIds: [] });
