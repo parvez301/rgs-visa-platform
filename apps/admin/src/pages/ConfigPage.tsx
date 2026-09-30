@@ -93,6 +93,17 @@ export function ConfigPage() {
     enabled: idToken !== null,
   });
 
+  /**
+   * Two caches hold the catalog: this screen's, and the CRM destination picker
+   * (`crm/destination-countries`), which carries the document labels the New
+   * case drawer previews. A 30s `staleTime` means a save that refreshed only
+   * this one would leave the drawer showing the pre-edit checklist.
+   */
+  function invalidateCountryCatalog(): void {
+    void queryClient.invalidateQueries({ queryKey: ["admin-countries"] });
+    void queryClient.invalidateQueries({ queryKey: ["crm", "destination-countries"] });
+  }
+
   const products = countriesQuery.data ?? [];
   const awaitingReviewCount = products.filter((product) => !product.active).length;
   const showSeedButton = !hasSuccessfulPut;
@@ -126,7 +137,7 @@ export function ConfigPage() {
       setHasSuccessfulPut(true);
       setEditingProduct(null);
       setToastMessage("Live immediately for new applications");
-      void queryClient.invalidateQueries({ queryKey: ["admin-countries"] });
+      invalidateCountryCatalog();
     },
     onError: (error) =>
       setFormError(error instanceof Error ? error.message : "Save failed"),
@@ -136,7 +147,7 @@ export function ConfigPage() {
     mutationFn: () => adminApi.seedCountries(idToken!),
     onSuccess: (result) => {
       setToastMessage(`Seeded ${result.seededCount} country products`);
-      void queryClient.invalidateQueries({ queryKey: ["admin-countries"] });
+      invalidateCountryCatalog();
     },
   });
 
@@ -460,7 +471,7 @@ export function ConfigPage() {
             setImportFailures(failures);
             setIsImporting(false);
             setHasSuccessfulPut(true);
-            void queryClient.invalidateQueries({ queryKey: ["admin-countries"] });
+            invalidateCountryCatalog();
             if (failures.length === 0) {
               setToastMessage(
                 `Imported ${rowsToPut.length} countr${rowsToPut.length === 1 ? "y" : "ies"}`,

@@ -246,6 +246,17 @@ export interface UpsertTravellerInput {
   passportNumber?: string;
 }
 
+/**
+ * One option in the New/Edit case destination picker. `requiredDocuments` is
+ * the stamp create-case will apply, served here rather than read from the
+ * Config catalog route, which Ops and Finance have no screen access to.
+ */
+export interface DestinationCountryOption {
+  countryCode: string;
+  countryName: string;
+  requiredDocuments: string[];
+}
+
 /** One raw-value group of the open review queue (server: reviewGroups.ts). */
 export interface ReviewGroup {
   reason: crm.ReviewReason;
@@ -552,9 +563,7 @@ export const crmClient = {
 
   listPartners,
 
-  listDestinationCountries(
-    idToken: string,
-  ): Promise<{ countries: { countryCode: string; countryName: string }[] }> {
+  listDestinationCountries(idToken: string): Promise<{ countries: DestinationCountryOption[] }> {
     return apiFetch(`${CRM_BASE}/destination-countries`, { idToken });
   },
 

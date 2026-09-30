@@ -1,42 +1,50 @@
+import { labelsForCountryCode } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
 import { listCountryConfig } from "../config";
 
 export interface DestinationCountry {
   countryCode: string;
   countryName: string;
+  /**
+   * Exactly what create-case will stamp on the case, so the New case drawer can
+   * preview it. Carried here rather than fetched from the Config catalog route
+   * because Ops and Finance have `config: "none"` and would get a 403 there.
+   */
+  requiredDocuments: string[];
 }
 
 /**
- * Unique destinations for CRM New/Edit case pickers.
+ * Unique destinations for CRM New/Edit case pickers, each with the document
+ * labels a case bound for it gets stamped with.
+ *
  * Reads the same catalog as portal Config, but the HTTP route gates on CRM
- * screen access so Ops can load full country names without config permission.
- * Deliberately not `listActiveCountryConfig`: a picker needs codes and names
- * only, and that function's checklist merge would cost a Dynamo get per country
- * — twice over on the Doc checklists route, which then looks the same codes up
- * again.
+ * screen access so Ops can load full country names — and the document preview —
+ * without config permission. Deliberately not `listActiveCountryConfig`: the
+ * merge rules for several products sharing one country code live in
+ * `labelsForCountryCode`, which needs the inactive rows too.
  */
 export async function listDestinationCountries(
   context: AppContext,
 ): Promise<DestinationCountry[]> {
-  const catalog = await listCountryConfig(context);
-  const byCode = new Map<string, DestinationCountry>();
+  const { countryProducts } = await listCountryConfig(context);
+  const nameByCode = new Map<string, string>();
 
-  for (const countryProduct of catalog.countryProducts) {
+  for (const countryProduct of countryProducts) {
     if (!countryProduct.active) continue;
-    const existing = byCode.get(countryProduct.countryCode);
+    const existingName = nameByCode.get(countryProduct.countryCode);
     // Prefer the longer name when products disagree (e.g. "UAE" vs full name).
-    if (
-      existing === undefined ||
-      countryProduct.countryName.length > existing.countryName.length
-    ) {
-      byCode.set(countryProduct.countryCode, {
-        countryCode: countryProduct.countryCode,
-        countryName: countryProduct.countryName,
-      });
+    if (existingName === undefined || countryProduct.countryName.length > existingName.length) {
+      nameByCode.set(countryProduct.countryCode, countryProduct.countryName);
     }
   }
 
-  return [...byCode.values()].sort((left, right) =>
-    left.countryName.localeCompare(right.countryName, "en", { sensitivity: "base" }),
-  );
+  return [...nameByCode.entries()]
+    .map(([countryCode, countryName]) => ({
+      countryCode,
+      countryName,
+      requiredDocuments: labelsForCountryCode(countryProducts, countryCode),
+    }))
+    .sort((left, right) =>
+      left.countryName.localeCompare(right.countryName, "en", { sensitivity: "base" }),
+    );
 }

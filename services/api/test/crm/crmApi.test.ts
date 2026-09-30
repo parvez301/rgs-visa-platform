@@ -1758,6 +1758,9 @@ describe("CRM destination countries", () => {
     expect(firstCountry.countryCode).toMatch(/^[A-Z]{2}$/);
     expect(firstCountry.countryName.length).toBeGreaterThan(2);
     expect(firstCountry.countryName).not.toBe(firstCountry.countryCode);
+    // The New case document preview rides along here: Ops and Finance have CRM
+    // read but no Config screen, so they cannot fetch the catalog route.
+    expect(Array.isArray(firstCountry.requiredDocuments)).toBe(true);
   });
 
   it("does not register country-checklists admin routes", async () => {

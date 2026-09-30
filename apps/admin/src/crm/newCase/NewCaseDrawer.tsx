@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
-import { crm, labelsForCountryCode } from "@rgs/shared";
+import { crm } from "@rgs/shared";
 import { useAuth } from "../../lib/auth";
-import { adminApi } from "../../lib/adminApi";
 import { crmClient, type CreateCaseInput } from "../api/crmClient";
 import { crmQueryKeys, usePartners } from "../api/hooks";
 import { LEDGER_CACHE_KEY_PREFIX } from "../api/mutations";
@@ -81,13 +80,12 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
     },
     enabled: idToken !== null,
   });
-  const configCountriesQuery = useQuery({
-    // Same key as Config and the other admin pages, so a Config save refreshes this preview.
-    queryKey: ["admin-countries"],
-    queryFn: () => adminApi.listCountries(idToken!),
-    enabled: idToken !== null && destinationCountry !== "",
-  });
-  const previewLabels = labelsForCountryCode(configCountriesQuery.data ?? [], destinationCountry);
+  // The picker's own payload carries the stamp, so the preview needs no second
+  // request — and in particular not the Config catalog route, which Ops and
+  // Finance are not allowed to open.
+  const previewLabels =
+    (countriesQuery.data ?? []).find((country) => country.countryCode === destinationCountry)
+      ?.requiredDocuments ?? [];
 
   useEffect(() => {
     function closeOnEscape(keyboardEvent: KeyboardEvent) {
@@ -317,12 +315,10 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
             {destinationCountry !== "" && (
               <div className="sm:col-span-2 rounded-md border border-line bg-mist/50 px-3 py-2 text-sm text-ink">
                 <p className={FIELD_LABEL_CLASS}>Documents stamped on this case</p>
-                {configCountriesQuery.isLoading ? (
-                  <p className="text-ink-soft">Loading documents…</p>
-                ) : previewLabels.length === 0 ? (
+                {previewLabels.length === 0 ? (
                   <p className="text-ink-soft">
-                    No required documents for this country yet. Add them under Config before creating
-                    cases here.
+                    No documents are configured for this country yet, so none will be stamped on the
+                    case. Ask an admin to set the checklist.
                   </p>
                 ) : (
                   <ul className="mt-1 list-disc pl-5">

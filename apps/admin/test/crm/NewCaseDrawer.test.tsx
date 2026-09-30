@@ -48,25 +48,16 @@ function renderDrawer(
     });
     if (requestUrl.endsWith("/crm/destination-countries")) {
       return jsonResponse(200, {
-        countries: [{ countryCode: "AE", countryName: "United Arab Emirates" }],
-      });
-    }
-    if (requestUrl.endsWith("/config/countries")) {
-      return jsonResponse(200, {
-        countryProducts: [
+        countries: [
           {
             countryCode: "AE",
-            productCode: "AE-TOURIST",
             countryName: "United Arab Emirates",
-            tier: "FULFILLED",
-            active: true,
             requiredDocuments:
               options.configHasNoDocuments === true
                 ? []
-                : [{ label: "Passport bio page" }, { label: "Passport-size photo" }],
+                : ["Passport bio page", "Passport-size photo"],
           },
         ],
-        unreadableCountryProductIds: [],
       });
     }
     if (requestMethod === "GET" && requestUrl.endsWith("/crm/partners")) {
@@ -128,18 +119,23 @@ afterEach(() => {
 });
 
 describe("NewCaseDrawer", () => {
-  it("previews the destination's required documents from Config and never calls the old checklist endpoint", async () => {
+  // Ops and Finance create most cases and have `config: "none"`, so the
+  // preview must come off a CRM-gated route. Reading the Config catalog here
+  // 403'd for them and rendered as "no documents".
+  it("previews the destination's required documents from the CRM picker payload alone", async () => {
     const { requestLog } = renderDrawer();
     await fillTheCommonFields();
     expect(await screen.findByText("Passport bio page")).toBeInTheDocument();
     expect(screen.getByText("Passport-size photo")).toBeInTheDocument();
     expect(requestLog.some((request) => request.url.includes("country-checklists"))).toBe(false);
+    expect(requestLog.some((request) => request.url.includes("/config/countries"))).toBe(false);
   });
 
-  it("points an empty documents preview at Config", async () => {
+  it("says nothing will be stamped — not to open Config — when the country has no documents", async () => {
     renderDrawer({ configHasNoDocuments: true });
     await fillTheCommonFields();
-    expect(await screen.findByText(/under config/i)).toBeInTheDocument();
+    expect(await screen.findByText(/none will be stamped/i)).toBeInTheDocument();
+    expect(screen.queryByText(/under config/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/doc checklists/i)).not.toBeInTheDocument();
   });
 
