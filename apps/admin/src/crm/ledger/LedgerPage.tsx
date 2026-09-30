@@ -283,6 +283,9 @@ export function LedgerPage() {
             <Link to="/crm/review" className={SECONDARY_BUTTON_CLASS}>
               Review queue
             </Link>
+            <Link to="/crm/country-checklists" className={SECONDARY_BUTTON_CLASS}>
+              Country checklists
+            </Link>
             {canWriteCrm && (
               <button type="button" onClick={() => setIsNewCaseDrawerOpen(true)} className={PRIMARY_BUTTON_CLASS}>
                 New case

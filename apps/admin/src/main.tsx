@@ -12,6 +12,7 @@ import { AuthPage } from "./pages/AuthPage";
 import { ConfigPage } from "./pages/ConfigPage";
 import { LeadsPage } from "./pages/LeadsPage";
 import { CasePage } from "./crm/case/CasePage";
+import { CountryChecklistsPage } from "./crm/countryChecklists/CountryChecklistsPage";
 import { LedgerPage } from "./crm/ledger/LedgerPage";
 import { ReviewPage } from "./crm/review/ReviewPage";
 import { NoticesPage } from "./pages/NoticesPage";
@@ -136,6 +137,16 @@ createRoot(document.getElementById("root")!).render(
               <RequireAuth>
                 <RequireScreen screen="crmReview">
                   <ReviewPage />
+                </RequireScreen>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/crm/country-checklists"
+            element={
+              <RequireAuth>
+                <RequireScreen screen="crm">
+                  <CountryChecklistsPage />
                 </RequireScreen>
               </RequireAuth>
             }
