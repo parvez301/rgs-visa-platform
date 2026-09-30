@@ -12,7 +12,8 @@
     "backfill:ref-claims": "tsx src/backfillRefClaimsCli.ts",
     "backfill:case-status-rename": "tsx src/backfillCaseStatusRenameCli.ts",
     "seed:status-email-templates": "tsx src/seedStatusEmailTemplatesCli.ts",
-    "seed:country-checklists-from-config": "tsx src/seedCountryChecklistsFromConfigCli.ts"
+    "seed:country-checklists-from-config": "tsx src/seedCountryChecklistsFromConfigCli.ts",
+    "migrate:country-documents-to-products": "tsx src/migrateCountryDocumentsToProductsCli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",
