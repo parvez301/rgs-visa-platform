@@ -1,22 +1,39 @@
 import { canAccessScreen, type AdminRole, type AdminScreen } from "@rgs/shared";
 
-export interface AdminNavLink {
+export interface AdminNavChildLink {
   label: string;
   to: string;
   screen: AdminScreen;
 }
 
+export interface AdminNavLink {
+  label: string;
+  to: string;
+  screen: AdminScreen;
+  children?: readonly AdminNavChildLink[];
+}
+
 /**
  * Nav order doubles as landing priority: the first entry a role can reach is
- * where it lands after sign-in.
+ * where it lands after sign-in. Only top-level entries count; children are
+ * sub-destinations of their parent.
  */
 export const ADMIN_NAV_LINKS: readonly AdminNavLink[] = [
   { label: "Queue", to: "/", screen: "queue" },
   { label: "Activity", to: "/activity", screen: "activity" },
   { label: "Leads", to: "/leads", screen: "leads" },
+  {
+    label: "Cases",
+    to: "/crm",
+    screen: "crm",
+    children: [
+      { label: "Review", to: "/crm/review", screen: "crmReview" },
+      { label: "Status emails", to: "/crm/status-emails", screen: "crm" },
+    ],
+  },
+  { label: "Doc checklists", to: "/crm/country-checklists", screen: "crm" },
   { label: "Notices", to: "/notices", screen: "notices" },
   { label: "Config", to: "/config", screen: "config" },
-  { label: "CRM", to: "/crm", screen: "crm" },
   { label: "Users", to: "/admin/users", screen: "adminUsers" },
 ] as const;
 

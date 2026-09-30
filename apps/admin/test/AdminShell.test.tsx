@@ -48,10 +48,35 @@ describe("AdminShell navigation", () => {
 
     expect(screen.getByRole("link", { name: "Queue" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Activity" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "CRM" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Cases" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Leads" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Notices" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Config" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+  });
+
+  it("shows Doc checklists as a top-level link and nests Status emails under Cases", () => {
+    renderShell("Owner");
+
+    expect(screen.getByRole("link", { name: "Cases" })).toHaveAttribute("href", "/crm");
+    expect(screen.getByRole("link", { name: "Doc checklists" })).toHaveAttribute(
+      "href",
+      "/crm/country-checklists",
+    );
+    expect(screen.getByRole("link", { name: "Status emails" })).toHaveAttribute(
+      "href",
+      "/crm/status-emails",
+    );
+    expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("href", "/crm/review");
+    expect(screen.queryByRole("link", { name: "CRM" })).not.toBeInTheDocument();
+  });
+
+  it("hides Cases children when the role cannot access crm", () => {
+    // Viewer keeps Cases (crm read) but not Config; children follow each child's own screen.
+    renderShell("Viewer");
+
+    expect(screen.getByRole("link", { name: "Cases" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Doc checklists" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Config" })).not.toBeInTheDocument();
   });
 });
