@@ -1,6 +1,6 @@
 # Unified country documents — Design
 
-**Status:** approved  
+**Status:** approved · implemented  
 **Date:** 2026-09-30  
 **Repo:** `rgs`
 
