@@ -229,6 +229,28 @@ describe("CasePage", () => {
     expect(screen.queryByRole("button", { name: "Edit details" })).not.toBeInTheDocument();
   });
 
+  it("renders dual-pane hierarchy: applicants in primary, context fields secondary", async () => {
+    renderCasePage({ caseRecord: buildCase() });
+
+    const workHeader = await screen.findByTestId("case-work-header");
+    const primaryColumn = screen.getByTestId("case-primary-column");
+    const contextColumn = screen.getByTestId("case-context-column");
+
+    expect(within(workHeader).getByRole("link", { name: /Cases/ })).toHaveAttribute("href", "/crm");
+    expect(within(workHeader).getByLabelText("Case status")).toBeInTheDocument();
+    expect(within(workHeader).getByLabelText("Billing status")).toBeInTheDocument();
+
+    for (const applicantRow of screen.getAllByTestId("case-applicant-row")) {
+      expect(primaryColumn).toContainElement(applicantRow);
+    }
+    expect(primaryColumn).toContainElement(screen.getByTestId("document-checklist"));
+
+    // Partner field lives in the context column, not above the applicants.
+    expect(contextColumn).toContainElement(screen.getByTestId("case-field-partner"));
+    expect(primaryColumn).not.toContainElement(screen.getByTestId("case-field-partner"));
+    expect(contextColumn).toContainElement(screen.getByTestId("case-total"));
+  });
+
   it("shows the shared case fields once, not repeated down the applicants", async () => {
     renderCasePage({ caseRecord: buildCase() });
 

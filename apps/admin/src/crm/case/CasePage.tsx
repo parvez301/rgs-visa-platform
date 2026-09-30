@@ -15,7 +15,7 @@ import {
   type ApplicantEdit,
   type ApplicantEditAxis,
 } from "../api/applicantMutations";
-import { crmClient, type CaseView } from "../api/crmClient";
+import { crmClient, type CaseView, type CrmEventView } from "../api/crmClient";
 import { crmQueryKeys, useCase, useCaseEvents, usePartners } from "../api/hooks";
 import { describeLedgerEditValue, useLedgerEdit, type LedgerEditColumn } from "../api/mutations";
 import {
@@ -131,34 +131,29 @@ function CaseScreen({ caseId }: { caseId: string }) {
     // R62: the Case screen's "selection" is the one case it is showing.
     <CrmLayout agentPanel={<AgentPanel selectedCaseIds={[caseId]} />}>
       <div className="crm-root relative h-full overflow-y-auto pb-20 text-sm">
-        <Link to="/crm" className="mb-3 inline-block text-sm font-medium text-rgs-red-deep hover:underline">
-          Back to the ledger
-        </Link>
         {caseQuery.isLoading ? (
-          <p className="text-sm text-ink-soft">Loading this case…</p>
+          <div className="flex flex-col gap-3">
+            <BackToCasesLink />
+            <p className="text-sm text-ink-soft">Loading this case…</p>
+          </div>
         ) : caseQuery.isError || caseRecord === undefined ? (
           // Never an empty shell. A heading over blank fields and an empty
           // applicant table reads as a case with nothing on it, which is a
           // different -- and false -- claim from "this case could not be
           // read". The server's own words follow, not a paraphrase.
-          <p role="alert" className={LOAD_FAILURE_CLASS}>
-            This case could not be loaded.{" "}
-            {caseQuery.error === null || caseQuery.error === undefined
-              ? "The server gave no reason."
-              : String(caseQuery.error.message)}
-          </p>
+          <div className="flex flex-col gap-3">
+            <BackToCasesLink />
+            <p role="alert" className={LOAD_FAILURE_CLASS}>
+              This case could not be loaded.{" "}
+              {caseQuery.error === null || caseQuery.error === undefined
+                ? "The server gave no reason."
+                : String(caseQuery.error.message)}
+            </p>
+          </div>
         ) : (
           <div className="flex flex-col gap-5">
-            <CaseHeader
+            <CaseWorkHeader
               caseRecord={caseRecord}
-              partnerName={
-                partnersQuery.data?.find((partner) => partner.partnerId === caseRecord.partnerId)
-                  ?.canonicalName ?? caseRecord.partnerId
-              }
-              partnerContactEmail={
-                partnersQuery.data?.find((partner) => partner.partnerId === caseRecord.partnerId)
-                  ?.contactEmail
-              }
               onCommitCaseEdit={(column, nextValue) =>
                 void commitCaseEdit({
                   caseId: caseRecord.caseId,
@@ -167,37 +162,66 @@ function CaseScreen({ caseId }: { caseId: string }) {
                   nextValue,
                 })
               }
-              onCommitClientEmail={(clientEmail) => clientEmailMutation.mutate(clientEmail)}
-              onCommitVendorEmail={(contactEmail) =>
-                vendorEmailMutation.mutate({ partnerId: caseRecord.partnerId, contactEmail })
-              }
-              clientEmailErrorMessage={clientEmailErrorMessage}
-              vendorEmailErrorMessage={vendorEmailErrorMessage}
               onOpenEdit={canWriteCrm ? () => setIsEditDrawerOpen(true) : undefined}
             />
 
-            <ApplicantsTable
-              caseRecord={caseRecord}
-              travellers={caseRecord.travellers}
-              onCommitApplicantEdit={(edit) => void commitApplicantEdit(edit)}
-            />
+            <div data-testid="case-body" className="flex flex-col gap-5 lg:flex-row lg:items-start">
+              <div data-testid="case-primary-column" className="flex min-w-0 flex-1 flex-col gap-5">
+                <ApplicantsTable
+                  caseRecord={caseRecord}
+                  travellers={caseRecord.travellers}
+                  onCommitApplicantEdit={(edit) => void commitApplicantEdit(edit)}
+                />
 
-            <DocumentChecklistSection caseRecord={caseRecord} />
+                <DocumentChecklistSection caseRecord={caseRecord} />
 
-            <LineItemsTable caseRecord={caseRecord} />
+                <CaseSection title="Timeline">
+                  {caseEventsQuery.isLoading ? (
+                    <p className="text-sm text-ink-soft">Loading the timeline…</p>
+                  ) : caseEventsQuery.isError ? (
+                    <p role="alert" className={LOAD_FAILURE_CLASS}>
+                      The timeline could not be loaded, so this case's history is not shown. The case
+                      itself is unaffected.
+                    </p>
+                  ) : (
+                    <CompactTimeline events={caseEventsQuery.data ?? []} />
+                  )}
+                </CaseSection>
+              </div>
 
-            <CaseSection title="Timeline">
-              {caseEventsQuery.isLoading ? (
-                <p className="text-sm text-ink-soft">Loading the timeline…</p>
-              ) : caseEventsQuery.isError ? (
-                <p role="alert" className={LOAD_FAILURE_CLASS}>
-                  The timeline could not be loaded, so this case's history is not shown. The case
-                  itself is unaffected.
-                </p>
-              ) : (
-                <Timeline events={caseEventsQuery.data ?? []} />
-              )}
-            </CaseSection>
+              <div
+                data-testid="case-context-column"
+                className="flex min-w-0 flex-col gap-5 lg:w-[22rem] lg:shrink-0 xl:w-[26rem]"
+              >
+                <CaseContextFields
+                  caseRecord={caseRecord}
+                  partnerName={
+                    partnersQuery.data?.find((partner) => partner.partnerId === caseRecord.partnerId)
+                      ?.canonicalName ?? caseRecord.partnerId
+                  }
+                  partnerContactEmail={
+                    partnersQuery.data?.find((partner) => partner.partnerId === caseRecord.partnerId)
+                      ?.contactEmail
+                  }
+                  onCommitCaseEdit={(column, nextValue) =>
+                    void commitCaseEdit({
+                      caseId: caseRecord.caseId,
+                      column,
+                      previousValue: readCaseColumnValue(caseRecord, column),
+                      nextValue,
+                    })
+                  }
+                  onCommitClientEmail={(clientEmail) => clientEmailMutation.mutate(clientEmail)}
+                  onCommitVendorEmail={(contactEmail) =>
+                    vendorEmailMutation.mutate({ partnerId: caseRecord.partnerId, contactEmail })
+                  }
+                  clientEmailErrorMessage={clientEmailErrorMessage}
+                  vendorEmailErrorMessage={vendorEmailErrorMessage}
+                />
+
+                <LineItemsTable caseRecord={caseRecord} />
+              </div>
+            </div>
           </div>
         )}
 
@@ -269,43 +293,33 @@ function CaseField({ fieldKey, label, children }: { fieldKey: string; label: str
 }
 
 /**
- * Every shared case field, once.
+ * The sticky work header: what this case IS and the two controls a desk agent
+ * moves most (case status, billing status), plus the route back to the
+ * ledger. Everything else lives in `CaseContextFields`.
  *
- * R52: all the dates are rendered; exactly the four axes `LedgerEdit` already
- * supports are editable (`caseStatus`, `billingStatus`, `appointmentDate`,
- * `visaType`). `submissionDate` and `expectedCollectionDate` are accepted by
- * `PUT /cases/{caseId}` but have no `LedgerEdit` column, and widening that
- * union is a Task 12 surface with its own tests -- so they are read-only here
- * rather than wired to a control that would need a second, parallel write path.
+ * R52: exactly the four axes `LedgerEdit` already supports are editable
+ * (`caseStatus`, `billingStatus`, `appointmentDate`, `visaType`). The write
+ * callbacks are the ones `CaseScreen` already owned; only their placement moved.
  */
-function CaseHeader({
+function CaseWorkHeader({
   caseRecord,
-  partnerName,
-  partnerContactEmail,
   onCommitCaseEdit,
-  onCommitClientEmail,
-  onCommitVendorEmail,
-  clientEmailErrorMessage,
-  vendorEmailErrorMessage,
   onOpenEdit,
 }: {
   caseRecord: crm.CrmCase;
-  partnerName: string;
-  partnerContactEmail?: string;
   onCommitCaseEdit: (column: LedgerEditColumn, nextValue: string) => void;
-  onCommitClientEmail: (clientEmail: string | null) => void;
-  onCommitVendorEmail: (contactEmail: string | null) => void;
-  clientEmailErrorMessage: string | null;
-  vendorEmailErrorMessage: string | null;
   /** Absent for a read-only role: the button is not offered at all. */
   onOpenEdit?: () => void;
 }) {
   const caseStatusOptions = allowedCaseStatusOptions(caseRecord.caseStatus);
   const billingStatusOptions = allowedBillingStatusOptions(caseRecord.billingStatus);
-  const isVisaCase = caseRecord.caseType === "VISA";
 
   return (
-    <header className={`${CARD_CLASS} flex flex-col gap-5 p-5`}>
+    <header
+      data-testid="case-work-header"
+      className={`${CARD_CLASS} sticky top-0 z-10 flex flex-col gap-3 px-5 py-4`}
+    >
+      <BackToCasesLink />
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="mrz text-2xl font-bold tracking-normal text-ink">{caseRecord.caseRef}</h1>
         {caseRecord.groupName !== undefined && (
@@ -319,37 +333,13 @@ function CaseHeader({
           </button>
         )}
       </div>
-
-      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
-        <CaseField fieldKey="partner" label="Partner">
-          <span className="flex flex-col gap-1">
-            <span>{partnerName}</span>
-            <InlineEmailControl
-              label="Vendor email"
-              storedValue={partnerContactEmail}
-              placeholder="Add vendor email"
-              errorMessage={vendorEmailErrorMessage}
-              onCommit={onCommitVendorEmail}
-            />
-          </span>
-        </CaseField>
-        <CaseField fieldKey="clientEmail" label="Client email">
-          <InlineEmailControl
-            label="Client email"
-            storedValue={caseRecord.clientEmail}
-            placeholder="Add client email"
-            errorMessage={clientEmailErrorMessage}
-            onCommit={onCommitClientEmail}
-          />
-        </CaseField>
-        <CaseField fieldKey="destinationCountry" label="Country">
-          {caseRecord.destinationCountry}
-        </CaseField>
-        <CaseField fieldKey="caseType" label="Type">
-          {describeCaseType(caseRecord)}
-        </CaseField>
-
-        <CaseField fieldKey="caseStatus" label="Case status">
+      <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+        <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-soft">
+          <span data-testid="case-field-destinationCountry">{caseRecord.destinationCountry}</span>
+          <span aria-hidden="true">·</span>
+          <span data-testid="case-field-caseType">{describeCaseType(caseRecord)}</span>
+        </p>
+        <HeaderSelect fieldKey="caseStatus" label="Case status">
           <select
             aria-label="Case status"
             value={caseRecord.caseStatus}
@@ -368,8 +358,8 @@ function CaseHeader({
               </option>
             ))}
           </select>
-        </CaseField>
-        <CaseField fieldKey="billingStatus" label="Billing status">
+        </HeaderSelect>
+        <HeaderSelect fieldKey="billingStatus" label="Billing status">
           <select
             aria-label="Billing status"
             value={caseRecord.billingStatus}
@@ -388,60 +378,160 @@ function CaseHeader({
               </option>
             ))}
           </select>
-        </CaseField>
-        <CaseField fieldKey="visaType" label="Visa type">
-          <select
-            aria-label="Visa type"
-            value={caseRecord.visaType ?? ""}
-            disabled={!isVisaCase}
-            title={isVisaCase ? undefined : "Only a VISA case can carry a visa type"}
-            onChange={(changeEvent) => onCommitCaseEdit("visaType", changeEvent.target.value)}
-            className={CONTROL_CLASS}
-          >
-            {/*
-              No empty option, deliberately (fix round 1, F3): `PUT /cases/
-              {caseId}` has no way to UNSET a visa type -- `updateCaseDetails`
-              counts `visaType: ""` as a change and `CrmCaseSchema.parse` then
-              rejects it against `z.enum(VISA_TYPES)`, so choosing it cleared
-              the field optimistically and snapped back with no explanation (a
-              non-409 rolls back silently, by design). A case with no visa type
-              yet still selects nothing -- `value=""` matches no option, so the
-              control renders blank -- and picking a real one commits it.
-            */}
-            {crm.VISA_TYPES.map((visaType) => (
-              <option key={visaType} value={visaType}>
-                {VISA_TYPE_LABELS[visaType]}
-              </option>
-            ))}
-          </select>
-        </CaseField>
+        </HeaderSelect>
+      </div>
+    </header>
+  );
+}
 
-        <CaseField fieldKey="receivedDate" label="Received">
-          {caseRecord.receivedDate}
-        </CaseField>
-        <CaseField fieldKey="submissionDate" label="Submitted">
-          {caseRecord.submissionDate ?? NOT_RECORDED}
-        </CaseField>
-        <CaseField fieldKey="appointmentDate" label="Appointment">
-          <AppointmentDateControl
-            storedDate={caseRecord.appointmentDate}
-            onCommitDate={(confirmedDate) => onCommitCaseEdit("appointmentDate", confirmedDate)}
-          />
-        </CaseField>
-        <CaseField fieldKey="expectedCollectionDate" label="Expected collection">
-          {caseRecord.expectedCollectionDate ?? NOT_RECORDED}
-        </CaseField>
-        <CaseField fieldKey="entryType" label="Entry type">
-          {caseRecord.entryType === undefined ? NOT_RECORDED : ENTRY_TYPE_LABELS[caseRecord.entryType]}
-        </CaseField>
-        <CaseField fieldKey="courierDate" label="Couriered">
-          {caseRecord.courierDate ?? NOT_RECORDED}
+function HeaderSelect({ fieldKey, label, children }: { fieldKey: string; label: string; children: ReactNode }) {
+  return (
+    <div data-testid={`case-field-${fieldKey}`} className="flex items-center gap-2">
+      <span className={FIELD_LABEL_CLASS}>{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function BackToCasesLink() {
+  return (
+    <Link to="/crm" className="inline-block text-sm font-medium text-rgs-red-deep hover:underline">
+      ← Cases
+    </Link>
+  );
+}
+
+/**
+ * The shared case fields that are reference material rather than the work
+ * itself, once each: partner and emails, visa type, and the dates. The
+ * partner block is here, not above the applicants.
+ */
+function CaseContextFields({
+  caseRecord,
+  partnerName,
+  partnerContactEmail,
+  onCommitCaseEdit,
+  onCommitClientEmail,
+  onCommitVendorEmail,
+  clientEmailErrorMessage,
+  vendorEmailErrorMessage,
+}: {
+  caseRecord: crm.CrmCase;
+  partnerName: string;
+  partnerContactEmail?: string;
+  onCommitCaseEdit: (column: LedgerEditColumn, nextValue: string) => void;
+  onCommitClientEmail: (clientEmail: string | null) => void;
+  onCommitVendorEmail: (contactEmail: string | null) => void;
+  clientEmailErrorMessage: string | null;
+  vendorEmailErrorMessage: string | null;
+}) {
+  const isVisaCase = caseRecord.caseType === "VISA";
+
+  return (
+    <CaseSection title="Case details">
+      <div className={`${CARD_CLASS} flex flex-col gap-4 p-4`}>
+        <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+          <CaseField fieldKey="partner" label="Partner">
+            <span className="flex flex-col gap-1">
+              <span>{partnerName}</span>
+              <InlineEmailControl
+                label="Vendor email"
+                storedValue={partnerContactEmail}
+                placeholder="Add vendor email"
+                errorMessage={vendorEmailErrorMessage}
+                onCommit={onCommitVendorEmail}
+              />
+            </span>
+          </CaseField>
+          <CaseField fieldKey="clientEmail" label="Client email">
+            <InlineEmailControl
+              label="Client email"
+              storedValue={caseRecord.clientEmail}
+              placeholder="Add client email"
+              errorMessage={clientEmailErrorMessage}
+              onCommit={onCommitClientEmail}
+            />
+          </CaseField>
+          <CaseField fieldKey="visaType" label="Visa type">
+            <select
+              aria-label="Visa type"
+              value={caseRecord.visaType ?? ""}
+              disabled={!isVisaCase}
+              title={isVisaCase ? undefined : "Only a VISA case can carry a visa type"}
+              onChange={(changeEvent) => onCommitCaseEdit("visaType", changeEvent.target.value)}
+              className={CONTROL_CLASS}
+            >
+              {/*
+                No empty option, deliberately (fix round 1, F3): `PUT /cases/
+                {caseId}` has no way to UNSET a visa type -- `updateCaseDetails`
+                counts `visaType: ""` as a change and `CrmCaseSchema.parse` then
+                rejects it against `z.enum(VISA_TYPES)`, so choosing it cleared
+                the field optimistically and snapped back with no explanation (a
+                non-409 rolls back silently, by design). A case with no visa type
+                yet still selects nothing -- `value=""` matches no option, so the
+                control renders blank -- and picking a real one commits it.
+              */}
+              {crm.VISA_TYPES.map((visaType) => (
+                <option key={visaType} value={visaType}>
+                  {VISA_TYPE_LABELS[visaType]}
+                </option>
+              ))}
+            </select>
+          </CaseField>
+          <CaseField fieldKey="receivedDate" label="Received">
+            {caseRecord.receivedDate}
+          </CaseField>
+          <CaseField fieldKey="submissionDate" label="Submitted">
+            {caseRecord.submissionDate ?? NOT_RECORDED}
+          </CaseField>
+          <CaseField fieldKey="appointmentDate" label="Appointment">
+            <AppointmentDateControl
+              storedDate={caseRecord.appointmentDate}
+              onCommitDate={(confirmedDate) => onCommitCaseEdit("appointmentDate", confirmedDate)}
+            />
+          </CaseField>
+          <CaseField fieldKey="expectedCollectionDate" label="Expected collection">
+            {caseRecord.expectedCollectionDate ?? NOT_RECORDED}
+          </CaseField>
+          <CaseField fieldKey="entryType" label="Entry type">
+            {caseRecord.entryType === undefined ? NOT_RECORDED : ENTRY_TYPE_LABELS[caseRecord.entryType]}
+          </CaseField>
+          <CaseField fieldKey="courierDate" label="Couriered">
+            {caseRecord.courierDate ?? NOT_RECORDED}
+          </CaseField>
+        </div>
+        <CaseField fieldKey="remarks" label="Remarks">
+          <span className="whitespace-pre-wrap">{caseRecord.remarks ?? NOT_RECORDED}</span>
         </CaseField>
       </div>
-      <CaseField fieldKey="remarks" label="Remarks">
-        <span className="whitespace-pre-wrap">{caseRecord.remarks ?? NOT_RECORDED}</span>
-      </CaseField>
-    </header>
+    </CaseSection>
+  );
+}
+
+/**
+ * The audit timeline, trimmed to its first {@link COMPACT_TIMELINE_LIMIT} entries
+ * when long so it does not bury the applicants' page. `Timeline` itself is
+ * untouched and the events query is unchanged.
+ */
+const COMPACT_TIMELINE_LIMIT = 8;
+
+function CompactTimeline({ events }: { events: CrmEventView[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const isLong = events.length > COMPACT_TIMELINE_LIMIT;
+  const visibleEvents = isLong && !showAll ? events.slice(0, COMPACT_TIMELINE_LIMIT) : events;
+  return (
+    <div className="flex flex-col gap-2">
+      <Timeline events={visibleEvents} />
+      {isLong && (
+        <button
+          type="button"
+          className={`${SECONDARY_BUTTON_CLASS} self-start`}
+          onClick={() => setShowAll((previous) => !previous)}
+        >
+          {showAll ? "Show fewer events" : `Show all ${events.length} events`}
+        </button>
+      )}
+    </div>
   );
 }
 
