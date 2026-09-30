@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { crm } from "@rgs/shared";
@@ -91,19 +91,40 @@ afterEach(() => {
 describe("StatusEmailsPage", () => {
   it("lists every case status by its label with whether the email is on", async () => {
     renderStatusEmailsPage();
-    const submittedRow = (await screen.findByText("Application Submitted")).closest("tr")!;
+    const submittedRow = (await screen.findByText("Application Submitted")).closest("[data-testid='status-email-row']")!;
     expect(submittedRow).toHaveTextContent("Off");
-    const newRow = screen.getByText("Application Received").closest("tr")!;
+    const newRow = screen.getByText("Application Received").closest("[data-testid='status-email-row']")!;
     expect(newRow).toHaveTextContent("On");
-    expect(screen.getAllByRole("row")).toHaveLength(crm.CASE_STATUSES.length + 1);
+    expect(screen.getAllByTestId("status-email-row")).toHaveLength(crm.CASE_STATUSES.length);
   });
 
-  it("opens a row in a drawer with a preview filled from sample values", async () => {
+  it("has no back-to-ledger button and asks for a selection until a row is clicked", async () => {
+    renderStatusEmailsPage();
+    await screen.findByText("Application Received");
+    expect(screen.queryByText(/back to the ledger/i)).toBeNull();
+    expect(screen.queryByLabelText("Subject")).toBeNull();
+    expect(screen.getByText("Select a status to edit its email.")).toBeInTheDocument();
+  });
+
+  it("shows the clicked status's subject in an input beside the list, marking the row active", async () => {
     renderStatusEmailsPage();
     fireEvent.click(await screen.findByRole("button", { name: "Open Application Received" }));
-    const drawer = screen.getByRole("dialog");
-    expect(within(drawer).getByLabelText("Subject")).toHaveValue("{{applicationId}} – NEW – {{clientName}}");
-    expect(within(drawer).getByText("{{appointmentTime}}")).toBeInTheDocument();
+    expect(screen.getByLabelText("Subject")).toHaveValue("{{applicationId}} – NEW – {{clientName}}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // The list stays on screen: this is master-detail, not a drawer over it.
+    expect(screen.getAllByTestId("status-email-row")).toHaveLength(crm.CASE_STATUSES.length);
+    expect(screen.getByRole("button", { name: "Open Application Received" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "Open Application Submitted" })).not.toHaveAttribute("aria-current");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Application Submitted" }));
+    expect(screen.getByLabelText("Subject")).toHaveValue("{{applicationId}} – SUBMITTED – {{clientName}}");
+    expect(screen.getByRole("button", { name: "Open Application Submitted" })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("renders a preview filled from sample values", async () => {
+    renderStatusEmailsPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Open Application Received" }));
+    expect(screen.getByText("{{appointmentTime}}")).toBeInTheDocument();
     expect(screen.getByTestId("status-email-preview-subject")).toHaveTextContent("38017 – NEW – Anil Sharma");
     expect(screen.getByTestId("status-email-preview-body")).toHaveTextContent(
       "Your Japan Tourist Visa application 38017 moved on.",
@@ -111,7 +132,7 @@ describe("StatusEmailsPage", () => {
     expect(screen.getByTestId("status-email-preview-body")).not.toHaveTextContent("{{");
   });
 
-  it("re-renders the preview as the body is edited, and PUTs the edit on Save", async () => {
+  it("re-renders the preview as the body is edited, and PUTs the edit on Save while staying on the row", async () => {
     const { requestLog } = renderStatusEmailsPage();
     fireEvent.click(await screen.findByRole("button", { name: "Open Application Received" }));
     fireEvent.change(screen.getByLabelText("Subject"), { target: { value: "Hello {{clientName}}" } });
@@ -128,7 +149,8 @@ describe("StatusEmailsPage", () => {
       body: "Hi {{clientName}}, ref {{applicationId}}",
       enabled: false,
     });
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Subject")).toHaveValue("Hello {{clientName}}");
   });
 
   it("refuses to save an empty subject without calling the API", async () => {

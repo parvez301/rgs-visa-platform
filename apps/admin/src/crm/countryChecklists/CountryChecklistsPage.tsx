@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useAuth } from "../../lib/auth";
+import { AdminShell } from "../../components/AdminShell";
+import { ApiRequestError } from "../../lib/adminApi";
 import { useAdminAccess } from "../../lib/adminAccess";
+import { useAuth } from "../../lib/auth";
 import { crmClient } from "../api/crmClient";
 import {
+  CARD_CLASS,
   FIELD_LABEL_CLASS,
   INPUT_CLASS,
   PRIMARY_BUTTON_CLASS,
@@ -13,15 +15,20 @@ import {
 
 const FIELD_CLASS = `${INPUT_CLASS} w-full`;
 
+interface StoredChecklist {
+  requiredDocuments: string[];
+  notes?: string;
+}
+
 /**
  * CRM-owned required documents per destination country.
  * New cases stamp from these rows — not from portal Config docsRequired.
+ *
+ * Master-detail: destinations on the left, the selected country's checklist on
+ * the right as removable chips plus an add field.
  */
 export function CountryChecklistsPage() {
   const { idToken } = useAuth();
-  const { canWrite } = useAdminAccess();
-  const queryClient = useQueryClient();
-  const canEdit = canWrite("crm");
 
   const destinationsQuery = useQuery({
     queryKey: ["crm", "destination-countries"],
@@ -35,7 +42,7 @@ export function CountryChecklistsPage() {
   });
 
   const checklistByCode = useMemo(() => {
-    const map = new Map<string, { requiredDocuments: string[]; notes?: string }>();
+    const map = new Map<string, StoredChecklist>();
     for (const checklist of checklistsQuery.data ?? []) {
       map.set(checklist.countryCode, {
         requiredDocuments: checklist.requiredDocuments,
@@ -46,160 +53,223 @@ export function CountryChecklistsPage() {
   }, [checklistsQuery.data]);
 
   const [selectedCountryCode, setSelectedCountryCode] = useState<string | null>(null);
-  const [documentsText, setDocumentsText] = useState("");
-  const [notesText, setNotesText] = useState("");
+  const destinations = destinationsQuery.data ?? [];
+  const selectedCountry = destinations.find((country) => country.countryCode === selectedCountryCode);
+
+  return (
+    <AdminShell contentWidth="wide">
+      <div className="crm-root flex flex-col gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-ink">Doc checklists</h1>
+          <p className="mt-0.5 text-sm text-ink-soft">
+            Required documents stamped onto new CRM cases for each destination.
+          </p>
+        </div>
+
+        {(destinationsQuery.isError || checklistsQuery.isError) && (
+          <p role="alert" className="text-sm text-rgs-red-deep">
+            Could not load destinations or checklists.
+          </p>
+        )}
+
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]">
+          <section aria-label="Destinations" className={`${CARD_CLASS} overflow-hidden`}>
+            {destinationsQuery.isLoading && <p className="px-4 py-3 text-sm text-ink-soft">Loading…</p>}
+            <ul>
+              {destinations.map((country) => {
+                const documentCount = checklistByCode.get(country.countryCode)?.requiredDocuments.length ?? 0;
+                const isActive = country.countryCode === selectedCountryCode;
+                return (
+                  <li
+                    key={country.countryCode}
+                    data-testid="checklist-country-row"
+                    className="border-b border-line last:border-b-0"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCountryCode(country.countryCode)}
+                      aria-current={isActive ? "true" : undefined}
+                      className={`flex w-full items-center justify-between gap-2 border-l-4 px-4 py-2.5 text-left text-sm ${
+                        isActive ? "border-rgs-red bg-mist" : "border-transparent hover:bg-mist/60"
+                      }`}
+                    >
+                      <span className="font-medium text-ink">{country.countryName}</span>
+                      <span className="text-xs text-ink-soft">
+                        {documentCount === 0 ? "Not configured" : `${documentCount} docs`}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+
+          {selectedCountry !== undefined ? (
+            <ChecklistEditor
+              key={selectedCountry.countryCode}
+              countryCode={selectedCountry.countryCode}
+              countryName={selectedCountry.countryName}
+              stored={checklistByCode.get(selectedCountry.countryCode)}
+            />
+          ) : (
+            <section className={`${CARD_CLASS} px-6 py-10 text-center text-sm text-ink-soft`}>
+              Select a country to edit its document checklist.
+            </section>
+          )}
+        </div>
+      </div>
+    </AdminShell>
+  );
+}
+
+interface ChecklistEditorProps {
+  countryCode: string;
+  countryName: string;
+  stored: StoredChecklist | undefined;
+}
+
+function ChecklistEditor({ countryCode, countryName, stored }: ChecklistEditorProps) {
+  const { idToken } = useAuth();
+  const { canWrite } = useAdminAccess();
+  const queryClient = useQueryClient();
+  const canEdit = canWrite("crm");
+
+  const [documents, setDocuments] = useState<string[]>(stored?.requiredDocuments ?? []);
+  const [newDocument, setNewDocument] = useState("");
+  const [notesText, setNotesText] = useState(stored?.notes ?? "");
   const [formError, setFormError] = useState<string | null>(null);
 
-  const selectedCountryName =
-    destinationsQuery.data?.find((country) => country.countryCode === selectedCountryCode)?.countryName ??
-    selectedCountryCode;
-
-  function openEditor(countryCode: string) {
-    const stored = checklistByCode.get(countryCode);
-    setSelectedCountryCode(countryCode);
-    setDocumentsText((stored?.requiredDocuments ?? []).join("\n"));
-    setNotesText(stored?.notes ?? "");
+  function addDocument() {
+    const label = newDocument.trim();
+    if (label === "") return;
     setFormError(null);
+    setNewDocument("");
+    // A repeated label would stamp the same case check twice.
+    setDocuments((current) => (current.includes(label) ? current : [...current, label]));
+  }
+
+  function removeDocument(label: string) {
+    setDocuments((current) => current.filter((document) => document !== label));
   }
 
   const saveMutation = useMutation({
-    async mutationFn() {
-      if (selectedCountryCode === null) throw new Error("No country selected");
-      const requiredDocuments = documentsText
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-      if (requiredDocuments.length === 0) {
-        throw new Error("Add at least one document (one per line).");
-      }
+    mutationFn() {
       const trimmedNotes = notesText.trim();
-      return crmClient.putCountryChecklist(idToken!, selectedCountryCode, {
-        requiredDocuments,
+      return crmClient.putCountryChecklist(idToken!, countryCode, {
+        requiredDocuments: documents,
         ...(trimmedNotes !== "" ? { notes: trimmedNotes } : {}),
       });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["crm", "country-checklists"] });
-      setSelectedCountryCode(null);
       setFormError(null);
+      await queryClient.invalidateQueries({ queryKey: ["crm", "country-checklists"] });
     },
-    onError: (error: Error) => {
-      setFormError(error.message);
+    onError: (error: unknown) => {
+      setFormError(error instanceof ApiRequestError ? error.message : "The change did not save. Try again.");
     },
   });
 
+  function save() {
+    if (documents.length === 0) {
+      saveMutation.reset();
+      setFormError("Add at least one document.");
+      return;
+    }
+    setFormError(null);
+    saveMutation.mutate();
+  }
+
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-ink">Country document checklists</h1>
-          <p className="text-sm text-ink-soft">
-            Required documents stamped onto new CRM cases for each destination.
-          </p>
-        </div>
-        <Link to="/crm" className={SECONDARY_BUTTON_CLASS}>
-          Back to Ledger
-        </Link>
-      </div>
-
-      {(destinationsQuery.isError || checklistsQuery.isError) && (
-        <p role="alert" className="text-sm text-rgs-red-deep">
-          Could not load destinations or checklists.
+    <section aria-labelledby="country-checklist-title" className={`${CARD_CLASS} flex min-w-0 flex-col`}>
+      <header className="border-b border-line px-6 py-5">
+        <h2 id="country-checklist-title" className="text-xl font-bold text-ink">
+          {countryName}
+        </h2>
+        <p className="mt-0.5 text-sm text-ink-soft">
+          {canEdit ? "Each chip is one document stamped onto new cases." : "Documents stamped onto new cases."}
         </p>
-      )}
+      </header>
 
-      <div className="overflow-x-auto rounded-md border border-line">
-        <table className="min-w-full text-left text-sm">
-          <thead className="border-b border-line bg-surface-soft text-xs uppercase tracking-wide text-ink-soft">
-            <tr>
-              <th className="px-3 py-2">Country</th>
-              <th className="px-3 py-2">Documents</th>
-              <th className="px-3 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {(destinationsQuery.data ?? []).map((country) => {
-              const documents = checklistByCode.get(country.countryCode)?.requiredDocuments ?? [];
-              return (
-                <tr key={country.countryCode} className="border-b border-line last:border-0">
-                  <td className="px-3 py-2 font-medium text-ink">{country.countryName}</td>
-                  <td className="px-3 py-2 text-ink-soft">
-                    {documents.length === 0 ? "Not configured" : documents.join(", ")}
-                  </td>
-                  <td className="px-3 py-2 text-right">
+      <div className="flex flex-col gap-4 px-6 py-5">
+        <div className="flex flex-col gap-2">
+          <span className={FIELD_LABEL_CLASS}>Required documents</span>
+          {documents.length === 0 ? (
+            <p className="text-sm text-ink-soft">No documents yet.</p>
+          ) : (
+            <ul className="flex flex-wrap gap-2">
+              {documents.map((label) => (
+                <li
+                  key={label}
+                  className="flex items-center gap-1.5 rounded-full border border-line bg-mist py-1 pl-3 pr-2 text-sm text-ink"
+                >
+                  <span data-testid="checklist-doc-chip">{label}</span>
+                  {canEdit && (
                     <button
                       type="button"
-                      className={SECONDARY_BUTTON_CLASS}
-                      onClick={() => openEditor(country.countryCode)}
+                      onClick={() => removeDocument(label)}
+                      aria-label={`Remove ${label}`}
+                      className="rounded-full px-1.5 text-ink-soft hover:text-rgs-red-deep"
                     >
-                      {canEdit ? "Edit" : "View"}
+                      ×
                     </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
 
-      {selectedCountryCode !== null && (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-ink/40 p-4 sm:items-center">
-          <div
-            role="dialog"
-            aria-labelledby="country-checklist-title"
-            className="w-full max-w-lg rounded-lg bg-surface p-5 shadow-lg"
-          >
-            <h2 id="country-checklist-title" className="text-lg font-semibold text-ink">
-              {selectedCountryName}
-            </h2>
-            <p className="mt-1 text-xs text-ink-soft">One document label per line.</p>
-            <label className="mt-4 flex flex-col gap-1">
-              <span className={FIELD_LABEL_CLASS}>Required documents</span>
-              <textarea
-                value={documentsText}
-                onChange={(changeEvent) => setDocumentsText(changeEvent.target.value)}
-                rows={8}
-                readOnly={!canEdit}
+        {canEdit && (
+          <>
+            <div className="flex gap-2">
+              <input
+                aria-label="Add document"
+                placeholder="Add a document, e.g. Passport bio page"
+                value={newDocument}
+                onChange={(changeEvent) => setNewDocument(changeEvent.target.value)}
+                onKeyDown={(keyboardEvent) => {
+                  if (keyboardEvent.key === "Enter") {
+                    keyboardEvent.preventDefault();
+                    addDocument();
+                  }
+                }}
+                className={FIELD_CLASS}
+              />
+              <button type="button" onClick={addDocument} className={SECONDARY_BUTTON_CLASS}>
+                Add
+              </button>
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className={FIELD_LABEL_CLASS}>Notes (optional)</span>
+              <input
+                value={notesText}
+                onChange={(changeEvent) => setNotesText(changeEvent.target.value)}
                 className={FIELD_CLASS}
               />
             </label>
-            {canEdit && (
-              <label className="mt-3 flex flex-col gap-1">
-                <span className={FIELD_LABEL_CLASS}>Notes (optional)</span>
-                <input
-                  value={notesText}
-                  onChange={(changeEvent) => setNotesText(changeEvent.target.value)}
-                  className={FIELD_CLASS}
-                />
-              </label>
-            )}
-            {formError !== null && (
-              <p role="alert" className="mt-2 text-sm text-rgs-red-deep">
-                {formError}
-              </p>
-            )}
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                className={SECONDARY_BUTTON_CLASS}
-                onClick={() => setSelectedCountryCode(null)}
-              >
-                Close
-              </button>
-              {canEdit && (
-                <button
-                  type="button"
-                  className={PRIMARY_BUTTON_CLASS}
-                  disabled={saveMutation.isPending}
-                  onClick={() => saveMutation.mutate()}
-                >
-                  {saveMutation.isPending ? "Saving…" : "Save"}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+          </>
+        )}
+
+        {formError !== null && (
+          <p role="alert" className="text-sm text-rgs-red-deep">
+            {formError}
+          </p>
+        )}
+        {saveMutation.isSuccess && (
+          <p role="status" className="text-sm text-ink-soft">
+            Saved.
+          </p>
+        )}
+      </div>
+
+      {canEdit && (
+        <footer className="flex justify-end border-t border-line px-6 py-4">
+          <button type="button" disabled={saveMutation.isPending} onClick={save} className={PRIMARY_BUTTON_CLASS}>
+            {saveMutation.isPending ? "Saving…" : "Save"}
+          </button>
+        </footer>
       )}
-    </div>
+    </section>
   );
 }
