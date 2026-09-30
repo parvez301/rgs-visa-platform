@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getCountryProduct } from "@rgs/shared";
-import { buildTestContext } from "../helpers";
+import { buildTestContext, type TestContext } from "../helpers";
+import { listDestinationCountries } from "../../src/domain/crm/destinationCountries";
 import {
   listActiveCountryConfig,
   listCountryConfig,
@@ -88,6 +89,74 @@ describe("listActiveCountryConfig with a damaged checklist row", () => {
     const aeProduct = listing.countryProducts.find((product) => product.countryCode === "AE");
     expect(aeProduct).toBeDefined();
     expect(aeProduct?.requiredDocumentLabels).toBeUndefined();
+  });
+});
+
+/**
+ * Counts checklist gets and how many were in flight at once. Every wrapped get
+ * yields before it answers, so a caller that awaits one before starting the
+ * next can never reach an in-flight count above one.
+ */
+function trackChecklistGets(context: TestContext) {
+  const tableGet = context.table.get.bind(context.table);
+  const tracker = { total: 0, maxInFlight: 0 };
+  let inFlight = 0;
+  context.table.get = async (partitionKey: string, sortKey: string) => {
+    if (!partitionKey.includes("#COUNTRY#")) return tableGet(partitionKey, sortKey);
+    tracker.total += 1;
+    inFlight += 1;
+    tracker.maxInFlight = Math.max(tracker.maxInFlight, inFlight);
+    try {
+      await Promise.resolve();
+      return await tableGet(partitionKey, sortKey);
+    } finally {
+      inFlight -= 1;
+    }
+  };
+  return tracker;
+}
+
+describe("checklist lookup cost on the routes that pay it", () => {
+  it("issues the public catalog's checklist gets concurrently", async () => {
+    const context = buildTestContext();
+    const tracker = trackChecklistGets(context);
+
+    const listing = await listActiveCountryConfig(context);
+    const distinctCountryCodes = new Set(
+      listing.countryProducts.map((countryProduct) => countryProduct.countryCode),
+    );
+
+    // One get per distinct country, not per product, and all of them at once:
+    // GET /api/v1/config/countries is unauthenticated and on the marketing
+    // country page's first load, so ~30 serialised round trips land there.
+    expect(tracker.total).toBe(distinctCountryCodes.size);
+    expect(tracker.maxInFlight).toBe(tracker.total);
+  });
+
+  it("reads no checklists at all to build the destination picker", async () => {
+    const context = buildTestContext();
+    const tracker = trackChecklistGets(context);
+
+    const destinations = await listDestinationCountries(context);
+
+    // The picker wants codes and names. Routing it through the merge made the
+    // Doc checklists list walk every country twice: once here, once to fetch
+    // the checklists it actually wanted.
+    expect(destinations.length).toBeGreaterThan(0);
+    expect(tracker.total).toBe(0);
+  });
+
+  it("still omits inactive countries from the destination picker", async () => {
+    const context = buildTestContext();
+    const seedUae = getCountryProduct("AE");
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
+      ...seedUae,
+      docsRequired: [...seedUae.docsRequired],
+      active: false,
+    });
+
+    const destinations = await listDestinationCountries(context);
+    expect(destinations.some((destination) => destination.countryCode === "AE")).toBe(false);
   });
 });
 

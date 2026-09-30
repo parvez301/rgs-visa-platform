@@ -98,26 +98,34 @@ export async function listActiveCountryConfig(
 
 /**
  * Read-time merge of the CRM country checklist onto the public catalog. One
- * lookup per distinct country (several products can share a code). Nothing is
- * written back to Config: a country with no (or an empty) checklist gets no
- * labels, and consumers fall back to `docsRequired`.
+ * lookup per distinct country (several products can share a code), issued in
+ * parallel: this runs on the unauthenticated price list every marketing country
+ * page hits, and the catalog is ~34 products, so serialising the gets put ~30
+ * round trips on that path. Nothing is written back to Config: a country with
+ * no (or an empty) checklist gets no labels, and consumers fall back to
+ * `docsRequired`.
  */
 async function withCrmChecklistLabels(
   context: AppContext,
   countryProducts: CountryProduct[],
 ): Promise<CountryProduct[]> {
   const countryCodes = [...new Set(countryProducts.map((product) => product.countryCode))];
-  const labelsByCountry = new Map<string, string[]>();
-  for (const countryCode of countryCodes) {
-    try {
-      const checklist = await findCountryChecklist(context, DEFAULT_TENANT_ID, countryCode);
-      if (checklist !== undefined && checklist.requiredDocuments.length > 0) {
-        labelsByCountry.set(countryCode, [...checklist.requiredDocuments]);
+  const lookups = await Promise.all(
+    countryCodes.map(async (countryCode) => {
+      try {
+        return await findCountryChecklist(context, DEFAULT_TENANT_ID, countryCode);
+      } catch (error) {
+        // Unauthenticated price list: a hand-damaged checklist row must not take
+        // it down. That country just falls back to its docsRequired labels.
+        if (!(error instanceof CorruptRecordError)) throw error;
+        return undefined;
       }
-    } catch (error) {
-      // Unauthenticated price list: a hand-damaged checklist row must not take
-      // it down. That country just falls back to its docsRequired labels.
-      if (!(error instanceof CorruptRecordError)) throw error;
+    }),
+  );
+  const labelsByCountry = new Map<string, readonly string[]>();
+  for (const checklist of lookups) {
+    if (checklist !== undefined && checklist.requiredDocuments.length > 0) {
+      labelsByCountry.set(checklist.countryCode, [...checklist.requiredDocuments]);
     }
   }
   return countryProducts.map((countryProduct) => {

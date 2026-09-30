@@ -104,12 +104,12 @@ export async function listCountryChecklists(
   tenantId: string,
   countryCodes: readonly string[],
 ): Promise<CountryChecklist[]> {
-  const checklists: CountryChecklist[] = [];
-  for (const countryCode of countryCodes) {
-    const checklist = await findCountryChecklist(context, tenantId, countryCode);
-    if (checklist !== undefined) checklists.push(checklist);
-  }
-  return checklists.sort((left, right) => left.countryCode.localeCompare(right.countryCode));
+  const lookups = await Promise.all(
+    countryCodes.map((countryCode) => findCountryChecklist(context, tenantId, countryCode)),
+  );
+  return lookups
+    .filter((checklist): checklist is CountryChecklist => checklist !== undefined)
+    .sort((left, right) => left.countryCode.localeCompare(right.countryCode));
 }
 
 /** Insert-if-absent for Config → CRM migration; never overwrites desk edits. */
