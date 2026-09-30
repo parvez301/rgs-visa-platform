@@ -9,7 +9,9 @@
     "import": "tsx src/cli.ts",
     "backfill:summary": "tsx src/backfillCli.ts",
     "backfill:search-text": "tsx src/backfillSearchTextCli.ts",
-    "backfill:ref-claims": "tsx src/backfillRefClaimsCli.ts"
+    "backfill:ref-claims": "tsx src/backfillRefClaimsCli.ts",
+    "backfill:case-status-rename": "tsx src/backfillCaseStatusRenameCli.ts",
+    "seed:status-email-templates": "tsx src/seedStatusEmailTemplatesCli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",
