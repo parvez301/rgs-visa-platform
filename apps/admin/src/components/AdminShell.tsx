@@ -25,20 +25,33 @@ function SidebarNavLink({ navLink, pathname }: { navLink: AdminNavLink; pathname
     canAccess(childLink.screen),
   );
 
+  // A parent's active state is `isCasesParentActive`, not NavLink's own: prefix
+  // matching would light Cases up on its siblings under /crm, and `end` would
+  // leave it dark on /crm/cases/:id. NavLink derives aria-current from the
+  // isActive it computes itself and cannot be told otherwise, so a parent
+  // renders as a plain Link and carries both from the one rule.
+  const hasChildren = navLink.children !== undefined;
+  const isParentActive = hasChildren && isCasesParentActive(pathname);
+
   return (
     <li>
-      <NavLink
-        to={navLink.to}
-        end={navLink.to === "/" || navLink.children !== undefined}
-        className={({ isActive }) =>
-          navLinkClassName(
-            navLink.children !== undefined ? isCasesParentActive(pathname) : isActive,
-            false,
-          )
-        }
-      >
-        {navLink.label}
-      </NavLink>
+      {hasChildren ? (
+        <Link
+          to={navLink.to}
+          aria-current={isParentActive ? "page" : undefined}
+          className={navLinkClassName(isParentActive, false)}
+        >
+          {navLink.label}
+        </Link>
+      ) : (
+        <NavLink
+          to={navLink.to}
+          end={navLink.to === "/"}
+          className={({ isActive }) => navLinkClassName(isActive, false)}
+        >
+          {navLink.label}
+        </NavLink>
+      )}
       {accessibleChildren.length > 0 && (
         <ul className="mt-1 space-y-1">
           {accessibleChildren.map((childLink) => (

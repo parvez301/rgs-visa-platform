@@ -19,10 +19,10 @@ function authState(primaryRole: AuthState["primaryRole"]): AuthState {
   };
 }
 
-function renderShell(primaryRole: AuthState["primaryRole"]) {
+function renderShell(primaryRole: AuthState["primaryRole"], initialPath = "/") {
   return render(
     <AuthContext.Provider value={authState(primaryRole)}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialPath]}>
         <AdminShell>
           <p>Page content</p>
         </AdminShell>
@@ -71,12 +71,30 @@ describe("AdminShell navigation", () => {
     expect(screen.queryByRole("link", { name: "CRM" })).not.toBeInTheDocument();
   });
 
-  it("hides Cases children when the role cannot access crm", () => {
-    // Viewer keeps Cases (crm read) but not Config; children follow each child's own screen.
+  it("hides a Cases child the role cannot reach while keeping Cases itself", () => {
+    // Viewer has crm read (so Cases and Doc checklists stay) but crmReview
+    // "none", which is the only thing that hides the Review child.
     renderShell("Viewer");
 
     expect(screen.getByRole("link", { name: "Cases" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Doc checklists" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Review" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Config" })).not.toBeInTheDocument();
+  });
+
+  it("marks Cases as the current page on a case detail route, not just in red", () => {
+    renderShell("Owner", "/crm/cases/case_1");
+
+    // Cases owns /crm/cases/:id, but NavLink's own isActive is false there
+    // because a link with children renders with `end`.
+    expect(screen.getByRole("link", { name: "Cases" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Review" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("leaves aria-current on the child, not on Cases, under a sibling route", () => {
+    renderShell("Owner", "/crm/review");
+
+    expect(screen.getByRole("link", { name: "Cases" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("aria-current", "page");
   });
 });
