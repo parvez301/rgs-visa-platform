@@ -129,11 +129,9 @@ export class RgsPlatformStack extends cdk.Stack {
       environment: {
         TABLE_NAME: platformTable.tableName,
         DOCUMENTS_BUCKET: documentsBucket.bucketName,
-        // From-domain must be SES-verified. raysglobalservices.com DNS still
-        // points at GoDaddy (SES verify Failed). hireloop.xyz is verified in
-        // the cloud account (us-east-1, production SES access). Lambdas assume
-        // SES_ROLE_ARN to send there until the GoDaddy NS cutover.
-        EMAIL_SENDER: "no-reply@hireloop.xyz",
+        // From-domain must be SES-verified. raysglobalservices.com is verified
+        // in the cloud account (us-east-1). Lambdas assume SES_ROLE_ARN to send.
+        EMAIL_SENDER: "no-reply@raysglobalservices.com",
         ADMIN_NOTIFICATION_EMAIL: "info@raysglobalservices.com",
         SES_REGION: "us-east-1",
         SES_ROLE_ARN: "arn:aws:iam::781517218736:role/RgsCrmSesSendRole",
