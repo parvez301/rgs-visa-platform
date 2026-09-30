@@ -146,7 +146,7 @@ describe("migrateCountryDocumentsToProducts", () => {
     await putCountryChecklist(
       context,
       TENANT_ID,
-      { countryCode: "AE", requiredDocuments: ["Custom letter"] },
+      { countryCode: "AE", requiredDocuments: ["Custom letter", DOC_TYPE_LABELS.PASSPORT_BIO] },
       "desk@rgs.test",
     );
 
@@ -157,10 +157,13 @@ describe("migrateCountryDocumentsToProducts", () => {
     );
     expect(aeProducts).toHaveLength(2);
     for (const aeProduct of aeProducts) {
-      expect(aeProduct.requiredDocuments).toEqual([{ label: "Custom letter" }]);
+      expect(aeProduct.requiredDocuments).toEqual([
+        { label: "Custom letter" },
+        { label: DOC_TYPE_LABELS.PASSPORT_BIO, portalDocType: "PASSPORT_BIO" },
+      ]);
     }
     expect(report.productsUpdated).toBe(2);
-    expect(report.checklistLabelsMerged).toBe(2);
+    expect(report.checklistLabelsMerged).toBe(4);
   });
 
   it("is idempotent: a second run skips converted rows and changes nothing", async () => {
@@ -169,7 +172,7 @@ describe("migrateCountryDocumentsToProducts", () => {
     await putCountryChecklist(
       context,
       TENANT_ID,
-      { countryCode: "AE", requiredDocuments: ["Custom letter"] },
+      { countryCode: "AE", requiredDocuments: ["Custom letter", DOC_TYPE_LABELS.PHOTO] },
       "desk@rgs.test",
     );
     await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
@@ -179,7 +182,7 @@ describe("migrateCountryDocumentsToProducts", () => {
     await putCountryChecklist(
       context,
       TENANT_ID,
-      { countryCode: "AE", requiredDocuments: ["Something else"] },
+      { countryCode: "AE", requiredDocuments: ["Something else", DOC_TYPE_LABELS.PHOTO] },
       "desk@rgs.test",
     );
     const secondReport = await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
@@ -194,14 +197,17 @@ describe("migrateCountryDocumentsToProducts", () => {
     await putCountryChecklist(
       context,
       TENANT_ID,
-      { countryCode: "AE", requiredDocuments: ["Custom letter"] },
+      { countryCode: "AE", requiredDocuments: ["Custom letter", DOC_TYPE_LABELS.PASSPORT_BIO] },
       "desk@rgs.test",
     );
 
     await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
 
     const checklist = await findCountryChecklist(context, TENANT_ID, "AE");
-    expect(checklist?.requiredDocuments).toEqual(["Custom letter"]);
+    expect(checklist?.requiredDocuments).toEqual([
+      "Custom letter",
+      DOC_TYPE_LABELS.PASSPORT_BIO,
+    ]);
   });
 
   it("does nothing when the catalog was never seeded into the table", async () => {
@@ -259,7 +265,7 @@ describe("migrateCountryDocumentsToProducts — bad rows do not block the run", 
     await putCountryChecklist(
       context,
       TENANT_ID,
-      { countryCode: "AE", requiredDocuments: ["Custom letter"] },
+      { countryCode: "AE", requiredDocuments: ["Custom letter", DOC_TYPE_LABELS.PASSPORT_BIO] },
       "desk@rgs.test",
     );
     const secondReport = await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
@@ -268,9 +274,34 @@ describe("migrateCountryDocumentsToProducts — bad rows do not block the run", 
       ...EMPTY_REPORT,
       productsUpdated: 1,
       productsSkippedAlreadyMigrated: 1,
-      checklistLabelsMerged: 1,
+      checklistLabelsMerged: 2,
     });
-    expect((await readRawProduct(context, "AE"))["requiredDocuments"]).toEqual([{ label: "Custom letter" }]);
+    expect((await readRawProduct(context, "AE"))["requiredDocuments"]).toEqual([
+      { label: "Custom letter" },
+      { label: DOC_TYPE_LABELS.PASSPORT_BIO, portalDocType: "PASSPORT_BIO" },
+    ]);
+  });
+
+  // A fulfilled country needs at least one row the portal can collect, or the
+  // wizard renders zero upload slots and the submission gate passes an empty
+  // application. A desk checklist of pure free text is therefore not a valid
+  // conversion -- it is named and left alone, not written.
+  it("leaves a fulfilled country whose checklist is entirely free text unmigrated", async () => {
+    const context = buildContext();
+    await putLegacyProduct(context, "AE", ["PASSPORT_BIO"]);
+    await putCountryChecklist(
+      context,
+      TENANT_ID,
+      { countryCode: "AE", requiredDocuments: ["Custom letter", "Sponsor NOC"] },
+      "desk@rgs.test",
+    );
+
+    const report = await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
+
+    expect(report.productsUpdated).toBe(0);
+    expect(report.productsSkippedInvalid).toBe(1);
+    expect(report.invalidProductDetails[0]).toMatch(/^AE#.*portal can collect/);
+    expect((await readRawProduct(context, "AE"))["docsRequired"]).toEqual(["PASSPORT_BIO"]);
   });
 });
 

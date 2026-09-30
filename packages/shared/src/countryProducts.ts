@@ -83,6 +83,20 @@ export const CountryProductSchema = z
       countryProduct.tier !== "FULFILLED" || countryProduct.requiredDocuments.length > 0,
     { message: "Fulfilled countries need a documents checklist", path: ["requiredDocuments"] },
   )
+  // Free-text rows are checklist copy only -- they get no portal upload slot.
+  // A fulfilled country made entirely of them would render zero slots in the
+  // wizard, and `missingDocuments` would then pass a submission with no files
+  // at all. Non-empty is therefore not enough: at least one row has to be
+  // something the portal can collect.
+  .refine(
+    (countryProduct) =>
+      countryProduct.tier !== "FULFILLED" ||
+      portalDocTypesFromProduct(countryProduct).length > 0,
+    {
+      message: "Fulfilled countries need at least one document the portal can collect",
+      path: ["requiredDocuments"],
+    },
+  )
   .refine(
     (countryProduct) => {
       const normalizedLabels = countryProduct.requiredDocuments.map((requiredDocument) =>
@@ -417,8 +431,4 @@ export function getCountryProduct(countryCode: string, productCode?: string): Co
     throw new UnknownCountryProductError(countryCode, productCode);
   }
   return countryProduct;
-}
-
-export function getDocsChecklist(countryCode: string): readonly DocType[] {
-  return portalDocTypesFromProduct(getCountryProduct(countryCode));
 }

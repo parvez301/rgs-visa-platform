@@ -6,7 +6,6 @@ import {
   getCountryProduct,
   CountryProductSchema,
   documentLabelsFromProduct,
-  getDocsChecklist,
   labelsForCountryCode,
   listActiveProducts,
   portalDocTypesFromProduct,
@@ -64,12 +63,14 @@ describe("country product catalog", () => {
   it("throws a typed error for unknown lookups", () => {
     expect(() => getCountryProduct("XX")).toThrow(UnknownCountryProductError);
     expect(() => getCountryProduct("AE", "AE_WORK_VISA")).toThrow(UnknownCountryProductError);
-    expect(() => getDocsChecklist("XX")).toThrow(UnknownCountryProductError);
   });
 
-  it("docs checklist matches the country product", () => {
-    expect(getDocsChecklist("AE")).toEqual(["PASSPORT_BIO", "PHOTO"]);
-    expect(getDocsChecklist("AU")).toContain("BANK_STATEMENT");
+  it("portal upload slots match the country product's mapped checklist rows", () => {
+    expect(portalDocTypesFromProduct(getCountryProduct("AE"))).toEqual([
+      "PASSPORT_BIO",
+      "PHOTO",
+    ]);
+    expect(portalDocTypesFromProduct(getCountryProduct("AU"))).toContain("BANK_STATEMENT");
   });
 });
 
@@ -129,6 +130,24 @@ describe("requiredDocuments schema", () => {
         ...baseCountryProduct,
         tier: "INFO_ONLY",
         requiredDocuments: [],
+      }).success,
+    ).toBe(true);
+  });
+
+  // Free-text rows carry no upload slot, so an all-free-text fulfilled country
+  // would give the portal nothing to collect and nothing to gate submission on.
+  it("requires a fulfilled country to have at least one portal-collectable document", () => {
+    expect(
+      CountryProductSchema.safeParse({
+        ...baseCountryProduct,
+        requiredDocuments: [{ label: "Invitation letter" }, { label: "Sponsor NOC" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      CountryProductSchema.safeParse({
+        ...baseCountryProduct,
+        tier: "INFO_ONLY",
+        requiredDocuments: [{ label: "Invitation letter" }],
       }).success,
     ).toBe(true);
   });

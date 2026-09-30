@@ -40,12 +40,15 @@ describe("labelsForDestinationCountry", () => {
       requiredDocuments: [{ label: "passport " }, { label: "Info note" }],
     });
     await putProduct(context, {
-      requiredDocuments: [{ label: "Passport" }, { label: "Photo" }],
+      requiredDocuments: [
+        { label: "Passport", portalDocType: "PASSPORT_BIO" },
+        { label: "Photo" },
+      ],
     });
     await putProduct(context, {
       productCode: "AE_OLD",
       active: false,
-      requiredDocuments: [{ label: "Retired doc" }],
+      requiredDocuments: [{ label: "Retired doc", portalDocType: "PASSPORT_BIO" }],
     });
     expect(await labelsForDestinationCountry(context, "AE")).toEqual([
       "Passport",
@@ -56,7 +59,10 @@ describe("labelsForDestinationCountry", () => {
 
   it("falls back to inactive products when none is active", async () => {
     const context = buildTestContext();
-    await putProduct(context, { active: false, requiredDocuments: [{ label: "Only doc" }] });
+    await putProduct(context, {
+      active: false,
+      requiredDocuments: [{ label: "Only doc", portalDocType: "PASSPORT_BIO" }],
+    });
     expect(await labelsForDestinationCountry(context, "AE")).toEqual(["Only doc"]);
   });
 });

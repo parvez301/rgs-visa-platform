@@ -44,7 +44,10 @@ async function seedPartnerAndTraveller() {
 describe("case document checklist", () => {
   it("stamps the destination country's required documents as Missing when a case is opened", async () => {
     const { context, partnerId, travellerId } = await seedPartnerAndTraveller();
-    await putProductDocuments(context, "AE", [{ label: "Passport" }, { label: "Photo" }]);
+    await putProductDocuments(context, "AE", [
+      { label: "Passport", portalDocType: "PASSPORT_BIO" },
+      { label: "Photo" },
+    ]);
 
     const created = await createCase(
       context,
@@ -148,7 +151,10 @@ describe("case document checklist", () => {
 
   it("moves one document's state and records DOCUMENT_CHECKLIST_CHANGED", async () => {
     const { context, partnerId, travellerId } = await seedPartnerAndTraveller();
-    await putProductDocuments(context, "AE", [{ label: "Passport" }, { label: "Photo" }]);
+    await putProductDocuments(context, "AE", [
+      { label: "Passport", portalDocType: "PASSPORT_BIO" },
+      { label: "Photo" },
+    ]);
     const created = await createCase(
       context,
       TENANT_ID,
