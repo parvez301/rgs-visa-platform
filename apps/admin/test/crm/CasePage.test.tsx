@@ -495,6 +495,36 @@ describe("CasePage", () => {
     expect(within(timelineEntry).getByText(/Applied automatically/)).toBeInTheDocument();
   });
 
+  it("collapses a long timeline to the most recent 8 events and expands to all", async () => {
+    // Oldest first, exactly as the events endpoint returns them: E01 is the
+    // oldest, E10 the newest.
+    const events: CrmEventView[] = Array.from({ length: 10 }, (_unused, index) => {
+      const applicantRef = `E${String(index + 1).padStart(2, "0")}`;
+      return {
+        eventId: `e${index + 1}`,
+        eventType: "APPLICANT_ADDED",
+        caseId: "case_1",
+        actorEmail: "ops@rgs.test",
+        meta: { applicantRef },
+        createdAt: `2026-03-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`,
+      };
+    });
+    renderCasePage({ caseRecord: buildCase(), events });
+
+    await screen.findAllByTestId("timeline-entry");
+    const collapsedTitles = screen.getAllByTestId("timeline-entry-title").map((title) => title.textContent ?? "");
+    expect(collapsedTitles).toHaveLength(8);
+    // The newest is visible, the two oldest (beyond the window) are not.
+    expect(collapsedTitles[collapsedTitles.length - 1]).toContain("E10");
+    expect(collapsedTitles.some((title) => title.includes("Applicant E01 "))).toBe(false);
+    expect(collapsedTitles.some((title) => title.includes("Applicant E02 "))).toBe(false);
+    expect(collapsedTitles[0]).toContain("E03");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all 10 events" }));
+    expect(screen.getAllByTestId("timeline-entry")).toHaveLength(10);
+    expect(screen.getAllByTestId("timeline-entry-title")[0]).toHaveTextContent("E01");
+  });
+
   it("shows the group name beside the REF and each applicant's REF NO and name", async () => {
     renderCasePage({
       caseRecord: {

@@ -509,8 +509,10 @@ function CaseContextFields({
 }
 
 /**
- * The audit timeline, trimmed to its first {@link COMPACT_TIMELINE_LIMIT} entries
- * when long so it does not bury the applicants' page. `Timeline` itself is
+ * The audit timeline, trimmed to its MOST RECENT {@link COMPACT_TIMELINE_LIMIT}
+ * entries when long so it does not bury the applicants' page. The API returns
+ * oldest first and `Timeline` does not re-sort, so the recent window is the
+ * tail of the list, still shown in the API's order. `Timeline` itself is
  * untouched and the events query is unchanged.
  */
 const COMPACT_TIMELINE_LIMIT = 8;
@@ -518,7 +520,7 @@ const COMPACT_TIMELINE_LIMIT = 8;
 function CompactTimeline({ events }: { events: CrmEventView[] }) {
   const [showAll, setShowAll] = useState(false);
   const isLong = events.length > COMPACT_TIMELINE_LIMIT;
-  const visibleEvents = isLong && !showAll ? events.slice(0, COMPACT_TIMELINE_LIMIT) : events;
+  const visibleEvents = isLong && !showAll ? events.slice(-COMPACT_TIMELINE_LIMIT) : events;
   return (
     <div className="flex flex-col gap-2">
       <Timeline events={visibleEvents} />
