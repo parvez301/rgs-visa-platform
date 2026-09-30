@@ -27,6 +27,7 @@ function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
     receivedDate: "2026-01-02",
     lineItems: [],
     totalInr: 0,
+    documentChecklist: [],
     watchdogOverrides: {},
     mutedRules: [],
     applicants: [

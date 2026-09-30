@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildTestContext } from "../helpers";
 import { createCase } from "../../src/domain/crm/cases";
-import { putCountryChecklist } from "../../src/domain/crm/countryChecklist";
+import { upsertCountryProduct } from "../../src/domain/config";
+import { COUNTRY_PRODUCTS, type CountryProduct } from "@rgs/shared";
 import {
   ensureCaseDocumentChecklist,
   setCaseDocumentCheckState,
@@ -12,6 +13,21 @@ import { upsertTraveller } from "../../src/domain/crm/travellers";
 
 const TENANT_ID = "rgs";
 const ACTOR = "ops@rgs.test";
+
+/** Seed product for a country, with its checklist replaced by the given labels. */
+async function putProductDocuments(
+  context: ReturnType<typeof buildTestContext>,
+  countryCode: string,
+  requiredDocuments: CountryProduct["requiredDocuments"],
+  overrides: Partial<CountryProduct> = {},
+): Promise<void> {
+  const base = COUNTRY_PRODUCTS.find((product) => product.countryCode === countryCode)!;
+  await upsertCountryProduct(context, "admin_1", "admin@rgs.test", {
+    ...base,
+    requiredDocuments,
+    ...overrides,
+  });
+}
 
 async function seedPartnerAndTraveller() {
   const context = buildTestContext();
@@ -28,12 +44,7 @@ async function seedPartnerAndTraveller() {
 describe("case document checklist", () => {
   it("stamps the destination country's required documents as Missing when a case is opened", async () => {
     const { context, partnerId, travellerId } = await seedPartnerAndTraveller();
-    await putCountryChecklist(
-      context,
-      TENANT_ID,
-      { countryCode: "AE", requiredDocuments: ["Passport", "Photo"] },
-      ACTOR,
-    );
+    await putProductDocuments(context, "AE", [{ label: "Passport" }, { label: "Photo" }]);
 
     const created = await createCase(
       context,
@@ -56,7 +67,35 @@ describe("case document checklist", () => {
     ]);
   });
 
-  it("opens with an empty checklist when the destination has no country list", async () => {
+  it("stamps office-only rows alongside portal-backed ones", async () => {
+    const { context, partnerId, travellerId } = await seedPartnerAndTraveller();
+    await putProductDocuments(context, "AE", [
+      { label: "Passport bio page", portalDocType: "PASSPORT_BIO" },
+      { label: "Office form only" },
+    ]);
+
+    const created = await createCase(
+      context,
+      TENANT_ID,
+      {
+        caseRef: "RGS-DOC-5",
+        caseType: "VISA",
+        partnerId,
+        destinationCountry: "AE",
+        visaType: "TOURIST",
+        receivedDate: "2026-09-16",
+        applicants: [{ applicantRef: "A1", travellerId }],
+      },
+      ACTOR,
+    );
+
+    expect(created.documentChecklist.map((row) => row.label)).toEqual([
+      "Passport bio page",
+      "Office form only",
+    ]);
+  });
+
+  it("opens with an empty checklist when the destination has no country product", async () => {
     const { context, partnerId, travellerId } = await seedPartnerAndTraveller();
 
     const created = await createCase(
@@ -66,7 +105,7 @@ describe("case document checklist", () => {
         caseRef: "RGS-DOC-2",
         caseType: "VISA",
         partnerId,
-        destinationCountry: "JP",
+        destinationCountry: "ZZ",
         visaType: "TOURIST",
         receivedDate: "2026-09-16",
         applicants: [{ applicantRef: "A1", travellerId }],
@@ -95,12 +134,7 @@ describe("case document checklist", () => {
     );
     expect(created.documentChecklist).toEqual([]);
 
-    await putCountryChecklist(
-      context,
-      TENANT_ID,
-      { countryCode: "SG", requiredDocuments: ["Passport", "Bank statement"] },
-      ACTOR,
-    );
+    await putProductDocuments(context, "SG", [{ label: "Passport" }, { label: "Bank statement" }]);
 
     const ensured = await ensureCaseDocumentChecklist(context, TENANT_ID, created.caseId, ACTOR);
     expect(ensured.documentChecklist).toEqual([
@@ -114,12 +148,7 @@ describe("case document checklist", () => {
 
   it("moves one document's state and records DOCUMENT_CHECKLIST_CHANGED", async () => {
     const { context, partnerId, travellerId } = await seedPartnerAndTraveller();
-    await putCountryChecklist(
-      context,
-      TENANT_ID,
-      { countryCode: "AE", requiredDocuments: ["Passport", "Photo"] },
-      ACTOR,
-    );
+    await putProductDocuments(context, "AE", [{ label: "Passport" }, { label: "Photo" }]);
     const created = await createCase(
       context,
       TENANT_ID,

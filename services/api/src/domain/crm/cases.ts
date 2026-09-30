@@ -16,8 +16,8 @@ import {
 import { getPartnerOrThrow } from "./partners";
 import { assertApplicantRefNosDistinct, claimNewRefs, releaseRefKeys, staleRefKeys } from "./refClaims";
 import { getTravellerOrThrow } from "./travellers";
-import { findCountryChecklist } from "./countryChecklist";
 import { stampDocumentChecklistFromCountry } from "./caseDocumentChecklist";
+import { labelsForDestinationCountry } from "./destinationRequiredDocuments";
 import { notifyOnCaseCreated, notifyOnCaseStatusChange } from "./statusNotify";
 
 export interface CreateCaseApplicantInput {
@@ -71,11 +71,9 @@ export async function createCase(
   }
 
   const nowIso = context.now().toISOString();
-  const countryChecklist = await findCountryChecklist(context, tenantId, input.destinationCountry);
-  const documentChecklist =
-    countryChecklist === undefined
-      ? []
-      : stampDocumentChecklistFromCountry(countryChecklist.requiredDocuments);
+  const documentChecklist = stampDocumentChecklistFromCountry(
+    await labelsForDestinationCountry(context, input.destinationCountry),
+  );
   assertCollectionNotBeforeReceived(input.receivedDate, input.expectedCollectionDate);
   let crmCase: crm.CrmCase;
   try {

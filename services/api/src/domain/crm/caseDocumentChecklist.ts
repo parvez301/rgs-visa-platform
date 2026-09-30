@@ -2,8 +2,8 @@ import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
 import { badRequest, notFound } from "../../lib/errors";
 import { readCaseOrThrow, writeCase } from "./caseStore";
-import { findCountryChecklist } from "./countryChecklist";
 import { recordCrmEvent } from "./crmEvents";
+import { labelsForDestinationCountry } from "./destinationRequiredDocuments";
 
 /**
  * Builds the per-case checklist from a country template: every required
@@ -30,19 +30,13 @@ export async function ensureCaseDocumentChecklist(
   const currentCase = await readCaseOrThrow(context, tenantId, caseId);
   if (currentCase.documentChecklist.length > 0) return currentCase;
 
-  const countryChecklist = await findCountryChecklist(
-    context,
-    tenantId,
-    currentCase.destinationCountry,
-  );
-  if (countryChecklist === undefined || countryChecklist.requiredDocuments.length === 0) {
-    return currentCase;
-  }
+  const labels = await labelsForDestinationCountry(context, currentCase.destinationCountry);
+  if (labels.length === 0) return currentCase;
 
   const nowIso = context.now().toISOString();
   const updatedCase = crm.CrmCaseSchema.parse({
     ...currentCase,
-    documentChecklist: stampDocumentChecklistFromCountry(countryChecklist.requiredDocuments),
+    documentChecklist: stampDocumentChecklistFromCountry(labels),
     updatedAt: nowIso,
   });
   await writeCase(context, updatedCase);
