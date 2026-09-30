@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { crm } from "@rgs/shared";
-import { adminApi } from "../../lib/adminApi";
+import { adminApi, ApiRequestError } from "../../lib/adminApi";
 import { useAuth } from "../../lib/auth";
 import { crmClient, type CreateCaseInput } from "../api/crmClient";
 import { crmQueryKeys, usePartners } from "../api/hooks";
@@ -39,6 +39,43 @@ function todayIsoDate(): string {
 }
 
 const FIELD_CLASS = `${INPUT_CLASS} w-full`;
+
+const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? "";
+const CRM_BASE = "/api/v1/admin/crm";
+
+interface CountryChecklistPreview {
+  countryCode: string;
+  requiredDocuments: string[];
+}
+
+/** Stamp preview for the chosen destination; 404 means not configured yet. */
+async function readCountryChecklistPreview(
+  idToken: string,
+  countryCode: string,
+): Promise<CountryChecklistPreview> {
+  const response = await fetch(
+    `${API_BASE_URL}${CRM_BASE}/country-checklists/${encodeURIComponent(countryCode)}`,
+    {
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${idToken}`,
+      },
+    },
+  );
+  const responsePayload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if (response.status === 404) {
+      return { countryCode, requiredDocuments: [] };
+    }
+    const problem = responsePayload as { code?: string; message?: string };
+    throw new ApiRequestError(
+      response.status,
+      problem.code ?? "UNKNOWN",
+      problem.message ?? `Request failed (${response.status})`,
+    );
+  }
+  return responsePayload as CountryChecklistPreview;
+}
 
 interface NewCaseDrawerProps {
   onClose(): void;
@@ -78,6 +115,12 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
   const [clientEmail, setClientEmail] = useState("");
   const [applicantDrafts, setApplicantDrafts] = useState<ApplicantDraft[]>([EMPTY_APPLICANT]);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
+
+  const countryChecklistQuery = useQuery({
+    queryKey: ["crm", "country-checklist", destinationCountry],
+    queryFn: () => readCountryChecklistPreview(idToken!, destinationCountry),
+    enabled: idToken !== null && destinationCountry !== "",
+  });
 
   useEffect(() => {
     function closeOnEscape(keyboardEvent: KeyboardEvent) {
@@ -304,6 +347,25 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
                 ))}
               </select>
             </label>
+            {destinationCountry !== "" && (
+              <div className="sm:col-span-2 rounded-md border border-line bg-mist/50 px-3 py-2 text-sm text-ink">
+                <p className={FIELD_LABEL_CLASS}>Documents stamped on this case</p>
+                {countryChecklistQuery.isLoading ? (
+                  <p className="text-ink-soft">Loading checklist…</p>
+                ) : (countryChecklistQuery.data?.requiredDocuments.length ?? 0) === 0 ? (
+                  <p className="text-ink-soft">
+                    No document checklist for this country yet. Configure required documents under Doc
+                    checklists before creating cases here.
+                  </p>
+                ) : (
+                  <ul className="mt-1 list-disc pl-5">
+                    {countryChecklistQuery.data!.requiredDocuments.map((documentLabel) => (
+                      <li key={documentLabel}>{documentLabel}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
             {caseType === "VISA" && (
               <label className="flex flex-col gap-1">
                 <span className={FIELD_LABEL_CLASS}>Visa type</span>

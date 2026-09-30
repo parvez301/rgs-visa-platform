@@ -34,7 +34,9 @@ function jsonResponse(status: number, payload: unknown) {
  * passport lookup per applicant (create the traveller only on a 404), then
  * the case itself with the ids those calls returned.
  */
-function renderDrawer(options: { passportIsKnown?: boolean; caseWriteFails?: boolean } = {}) {
+function renderDrawer(
+  options: { passportIsKnown?: boolean; caseWriteFails?: boolean; checklistEmpty?: boolean } = {},
+) {
   const requestLog: LoggedRequest[] = [];
   const fetchMock = vi.fn((url: string, init: RequestInit = {}) => {
     const requestMethod = init.method ?? "GET";
@@ -48,6 +50,15 @@ function renderDrawer(options: { passportIsKnown?: boolean; caseWriteFails?: boo
       return jsonResponse(200, {
         countryProducts: [{ countryCode: "AE", countryName: "United Arab Emirates" }],
         unreadableCountryProductIds: [],
+      });
+    }
+    if (requestUrl.includes("/crm/country-checklists/")) {
+      return jsonResponse(200, {
+        countryCode: "AE",
+        requiredDocuments:
+          options.checklistEmpty === true ? [] : ["Passport bio page", "Passport-size photo"],
+        updatedAt: "2026-09-30T00:00:00.000Z",
+        updatedBy: "seed",
       });
     }
     if (requestMethod === "GET" && requestUrl.endsWith("/crm/partners")) {
@@ -109,6 +120,12 @@ afterEach(() => {
 });
 
 describe("NewCaseDrawer", () => {
+  it("points an empty country checklist preview at Doc checklists", async () => {
+    renderDrawer({ checklistEmpty: true });
+    await fillTheCommonFields();
+    expect(await screen.findByText(/doc checklists/i)).toBeInTheDocument();
+  });
+
   it("refuses to submit until every required field is filled, naming the first gap", async () => {
     const { requestLog } = renderDrawer();
     fireEvent.click(screen.getByRole("button", { name: "Create case" }));
