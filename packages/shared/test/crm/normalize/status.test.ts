@@ -3,8 +3,14 @@ import { normalizeStatus } from "../../../src/crm/normalize/status";
 
 describe("normalizeStatus — case progress", () => {
   it("maps the in-progress spellings", () => {
-    expect(normalizeStatus("Working on It").caseStatus).toBe("IN_PROGRESS");
-    expect(normalizeStatus("In Progress").caseStatus).toBe("IN_PROGRESS");
+    expect(normalizeStatus("Working on It").caseStatus).toBe("DOCS_UNDER_REVIEW");
+    expect(normalizeStatus("In Progress").caseStatus).toBe("DOCS_UNDER_REVIEW");
+  });
+
+  it("maps additional docs / under process / passport received when the sheet uses those words", () => {
+    expect(normalizeStatus("Additional Documents Required").caseStatus).toBe("ADDITIONAL_DOCS_REQUIRED");
+    expect(normalizeStatus("Under Process").caseStatus).toBe("UNDER_PROCESS");
+    expect(normalizeStatus("Passport Received").caseStatus).toBe("PASSPORT_RECEIVED");
   });
 
   it("maps the misspelled appointment status", () => {
@@ -123,7 +129,7 @@ describe("normalizeStatus — values that are not statuses", () => {
 
   it("keeps the biometrics letter as a note on an in-progress case", () => {
     const result = normalizeStatus("REC: Bio Letter");
-    expect(result.caseStatus).toBe("IN_PROGRESS");
+    expect(result.caseStatus).toBe("DOCS_UNDER_REVIEW");
     expect(result.note).toBe("Biometrics letter received");
   });
 

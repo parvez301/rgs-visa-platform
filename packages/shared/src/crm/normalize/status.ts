@@ -37,8 +37,11 @@ function mapping(overrides: Partial<StatusMapping>): StatusMapping {
 
 /** Spec §6. Keys are uppercased and whitespace-collapsed. */
 const MAPPING_BY_STATUS: Record<string, StatusMapping> = {
-  "WORKING ON IT": mapping({ caseStatus: "IN_PROGRESS" }),
-  "IN PROGRESS": mapping({ caseStatus: "IN_PROGRESS" }),
+  "WORKING ON IT": mapping({ caseStatus: "DOCS_UNDER_REVIEW" }),
+  "IN PROGRESS": mapping({ caseStatus: "DOCS_UNDER_REVIEW" }),
+  "ADDITIONAL DOCUMENTS REQUIRED": mapping({ caseStatus: "ADDITIONAL_DOCS_REQUIRED" }),
+  "UNDER PROCESS": mapping({ caseStatus: "UNDER_PROCESS" }),
+  "PASSPORT RECEIVED": mapping({ caseStatus: "PASSPORT_RECEIVED" }),
   "APPOINMENT SCHEDULED": mapping({ caseStatus: "APPOINTMENT_SET" }),
   "APPOINTMENT SCHEDULED": mapping({ caseStatus: "APPOINTMENT_SET" }),
   SUBMITTED: mapping({ caseStatus: "SUBMITTED", custody: "AT_EMBASSY" }),
@@ -74,7 +77,7 @@ const MAPPING_BY_STATUS: Record<string, StatusMapping> = {
   "DOCUMENTS ATTESTATION": mapping({ caseTypeHint: "ATTESTATION" }),
   "TICKET BOOKED": mapping({ lineItemHint: "TICKET_BOOKING" }),
   "REC: BIO LETTER": mapping({
-    caseStatus: "IN_PROGRESS",
+    caseStatus: "DOCS_UNDER_REVIEW",
     note: "Biometrics letter received",
   }),
 };

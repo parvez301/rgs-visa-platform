@@ -1,9 +1,15 @@
 export const CASE_STATUSES = [
   "NEW",
-  "IN_PROGRESS",
+  "DOCS_UNDER_REVIEW",
+  "ADDITIONAL_DOCS_REQUIRED",
+  "READY_FOR_SUBMISSION",
   "APPOINTMENT_SET",
   "SUBMITTED",
+  "UNDER_PROCESS",
+  "PASSPORT_RECEIVED",
   "DECIDED",
+  "VISA_GRANTED",
+  "VISA_REFUSED",
   "CLOSED",
   "NOT_SUBMITTED",
   "WITHDRAWN",
@@ -14,9 +20,16 @@ export type CaseStatus = (typeof CASE_STATUSES)[number];
 /** Statuses a case can still move out of. */
 export const LIVE_CASE_STATUSES: readonly CaseStatus[] = [
   "NEW",
-  "IN_PROGRESS",
+  "DOCS_UNDER_REVIEW",
+  "ADDITIONAL_DOCS_REQUIRED",
+  "READY_FOR_SUBMISSION",
   "APPOINTMENT_SET",
   "SUBMITTED",
+  "UNDER_PROCESS",
+  "PASSPORT_RECEIVED",
+  "DECIDED",
+  "VISA_GRANTED",
+  "VISA_REFUSED",
 ];
 
 /** Statuses that end a case. Nothing transitions out of these. */

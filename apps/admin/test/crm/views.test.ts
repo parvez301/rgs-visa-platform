@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { crm } from "@rgs/shared";
 import type { LedgerView } from "../../src/crm/ledger/views";
 import { builtInLedgerViews, deleteView, loadViews, saveView } from "../../src/crm/ledger/views";
 
@@ -36,9 +37,7 @@ describe("builtInLedgerViews", () => {
   it("sorts 'Live work' by receivedDate desc and scopes it to LIVE_CASE_STATUSES", () => {
     const [liveWork] = builtInLedgerViews();
     expect(liveWork!.sort).toEqual({ column: "receivedDate", direction: "desc" });
-    expect(liveWork!.filters.statuses.sort()).toEqual(
-      ["NEW", "IN_PROGRESS", "APPOINTMENT_SET", "SUBMITTED"].sort(),
-    );
+    expect(liveWork!.filters.statuses.sort()).toEqual([...crm.LIVE_CASE_STATUSES].sort());
   });
 
   it("'Collect today' and 'Appointments today' use the today sentinel on live statuses", () => {
@@ -46,26 +45,24 @@ describe("builtInLedgerViews", () => {
     const appointmentsToday = builtInLedgerViews().find((view) => view.name === "Appointments today");
     expect(collectToday?.filters.expectedCollectionDateOn).toBe("__TODAY__");
     expect(appointmentsToday?.filters.appointmentDateOn).toBe("__TODAY__");
-    expect(collectToday?.filters.statuses.sort()).toEqual(
-      ["NEW", "IN_PROGRESS", "APPOINTMENT_SET", "SUBMITTED"].sort(),
-    );
+    expect(collectToday?.filters.statuses.sort()).toEqual([...crm.LIVE_CASE_STATUSES].sort());
   });
 
   it("'Awaiting payment' covers all statuses and filters to BILL_SENT/PART_PAID", () => {
     const awaitingPayment = builtInLedgerViews().find((view) => view.name === "Awaiting payment");
-    expect(awaitingPayment?.filters.statuses).toHaveLength(9);
+    expect(awaitingPayment?.filters.statuses).toHaveLength(crm.CASE_STATUSES.length);
     expect(awaitingPayment?.filters.billingStatuses?.sort()).toEqual(["BILL_SENT", "PART_PAID"].sort());
   });
 
   it("'Unbilled' covers all statuses and filters to UNBILLED only", () => {
     const unbilled = builtInLedgerViews().find((view) => view.name === "Unbilled");
-    expect(unbilled?.filters.statuses).toHaveLength(9);
+    expect(unbilled?.filters.statuses).toHaveLength(crm.CASE_STATUSES.length);
     expect(unbilled?.filters.billingStatuses).toEqual(["UNBILLED"]);
   });
 
-  it("'Everything' covers all nine statuses", () => {
+  it("'Everything' covers every case status", () => {
     const everything = builtInLedgerViews().find((view) => view.name === "Everything");
-    expect(everything?.filters.statuses).toHaveLength(9);
+    expect(everything?.filters.statuses).toHaveLength(crm.CASE_STATUSES.length);
   });
 });
 

@@ -52,7 +52,7 @@ function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
     partnerId: "partner_1",
     destinationCountry: "AE",
     visaType: "TOURIST",
-    caseStatus: "IN_PROGRESS",
+    caseStatus: "DOCS_UNDER_REVIEW",
     billingStatus: "UNBILLED",
     receivedDate: "2026-03-01",
     submissionDate: "2026-03-05",

@@ -46,6 +46,11 @@ function renderDrawer(
       url: requestUrl,
       body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
     });
+    if (requestUrl.endsWith("/crm/destination-countries")) {
+      return jsonResponse(200, {
+        countries: [{ countryCode: "AE", countryName: "United Arab Emirates" }],
+      });
+    }
     if (requestUrl.endsWith("/config/countries")) {
       return jsonResponse(200, {
         countryProducts: [{ countryCode: "AE", countryName: "United Arab Emirates" }],

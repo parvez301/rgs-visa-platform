@@ -26,14 +26,14 @@ describe("crm events", () => {
     context.advanceClock(60_000);
     await recordCrmEvent(context, "rgs", "case_1", "CASE_STATUS_CHANGED", "ops@rgs.test", {
       fromStatus: "NEW",
-      toStatus: "IN_PROGRESS",
+      toStatus: "DOCS_UNDER_REVIEW",
     });
 
     const events = await listCaseEvents(context, "rgs", "case_1");
     expect(events).toHaveLength(2);
     expect(events[0]!.eventType).toBe("CASE_CREATED");
     expect(events[1]!.eventType).toBe("CASE_STATUS_CHANGED");
-    expect(events[1]!.meta["toStatus"]).toBe("IN_PROGRESS");
+    expect(events[1]!.meta["toStatus"]).toBe("DOCS_UNDER_REVIEW");
   });
 
   it("keeps one case's events out of another's", async () => {

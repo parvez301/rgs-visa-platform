@@ -239,13 +239,13 @@ describe("crmClient write methods", () => {
 
     await crmClient.resolveReviewItem("token-1", "rev_1", {
       reviewStatus: "APPLIED",
-      resolvedValue: "IN_PROGRESS",
+      resolvedValue: "DOCS_UNDER_REVIEW",
     });
 
     expect(recorded[0]).toMatchObject({
       url: expect.stringContaining("/api/v1/admin/crm/review/rev_1/resolve"),
       method: "PUT",
-      body: { reviewStatus: "APPLIED", resolvedValue: "IN_PROGRESS" },
+      body: { reviewStatus: "APPLIED", resolvedValue: "DOCS_UNDER_REVIEW" },
     });
   });
 
@@ -382,5 +382,23 @@ describe("crmClient.updatePartnerContact", () => {
     await crmClient.updatePartnerContact("token", "prt_1", { contactEmail: null });
 
     expect(recorded[0]!.body).toEqual({ contactEmail: null });
+  });
+});
+
+describe("status email templates", () => {
+  it("lists, saves and resets through the status-email-templates routes", async () => {
+    const recorded = stubFetch([{ templates: [] }, { caseStatus: "NEW" }, { caseStatus: "NEW" }]);
+
+    await crmClient.listStatusEmailTemplates("token-1");
+    await crmClient.putStatusEmailTemplate("token-1", "NEW", { subject: "S", body: "B", enabled: true });
+    await crmClient.resetStatusEmailTemplate("token-1", "NEW");
+
+    expect(recorded.map((request) => [request.method, new URL(request.url, "http://x").pathname])).toEqual([
+      ["GET", "/api/v1/admin/crm/status-email-templates"],
+      ["PUT", "/api/v1/admin/crm/status-email-templates/NEW"],
+      ["POST", "/api/v1/admin/crm/status-email-templates/NEW/reset"],
+    ]);
+    expect(recorded[1]!.body).toEqual({ subject: "S", body: "B", enabled: true });
+    expect(recorded.every((request) => request.authorization === "Bearer token-1")).toBe(true);
   });
 });

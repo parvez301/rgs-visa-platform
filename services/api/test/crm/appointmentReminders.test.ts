@@ -50,6 +50,9 @@ describe("runAppointmentReminders", () => {
       ACTOR,
     );
 
+    // Creating the case already mailed the partner (Application Received); this test counts reminders only.
+    context.email.sentEmails.length = 0;
+
     const firstRun = await runAppointmentReminders(context, TENANT_ID, "2026-09-22");
     expect(firstRun).toMatchObject({ scanned: 1, reminded: 1, skipped: 0 });
     expect(context.email.sentEmails).toHaveLength(1);

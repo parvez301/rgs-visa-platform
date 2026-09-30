@@ -351,15 +351,15 @@ describe("LedgerPage — the status/partner filter exclusion", () => {
     renderLedgerPage();
 
     await user.click(screen.getByRole("button", { name: /Status ·/ }));
-    // Live work is the default open view, so New starts pressed.
-    expect(screen.getByRole("button", { name: "New" })).toHaveAttribute("aria-pressed", "true");
+    // Live work is the default open view, so Application Received starts pressed.
+    expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "true");
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Partner" }), "partner_1");
     // Selecting a partner must clear the status filter -- the server only
     // ever honors one of the two (LedgerAppliedQuery is a union), so a
     // status chip left highlighted here would be lying about what is
     // actually being filtered.
-    expect(screen.getByRole("button", { name: "New" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "false");
     expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], "partner_1");
 
     // Not stuck: choosing "All partners" clears the partner filter and
@@ -368,8 +368,8 @@ describe("LedgerPage — the status/partner filter exclusion", () => {
     expect(screen.getByRole("combobox", { name: "Partner" })).toHaveValue("");
     expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], undefined);
 
-    await user.click(screen.getByRole("button", { name: "New" }));
-    expect(screen.getByRole("button", { name: "New" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Application Received" }));
+    expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "true");
     expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["NEW"], undefined);
   });
 
@@ -390,13 +390,13 @@ describe("LedgerPage — the status/partner filter exclusion", () => {
     // selected, so this click alone must both select the status and drop
     // the partner filter in the same step.
     await user.click(screen.getByRole("button", { name: /Status ·/ }));
-    await user.click(screen.getByRole("button", { name: "In progress" }));
+    await user.click(screen.getByRole("button", { name: "Documents Under Review" }));
     expect(screen.getByRole("combobox", { name: "Partner" })).toHaveValue("");
-    expect(screen.getByRole("button", { name: "In progress" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Documents Under Review" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["IN_PROGRESS"], undefined);
+    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["DOCS_UNDER_REVIEW"], undefined);
   });
 });
 

@@ -1,418 +1,463 @@
-import { describe, expect, it } from "vitest";
-import { buildTestContext } from "../helpers";
-import { changeCaseStatus, createCase, updateCaseDetails } from "../../src/domain/crm/cases";
+import { describe, expect, it, vi } from "vitest";
+import { buildTestContext, type TestContext } from "../helpers";
+import { changeCaseStatus, createCase, getCase, updateCaseDetails } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
-import { META_SORT_KEY, travellerPartitionKey } from "../../src/domain/crm/keys";
+import { META_SORT_KEY, statusEmailTemplatePartitionKey, travellerPartitionKey } from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
-import { buildStatusEmailBody, buildStatusEmailSubject } from "../../src/domain/crm/statusNotify";
+import { upsertStatusEmailTemplate } from "../../src/domain/crm/statusEmailTemplates";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 
 const TENANT_ID = "rgs";
 const ACTOR = "ops@rgs.test";
 
-describe("status-change email", () => {
-  it("emails the partner when a case status moves and they have a contact email", async () => {
-    const context = buildTestContext();
-    const partner = await createPartner(
-      context,
-      TENANT_ID,
-      { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" },
-      ACTOR,
-    );
-    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
-    const created = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "RGS-MAIL-1",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "AE",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
-      },
-      ACTOR,
-    );
+interface SeedCaseOptions {
+  caseRef: string;
+  partnerContactEmail?: string;
+  clientEmail?: string;
+  destinationCountry?: string;
+  groupName?: string;
+  applicantNames?: string[];
+  refNos?: string[];
+}
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+/** One partner, its travellers, and a case -- the create mail fires inside. */
+async function seedCase(context: TestContext, options: SeedCaseOptions) {
+  const partner = await createPartner(
+    context,
+    TENANT_ID,
+    {
+      canonicalName: `Partner for ${options.caseRef}`,
+      ...(options.partnerContactEmail !== undefined ? { contactEmail: options.partnerContactEmail } : {}),
+    },
+    ACTOR,
+  );
+  const applicantNames = options.applicantNames ?? ["Asha Rao"];
+  const travellerIds: string[] = [];
+  for (const fullName of applicantNames) {
+    travellerIds.push((await upsertTraveller(context, TENANT_ID, { fullName })).travellerId);
+  }
+  return createCase(
+    context,
+    TENANT_ID,
+    {
+      caseRef: options.caseRef,
+      caseType: "VISA",
+      partnerId: partner.partnerId,
+      destinationCountry: options.destinationCountry ?? "AE",
+      visaType: "TOURIST",
+      receivedDate: "2026-09-16",
+      ...(options.clientEmail !== undefined ? { clientEmail: options.clientEmail } : {}),
+      ...(options.groupName !== undefined ? { groupName: options.groupName } : {}),
+      applicants: travellerIds.map((travellerId, index) => ({
+        applicantRef: `A${index + 1}`,
+        travellerId,
+        ...(options.refNos?.[index] !== undefined ? { refNo: options.refNos[index] } : {}),
+      })),
+    },
+    ACTOR,
+  );
+}
+
+describe("status-change email", () => {
+  it("emails the partner with the new status's template when a case status moves", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, { caseRef: "RGS-MAIL-1", partnerContactEmail: "desk@skyline.test" });
+    context.email.sentEmails.length = 0;
+
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
     expect(context.email.sentEmails).toHaveLength(1);
     expect(context.email.sentEmails[0]).toMatchObject({
       toAddress: "desk@skyline.test",
       subject: expect.stringContaining("RGS-MAIL-1"),
     });
-    expect(context.email.sentEmails[0]!.bodyText).toContain("In progress");
-    expect(context.email.sentEmails[0]!.bodyText).toContain("New");
+    const bodyText = context.email.sentEmails[0]!.bodyText;
+    expect(bodyText).toContain("under document review");
+    expect(bodyText).toContain("Dear Asha Rao,");
+    expect(bodyText).toContain("Application ID: RGS-MAIL-1");
+    expect(bodyText).not.toContain("{{");
+    expect(bodyText).not.toContain("is now");
 
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
-    expect(events.some((event) => event.eventType === "PARTNER_NOTIFIED")).toBe(true);
+    // The clock is frozen, so create and change events tie on time: pick by meta, not by position.
+    const changeNotification = events.find(
+      (event) => event.eventType === "PARTNER_NOTIFIED" && event.meta["toStatus"] === "DOCS_UNDER_REVIEW",
+    );
+    expect(changeNotification?.meta).toEqual({
+      channel: "email",
+      toAddress: "desk@skyline.test",
+      fromStatus: "NEW",
+      toStatus: "DOCS_UNDER_REVIEW",
+    });
   });
 
   it("skips email quietly when the partner has no contact email", async () => {
     const context = buildTestContext();
-    const partner = await createPartner(
-      context,
-      TENANT_ID,
-      { canonicalName: "No Email Travels" },
-      ACTOR,
-    );
-    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Ravi Singh" });
-    const created = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "RGS-MAIL-2",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "AE",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
-      },
-      ACTOR,
-    );
+    const created = await seedCase(context, { caseRef: "RGS-MAIL-2" });
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
     expect(context.email.sentEmails).toHaveLength(0);
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
     expect(events.some((event) => event.eventType === "PARTNER_NOTIFIED")).toBe(false);
   });
 
-  it("titles the email REF – STATUS – NAME – COUNTRY, the desk's own filing convention", async () => {
+  it("titles the email REF – STATUS – NAME – COUNTRY + visa type from the seeded subject", async () => {
     const context = buildTestContext();
-    const partner = await createPartner(
-      context,
-      TENANT_ID,
-      { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" },
-      ACTOR,
-    );
-    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
-    const created = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "RGS-MAIL-3",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "AE",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
-      },
-      ACTOR,
-    );
+    const created = await seedCase(context, { caseRef: "RGS-MAIL-3", partnerContactEmail: "desk@skyline.test" });
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
-    expect(context.email.sentEmails[0]!.subject).toBe("RGS-MAIL-3 – In progress – Asha Rao – United Arab Emirates");
+    expect(context.email.sentEmails.at(-1)!.subject).toBe(
+      "RGS-MAIL-3 – Documents Under Review – Asha Rao – United Arab Emirates Tourist",
+    );
   });
 
-  it("names the first applicant and counts the rest when a case carries several", async () => {
+  it("names the first applicant only in {{clientName}} when a case carries several and no group name", async () => {
     const context = buildTestContext();
-    const partner = await createPartner(
-      context,
-      TENANT_ID,
-      { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" },
-      ACTOR,
-    );
-    const firstTraveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
-    const secondTraveller = await upsertTraveller(context, TENANT_ID, { fullName: "Ravi Rao" });
-    const thirdTraveller = await upsertTraveller(context, TENANT_ID, { fullName: "Meera Rao" });
-    const created = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "RGS-MAIL-4",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "AE",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        applicants: [
-          { applicantRef: "A1", travellerId: firstTraveller.travellerId },
-          { applicantRef: "A2", travellerId: secondTraveller.travellerId },
-          { applicantRef: "A3", travellerId: thirdTraveller.travellerId },
-        ],
-      },
-      ACTOR,
-    );
+    const created = await seedCase(context, {
+      caseRef: "RGS-MAIL-4",
+      partnerContactEmail: "desk@skyline.test",
+      applicantNames: ["Asha Rao", "Ravi Rao", "Meera Rao"],
+    });
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
-    expect(context.email.sentEmails[0]!.subject).toBe("RGS-MAIL-4 – In progress – Asha Rao +2 – United Arab Emirates");
+    expect(context.email.sentEmails.at(-1)!.subject).toBe(
+      "RGS-MAIL-4 – Documents Under Review – Asha Rao – United Arab Emirates Tourist",
+    );
   });
 
   it("emails the client too when the case carries a clientEmail, and records CLIENT_NOTIFIED", async () => {
     const context = buildTestContext();
-    const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" }, ACTOR);
-    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
-    const created = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "RGS-MAIL-5",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "AE",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        clientEmail: "asha@example.com",
-        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
-      },
-      ACTOR,
-    );
+    const created = await seedCase(context, {
+      caseRef: "RGS-MAIL-5",
+      partnerContactEmail: "desk@skyline.test",
+      clientEmail: "asha@example.com",
+    });
+    context.email.sentEmails.length = 0;
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
-    expect(context.email.sentEmails.map((email) => email.toAddress)).toEqual(["desk@skyline.test", "asha@example.com"]);
+    expect(context.email.sentEmails.map((email) => email.toAddress)).toEqual([
+      "desk@skyline.test",
+      "asha@example.com",
+    ]);
     expect(context.email.sentEmails[0]!.subject).toBe(context.email.sentEmails[1]!.subject);
     expect(context.email.sentEmails[0]!.bodyText).toBe(context.email.sentEmails[1]!.bodyText);
 
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
-    const clientEvent = events.find((event) => event.eventType === "CLIENT_NOTIFIED");
-    expect(clientEvent?.meta).toEqual({ channel: "email", toAddress: "asha@example.com", fromStatus: "NEW", toStatus: "IN_PROGRESS" });
-    expect(events.some((event) => event.eventType === "PARTNER_NOTIFIED")).toBe(true);
+    const clientChangeEvent = events
+      .filter((event) => event.eventType === "CLIENT_NOTIFIED")
+      .find((event) => event.meta["reason"] === undefined);
+    expect(clientChangeEvent?.meta).toEqual({
+      channel: "email",
+      toAddress: "asha@example.com",
+      fromStatus: "NEW",
+      toStatus: "DOCS_UNDER_REVIEW",
+    });
   });
 
   it("emails only the client when the partner has no address, and only the partner when the case has none", async () => {
     const context = buildTestContext();
-    const partnerWithoutEmail = await createPartner(context, TENANT_ID, { canonicalName: "Quiet Travels" }, ACTOR);
-    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
-    const clientOnly = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "RGS-MAIL-6",
-        caseType: "VISA",
-        partnerId: partnerWithoutEmail.partnerId,
-        destinationCountry: "AE",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        clientEmail: "asha@example.com",
-        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
-      },
-      ACTOR,
-    );
-    await changeCaseStatus(context, TENANT_ID, clientOnly.caseId, "IN_PROGRESS", ACTOR);
+    const clientOnly = await seedCase(context, { caseRef: "RGS-MAIL-6", clientEmail: "asha@example.com" });
+    context.email.sentEmails.length = 0;
+    await changeCaseStatus(context, TENANT_ID, clientOnly.caseId, "DOCS_UNDER_REVIEW", ACTOR);
     expect(context.email.sentEmails.map((email) => email.toAddress)).toEqual(["asha@example.com"]);
     const clientOnlyEvents = await listCaseEvents(context, TENANT_ID, clientOnly.caseId);
     expect(clientOnlyEvents.some((event) => event.eventType === "PARTNER_NOTIFIED")).toBe(false);
     expect(clientOnlyEvents.some((event) => event.eventType === "CLIENT_NOTIFIED")).toBe(true);
 
-    const partnerWithEmail = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" }, ACTOR);
-    const partnerOnly = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "RGS-MAIL-7",
-        caseType: "VISA",
-        partnerId: partnerWithEmail.partnerId,
-        destinationCountry: "AE",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
-      },
-      ACTOR,
-    );
-    await changeCaseStatus(context, TENANT_ID, partnerOnly.caseId, "IN_PROGRESS", ACTOR);
-    expect(context.email.sentEmails.map((email) => email.toAddress)).toEqual(["asha@example.com", "desk@skyline.test"]);
+    const partnerOnly = await seedCase(context, { caseRef: "RGS-MAIL-7", partnerContactEmail: "desk@skyline.test" });
+    context.email.sentEmails.length = 0;
+    await changeCaseStatus(context, TENANT_ID, partnerOnly.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+    expect(context.email.sentEmails.map((email) => email.toAddress)).toEqual(["desk@skyline.test"]);
     const partnerOnlyEvents = await listCaseEvents(context, TENANT_ID, partnerOnly.caseId);
     expect(partnerOnlyEvents.some((event) => event.eventType === "CLIENT_NOTIFIED")).toBe(false);
   });
 
-  it("uses the group name as NAME in the subject when the case has one", async () => {
+  it("uses the group name as {{clientName}} in the subject and body when the case has one", async () => {
     const context = buildTestContext();
-    const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" }, ACTOR);
-    const rahul = await upsertTraveller(context, TENANT_ID, { fullName: "Rahul Sharma" });
-    const priya = await upsertTraveller(context, TENANT_ID, { fullName: "Priya Sharma" });
-    const created = await createCase(
+    const created = await seedCase(context, {
+      caseRef: "RGS-2026-0912",
+      partnerContactEmail: "desk@skyline.test",
+      destinationCountry: "FR",
+      groupName: "Sharma Family",
+      applicantNames: ["Rahul Sharma", "Priya Sharma"],
+      refNos: ["RGS-2026-0912", "RGS-2026-0913"],
+    });
+
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+
+    const email = context.email.sentEmails.at(-1)!;
+    expect(email.subject).toBe(
+      "RGS-2026-0912 – Documents Under Review – Sharma Family – France (Schengen) Tourist",
+    );
+    expect(email.bodyText).toContain("Dear Sharma Family,");
+  });
+
+  it("renders {{applicantsBlock}} as REF – name – outcome lines for a group", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, {
+      caseRef: "RGS-2026-0912",
+      partnerContactEmail: "desk@skyline.test",
+      destinationCountry: "FR",
+      groupName: "Sharma Family",
+      applicantNames: ["Rahul Sharma", "Priya Sharma"],
+      refNos: ["RGS-2026-0912", "RGS-2026-0913"],
+    });
+    await upsertStatusEmailTemplate(
       context,
       TENANT_ID,
-      {
-        caseRef: "RGS-2026-0912",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "FR",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        groupName: "Sharma Family",
-        applicants: [
-          { applicantRef: "A1", travellerId: rahul.travellerId, refNo: "RGS-2026-0912" },
-          { applicantRef: "A2", travellerId: priya.travellerId, refNo: "RGS-2026-0913" },
-        ],
-      },
+      "DOCS_UNDER_REVIEW",
+      { subject: "{{applicationId}}", body: "Hello {{clientName}}\n\n{{applicantsBlock}}", enabled: true },
       ACTOR,
     );
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
-    expect(context.email.sentEmails[0]!.subject).toBe("RGS-2026-0912 – In progress – Sharma Family – France (Schengen)");
-  });
-
-  it("lists every applicant with their REF NO, name and outcome, and the appointment date, for a group", async () => {
-    const context = buildTestContext();
-    const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" }, ACTOR);
-    const rahul = await upsertTraveller(context, TENANT_ID, { fullName: "Rahul Sharma" });
-    const priya = await upsertTraveller(context, TENANT_ID, { fullName: "Priya Sharma" });
-    const created = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "RGS-2026-0912",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "FR",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        groupName: "Sharma Family",
-        applicants: [
-          { applicantRef: "A1", travellerId: rahul.travellerId, refNo: "RGS-2026-0912" },
-          { applicantRef: "A2", travellerId: priya.travellerId, refNo: "RGS-2026-0913" },
-        ],
-      },
-      ACTOR,
-    );
-    await updateCaseDetails(context, TENANT_ID, created.caseId, { appointmentDate: "2026-10-03" }, ACTOR);
-
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "APPOINTMENT_SET", ACTOR);
-
-    const bodyText = context.email.sentEmails.at(-1)!.bodyText;
-    expect(bodyText).toContain("Applicants:");
-    expect(bodyText).toContain("  RGS-2026-0912 – Rahul Sharma – Pending");
-    expect(bodyText).toContain("  RGS-2026-0913 – Priya Sharma – Pending");
-    expect(bodyText).toContain("Appointment date: 03 Oct 2026");
-  });
-
-  it("keeps the single-applicant body free of an Applicants block or an appointment line", async () => {
-    const context = buildTestContext();
-    const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" }, ACTOR);
-    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
-    const created = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "31377",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "AE",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        applicants: [{ applicantRef: "1", travellerId: traveller.travellerId }],
-      },
-      ACTOR,
-    );
-
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
-
-    const bodyText = context.email.sentEmails[0]!.bodyText;
-    expect(bodyText).not.toContain("Applicants:");
-    expect(bodyText).not.toContain("Appointment date");
-    expect(bodyText).toContain("Case 31377 (destination United Arab Emirates) is now In progress (was New).");
-  });
-
-  it("writes Unnamed applicant for a traveller that cannot be read, without failing the send", async () => {
-    const context = buildTestContext();
-    const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" }, ACTOR);
-    const rahul = await upsertTraveller(context, TENANT_ID, { fullName: "Rahul Sharma" });
-    const ghost = await upsertTraveller(context, TENANT_ID, { fullName: "Ghost Sharma" });
-    const created = await createCase(
-      context,
-      TENANT_ID,
-      {
-        caseRef: "RGS-G-1",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "FR",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        groupName: "Sharma Family",
-        applicants: [
-          { applicantRef: "A1", travellerId: rahul.travellerId },
-          { applicantRef: "A2", travellerId: ghost.travellerId },
-        ],
-      },
-      ACTOR,
-    );
-    await context.table.delete(travellerPartitionKey(TENANT_ID, ghost.travellerId), META_SORT_KEY);
-
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
-
-    expect(context.email.sentEmails).toHaveLength(1);
-    expect(context.email.sentEmails[0]!.bodyText).toContain("  A2 – Unnamed applicant – Pending");
-  });
-
-  it("builds the body as plain text in the documented order", () => {
-    const bodyText = buildStatusEmailBody(
-      {
-        tenantId: "rgs",
-        caseId: "case_1",
-        caseRef: "RGS-2026-0912",
-        caseType: "VISA",
-        visaType: "TOURIST",
-        partnerId: "prt_1",
-        destinationCountry: "FR",
-        caseStatus: "APPOINTMENT_SET",
-        billingStatus: "UNBILLED",
-        receivedDate: "2026-09-16",
-        appointmentDate: "2026-10-03",
-        groupName: "Sharma Family",
-        lineItems: [],
-        totalInr: 0,
-        documentChecklist: [],
-        applicants: [
-          { applicantRef: "A1", travellerId: "trv_1", refNo: "RGS-2026-0912", custody: "NOT_HELD", outcome: "APPROVED" },
-          { applicantRef: "A2", travellerId: "trv_2", refNo: "RGS-2026-0913", custody: "NOT_HELD", outcome: "REJECTED" },
-        ],
-        watchdogOverrides: {},
-        mutedRules: [],
-        createdAt: "2026-09-16T00:00:00.000Z",
-        updatedAt: "2026-09-16T00:00:00.000Z",
-      },
-      "SUBMITTED",
-      "APPOINTMENT_SET",
-      { trv_1: { fullName: "Rahul Sharma" }, trv_2: { fullName: "Priya Sharma" } },
-    );
-
-    expect(bodyText).toBe(
+    expect(context.email.sentEmails.at(-1)!.bodyText).toBe(
       [
-        "Hello,",
+        "Hello Sharma Family",
         "",
-        "Case RGS-2026-0912 (destination France (Schengen)) is now Appointment set (was Submitted).",
-        "",
-        "Applicants:",
-        "  RGS-2026-0912 – Rahul Sharma – Approved",
-        "  RGS-2026-0913 – Priya Sharma – Rejected",
-        "",
-        "Appointment date: 03 Oct 2026",
-        "",
-        "— Rays Global Services",
+        "RGS-2026-0912 – Rahul Sharma – Pending",
+        "RGS-2026-0913 – Priya Sharma – Pending",
       ].join("\n"),
     );
   });
 
-  it("builds the same subject through the exported buildStatusEmailSubject wrapper, resolving travellers itself", async () => {
+  it("leaves the applicants lines out for a single-applicant case", async () => {
     const context = buildTestContext();
-    const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels", contactEmail: "desk@skyline.test" }, ACTOR);
-    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
-    const created = await createCase(
+    const created = await seedCase(context, { caseRef: "31377", partnerContactEmail: "desk@skyline.test" });
+    await upsertStatusEmailTemplate(
       context,
       TENANT_ID,
-      {
-        caseRef: "RGS-MAIL-8",
-        caseType: "VISA",
-        partnerId: partner.partnerId,
-        destinationCountry: "AE",
-        visaType: "TOURIST",
-        receivedDate: "2026-09-16",
-        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
-      },
+      "DOCS_UNDER_REVIEW",
+      { subject: "s", body: "Hello\n\n{{applicantsBlock}}\n\nBye", enabled: true },
       ACTOR,
     );
 
-    const subject = await buildStatusEmailSubject(context, TENANT_ID, created, "IN_PROGRESS");
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
-    expect(subject).toBe("RGS-MAIL-8 – In progress – Asha Rao – United Arab Emirates");
+    expect(context.email.sentEmails.at(-1)!.bodyText).toBe("Hello\n\nBye");
+  });
+
+  it("fills the appointment date as DD MMM YYYY when set, without broken 'at' copy from the blank time and centre", async () => {
+    const context = buildTestContext();
+    const withDate = await seedCase(context, { caseRef: "RGS-APPT-A", partnerContactEmail: "desk@skyline.test" });
+    await updateCaseDetails(context, TENANT_ID, withDate.caseId, { appointmentDate: "2026-10-03" }, ACTOR);
+    await changeCaseStatus(context, TENANT_ID, withDate.caseId, "APPOINTMENT_SET", ACTOR);
+
+    const bodyWithDate = context.email.sentEmails.at(-1)!.bodyText;
+    expect(bodyWithDate).toContain("Your visa appointment for United Arab Emirates Tourist has been confirmed.");
+    expect(bodyWithDate).toContain("Appointment date: 03 Oct 2026");
+    expect(bodyWithDate).not.toContain("Appointment time");
+    expect(bodyWithDate).not.toContain("Centre:");
+    expect(bodyWithDate).not.toMatch(/at\s+at/);
+    expect(bodyWithDate).not.toMatch(/\bat\s*\./);
+    expect(bodyWithDate).not.toContain("{{");
+  });
+
+  it("drops the whole appointment block when no date is set", async () => {
+    const context = buildTestContext();
+    const withoutDate = await seedCase(context, { caseRef: "RGS-APPT-B", partnerContactEmail: "desk@skyline.test" });
+    await changeCaseStatus(context, TENANT_ID, withoutDate.caseId, "APPOINTMENT_SET", ACTOR);
+
+    const bodyText = context.email.sentEmails.at(-1)!.bodyText;
+    expect(bodyText).toContain("has been confirmed.");
+    expect(bodyText).not.toContain("Appointment date");
+    expect(bodyText).not.toMatch(/at\s+at/);
+    expect(bodyText).not.toMatch(/\bat\s*\./);
+    expect(bodyText).not.toMatch(/\n\n\n/);
+    expect(bodyText).not.toContain("{{");
+  });
+
+  it("writes Unnamed applicant for a traveller that cannot be read, without failing the send", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, {
+      caseRef: "RGS-G-1",
+      partnerContactEmail: "desk@skyline.test",
+      destinationCountry: "FR",
+      groupName: "Sharma Family",
+      applicantNames: ["Rahul Sharma", "Ghost Sharma"],
+    });
+    const ghostTravellerId = created.applicants[1]!.travellerId;
+    await context.table.delete(travellerPartitionKey(TENANT_ID, ghostTravellerId), META_SORT_KEY);
+    await upsertStatusEmailTemplate(
+      context,
+      TENANT_ID,
+      "DOCS_UNDER_REVIEW",
+      { subject: "s", body: "{{applicantsBlock}}", enabled: true },
+      ACTOR,
+    );
+    context.email.sentEmails.length = 0;
+
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+
+    expect(context.email.sentEmails).toHaveLength(1);
+    expect(context.email.sentEmails[0]!.bodyText).toContain("A2 – Unnamed applicant – Pending");
+  });
+
+  it("sends nothing when the status's template is disabled, but the status still changes", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, {
+      caseRef: "RGS-OFF-1",
+      partnerContactEmail: "desk@skyline.test",
+      clientEmail: "asha@example.com",
+    });
+    await upsertStatusEmailTemplate(
+      context,
+      TENANT_ID,
+      "DOCS_UNDER_REVIEW",
+      { subject: "s", body: "b", enabled: false },
+      ACTOR,
+    );
+    context.email.sentEmails.length = 0;
+
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+
+    expect(context.email.sentEmails).toHaveLength(0);
+    expect((await getCase(context, TENANT_ID, created.caseId)).caseStatus).toBe("DOCS_UNDER_REVIEW");
+    const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+    const changeNotifications = events.filter(
+      (event) =>
+        (event.eventType === "PARTNER_NOTIFIED" || event.eventType === "CLIENT_NOTIFIED") &&
+        event.meta["toStatus"] === "DOCS_UNDER_REVIEW",
+    );
+    expect(changeNotifications).toHaveLength(0);
+  });
+
+  it("sends nothing when no template row exists, and never falls back to a generic body", async () => {
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
+    const created = await seedCase(context, { caseRef: "RGS-NOROW-1", partnerContactEmail: "desk@skyline.test" });
+
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+
+    expect(context.email.sentEmails).toHaveLength(0);
+    expect((await getCase(context, TENANT_ID, created.caseId)).caseStatus).toBe("DOCS_UNDER_REVIEW");
+  });
+
+  it("skips the send when the status's template row is corrupt, and the status change and create still succeed", async () => {
+    const context = buildTestContext();
+    for (const corruptStatus of ["NEW", "DOCS_UNDER_REVIEW"] as const) {
+      await context.table.put({
+        PK: statusEmailTemplatePartitionKey(TENANT_ID, corruptStatus),
+        SK: META_SORT_KEY,
+        tenantId: TENANT_ID,
+        caseStatus: corruptStatus,
+        subject: 42,
+      });
+    }
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const created = await seedCase(context, {
+        caseRef: "RGS-CORRUPT-1",
+        partnerContactEmail: "desk@skyline.test",
+        clientEmail: "asha@example.com",
+      });
+      expect(created.caseRef).toBe("RGS-CORRUPT-1");
+
+      const changed = await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+
+      expect(changed.caseStatus).toBe("DOCS_UNDER_REVIEW");
+      expect((await getCase(context, TENANT_ID, created.caseId)).caseStatus).toBe("DOCS_UNDER_REVIEW");
+      expect(context.email.sentEmails).toHaveLength(0);
+      const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+      expect(
+        events.some((event) => event.eventType === "PARTNER_NOTIFIED" || event.eventType === "CLIENT_NOTIFIED"),
+      ).toBe(false);
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("uses an edited template verbatim, subject included", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, { caseRef: "RGS-EDIT-1", partnerContactEmail: "desk@skyline.test" });
+    await upsertStatusEmailTemplate(
+      context,
+      TENANT_ID,
+      "DOCS_UNDER_REVIEW",
+      { subject: "Custom {{applicationId}}", body: "Custom body for {{clientName}}", enabled: true },
+      ACTOR,
+    );
+
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+
+    expect(context.email.sentEmails.at(-1)).toMatchObject({
+      subject: "Custom RGS-EDIT-1",
+      bodyText: "Custom body for Asha Rao",
+    });
+  });
+});
+
+describe("status email on create", () => {
+  it("sends the Application Received (NEW) template once when a case is created", async () => {
+    const context = buildTestContext();
+
+    const created = await seedCase(context, { caseRef: "RGS-NEW-1", partnerContactEmail: "desk@skyline.test" });
+
+    expect(context.email.sentEmails).toHaveLength(1);
+    expect(context.email.sentEmails[0]).toMatchObject({
+      toAddress: "desk@skyline.test",
+      subject: "RGS-NEW-1 – Application Received – Asha Rao – United Arab Emirates Tourist",
+    });
+    expect(context.email.sentEmails[0]!.bodyText).toContain("successfully registered in our system");
+    expect(context.email.sentEmails[0]!.bodyText).toContain("Application ID: RGS-NEW-1");
+
+    const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+    const partnerEvent = events.find((event) => event.eventType === "PARTNER_NOTIFIED");
+    expect(partnerEvent?.meta).toEqual({
+      channel: "email",
+      toAddress: "desk@skyline.test",
+      toStatus: "NEW",
+      reason: "CREATE",
+    });
+  });
+
+  it("emails the client on create too, and the later status change sends that status's template, not NEW again", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, {
+      caseRef: "RGS-NEW-2",
+      partnerContactEmail: "desk@skyline.test",
+      clientEmail: "asha@example.com",
+    });
+    expect(context.email.sentEmails.map((email) => email.toAddress)).toEqual([
+      "desk@skyline.test",
+      "asha@example.com",
+    ]);
+
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+
+    expect(context.email.sentEmails).toHaveLength(4);
+    const changeEmails = context.email.sentEmails.slice(2);
+    expect(changeEmails.map((email) => email.toAddress)).toEqual(["desk@skyline.test", "asha@example.com"]);
+    for (const email of changeEmails) {
+      expect(email.subject).toContain("Documents Under Review");
+      expect(email.bodyText).not.toContain("successfully registered");
+    }
+  });
+
+  it("sends nothing on create when the partner and client have no address", async () => {
+    const context = buildTestContext();
+
+    const created = await seedCase(context, { caseRef: "RGS-NEW-3" });
+
+    expect(context.email.sentEmails).toHaveLength(0);
+    const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+    expect(events.some((event) => event.eventType === "PARTNER_NOTIFIED")).toBe(false);
+    expect(events.some((event) => event.eventType === "CLIENT_NOTIFIED")).toBe(false);
+  });
+
+  it("sends nothing on create when the NEW template is disabled, and still creates the case", async () => {
+    const context = buildTestContext();
+    await upsertStatusEmailTemplate(context, TENANT_ID, "NEW", { subject: "s", body: "b", enabled: false }, ACTOR);
+
+    const created = await seedCase(context, { caseRef: "RGS-NEW-4", partnerContactEmail: "desk@skyline.test" });
+
+    expect(context.email.sentEmails).toHaveLength(0);
+    expect((await getCase(context, TENANT_ID, created.caseId)).caseRef).toBe("RGS-NEW-4");
   });
 });

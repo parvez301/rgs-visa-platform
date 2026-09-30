@@ -9,7 +9,7 @@ function buildRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
     partnerId: "partner_1",
     destinationCountry: "AE",
     caseType: "VISA",
-    caseStatus: "IN_PROGRESS",
+    caseStatus: "DOCS_UNDER_REVIEW",
     billingStatus: "UNBILLED",
     receivedDate: "2026-03-04",
     totalInr: 12_000,
@@ -24,7 +24,7 @@ describe("countOpsDashboard", () => {
       [
         buildRow({
           caseId: "collect",
-          caseStatus: "IN_PROGRESS",
+          caseStatus: "DOCS_UNDER_REVIEW",
           expectedCollectionDate: "2026-09-22",
         }),
         buildRow({

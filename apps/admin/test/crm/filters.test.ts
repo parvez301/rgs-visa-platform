@@ -10,7 +10,7 @@ function buildRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
     destinationCountry: "AE",
     caseType: "VISA",
     visaType: "TOURIST",
-    caseStatus: "IN_PROGRESS",
+    caseStatus: "DOCS_UNDER_REVIEW",
     billingStatus: "UNBILLED",
     receivedDate: "2026-03-04",
     totalInr: 12_000,

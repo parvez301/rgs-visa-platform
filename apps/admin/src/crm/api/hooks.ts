@@ -24,6 +24,7 @@ export const crmQueryKeys = {
   reviewGroups: () => ["crm", "review", "groups"] as const,
   reviewItem: (reviewItemId: string) => ["crm", "review", reviewItemId] as const,
   proposals: () => ["crm", "proposals"] as const,
+  statusEmailTemplates: () => ["crm", "status-email-templates"] as const,
   memories: (scope: string, partnerId: string | undefined) =>
     ["crm", "memories", scope, partnerId ?? ""] as const,
 };

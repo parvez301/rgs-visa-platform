@@ -239,10 +239,10 @@ describe("crm admin routes", () => {
       router,
       "PUT",
       `/api/v1/admin/crm/cases/${created.payload.caseId}/status`,
-      { toStatus: "IN_PROGRESS" },
+      { toStatus: "DOCS_UNDER_REVIEW" },
     );
     expect(moved.statusCode).toBe(200);
-    expect(moved.payload.caseStatus).toBe("IN_PROGRESS");
+    expect(moved.payload.caseStatus).toBe("DOCS_UNDER_REVIEW");
   });
 
   it("returns 409 for an illegal transition", async () => {
@@ -266,7 +266,7 @@ describe("crm admin routes", () => {
       toStatus: "WITHDRAWN",
     });
     const illegal = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
-      toStatus: "IN_PROGRESS",
+      toStatus: "DOCS_UNDER_REVIEW",
     });
     expect(illegal.statusCode).toBe(409);
   });
@@ -333,7 +333,7 @@ describe("crm admin routes", () => {
     const approved = await call(router, "PUT", `${applicantPath}/outcome`, {
       toOutcome: "APPROVED",
     });
-    expect(approved.payload.caseStatus).toBe("DECIDED");
+    expect(approved.payload.caseStatus).toBe("VISA_GRANTED");
 
     // Passport back with its owner and the bill settled: the case closes itself.
     await call(router, "PUT", `${applicantPath}/custody`, { toCustody: "WITH_RGS" });
@@ -543,9 +543,10 @@ describe("crm admin routes", () => {
     );
     expect(moved.statusCode).toBe(200);
     expect(moved.payload.applicants[0].outcome).toBe("APPROVED");
-    // Single applicant, now decided — the derived-status rule (spec §5) fires
-    // automatically, same as custody/billing driving CLOSED.
-    expect(moved.payload.caseStatus).toBe("DECIDED");
+    // Single applicant, now approved — the derived-status rule (spec §5) fires
+    // automatically (an individual reads as VISA_GRANTED, a group as DECIDED),
+    // same as custody/billing driving CLOSED.
+    expect(moved.payload.caseStatus).toBe("VISA_GRANTED");
   });
 
   it("returns 404 changing the outcome of an applicant that does not exist", async () => {
@@ -846,13 +847,13 @@ describe("crm admin routes", () => {
       router,
       "PUT",
       `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`,
-      { reviewStatus: "APPLIED", resolvedValue: "IN_PROGRESS" },
+      { reviewStatus: "APPLIED", resolvedValue: "DOCS_UNDER_REVIEW" },
     );
     expect(resolved.statusCode).toBe(200);
     expect(resolved.payload.reviewStatus).toBe("APPLIED");
     // The chosen value and the reviewer who chose it both have to survive the
     // round trip — this is the audit record of a human decision.
-    expect(resolved.payload.resolvedValue).toBe("IN_PROGRESS");
+    expect(resolved.payload.resolvedValue).toBe("DOCS_UNDER_REVIEW");
     expect(resolved.payload.resolvedBy).toBe("ops@rgs.test");
 
     const afterResolve = await call(router, "GET", "/api/v1/admin/crm/review");
@@ -1634,5 +1635,160 @@ describe("applicant routes", () => {
     const okResponse = await call(router, "POST", "/api/v1/admin/crm/cases/export-rows", { caseIds: ["case_nope"] });
     expect(okResponse.statusCode).toBe(200);
     expect(okResponse.payload).toEqual({ rows: [], missingCaseIds: ["case_nope"] });
+  });
+});
+
+function buildEventWithRole(
+  role: string,
+  method: string,
+  path: string,
+  body?: unknown,
+): APIGatewayProxyEventV2 {
+  return {
+    rawPath: path,
+    requestContext: {
+      http: { method },
+      authorizer: {
+        jwt: {
+          claims: {
+            sub: "admin_1",
+            email: "viewer@rgs.test",
+            "cognito:groups": JSON.stringify([role]),
+          },
+        },
+      },
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  } as unknown as APIGatewayProxyEventV2;
+}
+
+async function callWithRole(
+  router: Router,
+  role: string,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ statusCode: number; payload: any }> {
+  const response = (await router.dispatch(buildEventWithRole(role, method, path, body))) as {
+    statusCode: number;
+    body: string;
+  };
+  return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
+}
+
+describe("status email template routes", () => {
+  const templatesBase = "/api/v1/admin/crm/status-email-templates";
+
+  it("lists every status with stored-or-default rows", async () => {
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
+    const router = buildRouter(context);
+    const { statusCode, payload } = await call(router, "GET", templatesBase);
+    expect(statusCode).toBe(200);
+    expect(payload.templates).toHaveLength(crm.CASE_STATUSES.length);
+    const newTemplate = payload.templates.find((row: { caseStatus: string }) => row.caseStatus === "NEW");
+    expect(newTemplate).toMatchObject(crm.defaultStatusEmailTemplate("NEW"));
+    expect(newTemplate.updatedBy).toBe("");
+  });
+
+  it("GET by status returns default without a stored row", async () => {
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
+    const router = buildRouter(context);
+    const { statusCode, payload } = await call(router, "GET", `${templatesBase}/NEW`);
+    expect(statusCode).toBe(200);
+    expect(payload).toMatchObject({
+      caseStatus: "NEW",
+      ...crm.defaultStatusEmailTemplate("NEW"),
+      updatedBy: "",
+    });
+  });
+
+  it("PUT upserts then reset restores the seeded default", async () => {
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
+    const router = buildRouter(context);
+    const putResponse = await call(router, "PUT", `${templatesBase}/NEW`, {
+      subject: "Custom subject",
+      body: "Custom body",
+      enabled: false,
+    });
+    expect(putResponse.statusCode).toBe(200);
+    expect(putResponse.payload.subject).toBe("Custom subject");
+    expect(putResponse.payload.updatedBy).toBe("ops@rgs.test");
+
+    const resetResponse = await call(router, "POST", `${templatesBase}/NEW/reset`);
+    expect(resetResponse.statusCode).toBe(200);
+    expect(resetResponse.payload).toMatchObject(crm.defaultStatusEmailTemplate("NEW"));
+    expect(resetResponse.payload.enabled).toBe(true);
+  });
+
+  it("rejects an unknown case status in the path", async () => {
+    const router = buildRouter(buildTestContext());
+    const { statusCode, payload } = await call(router, "GET", `${templatesBase}/NOT_A_STATUS`);
+    expect(statusCode).toBe(400);
+    expect(payload.message).toMatch(/case status/i);
+  });
+
+  it("rejects an invalid upsert body with 400, not 500", async () => {
+    const router = buildRouter(buildTestContext({ seedStatusEmailTemplates: false }));
+    const { statusCode } = await call(router, "PUT", `${templatesBase}/NEW`, {
+      subject: "s",
+      body: "   ",
+      enabled: true,
+    });
+    expect(statusCode).toBe(400);
+  });
+
+  it("403s Viewer on PUT", async () => {
+    const router = buildRouter(buildTestContext({ seedStatusEmailTemplates: false }));
+    const { statusCode } = await callWithRole(router, "Viewer", "PUT", `${templatesBase}/NEW`, {
+      subject: "s",
+      body: "b",
+      enabled: true,
+    });
+    expect(statusCode).toBe(403);
+  });
+});
+
+describe("CRM destination countries and country checklists", () => {
+  it("lists destinations with full country names for CRM readers", async () => {
+    const router = buildRouter(buildTestContext());
+    const response = await call(router, "GET", "/api/v1/admin/crm/destination-countries");
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.countries.length).toBeGreaterThan(0);
+    const firstCountry = response.payload.countries[0];
+    expect(firstCountry.countryCode).toMatch(/^[A-Z]{2}$/);
+    expect(firstCountry.countryName.length).toBeGreaterThan(2);
+    expect(firstCountry.countryName).not.toBe(firstCountry.countryCode);
+  });
+
+  it("puts and gets a country checklist, and lists it", async () => {
+    const router = buildRouter(buildTestContext());
+    const putResponse = await call(router, "PUT", "/api/v1/admin/crm/country-checklists/AE", {
+      requiredDocuments: ["Passport bio page", "Passport-size photo"],
+      notes: "Tourist default",
+    });
+    expect(putResponse.statusCode).toBe(200);
+    expect(putResponse.payload.countryCode).toBe("AE");
+    expect(putResponse.payload.requiredDocuments).toEqual([
+      "Passport bio page",
+      "Passport-size photo",
+    ]);
+
+    const getResponse = await call(router, "GET", "/api/v1/admin/crm/country-checklists/AE");
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.payload.requiredDocuments).toHaveLength(2);
+
+    const listResponse = await call(router, "GET", "/api/v1/admin/crm/country-checklists");
+    expect(listResponse.statusCode).toBe(200);
+    expect(
+      listResponse.payload.checklists.some(
+        (checklist: { countryCode: string }) => checklist.countryCode === "AE",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a bad country code with 400", async () => {
+    const router = buildRouter(buildTestContext());
+    const response = await call(router, "GET", "/api/v1/admin/crm/country-checklists/UAE");
+    expect(response.statusCode).toBe(400);
   });
 });

@@ -18,7 +18,7 @@ import { assertApplicantRefNosDistinct, claimNewRefs, releaseRefKeys, staleRefKe
 import { getTravellerOrThrow } from "./travellers";
 import { findCountryChecklist } from "./countryChecklist";
 import { stampDocumentChecklistFromCountry } from "./caseDocumentChecklist";
-import { notifyOnCaseStatusChange } from "./statusNotify";
+import { notifyOnCaseCreated, notifyOnCaseStatusChange } from "./statusNotify";
 
 export interface CreateCaseApplicantInput {
   applicantRef: string;
@@ -144,6 +144,7 @@ export async function createCase(
     caseRef: crmCase.caseRef,
     caseType: crmCase.caseType,
   });
+  await notifyOnCaseCreated(context, tenantId, crmCase, actorEmail);
   return crmCase;
 }
 
@@ -418,6 +419,12 @@ export async function changeApplicantOutcome(
   const derivedCaseStatus = crm.deriveCaseStatusFromApplicants(
     updatedCase.caseStatus,
     updatedApplicants.map((applicant) => applicant.outcome),
+    {
+      isGroup: crm.isCaseGroup({
+        groupName: updatedCase.groupName,
+        applicantCount: updatedApplicants.length,
+      }),
+    },
   );
   return applyDerivedCaseStatusIfLegal(context, tenantId, updatedCase, derivedCaseStatus, actorEmail);
 }

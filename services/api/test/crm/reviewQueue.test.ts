@@ -90,16 +90,16 @@ describe("crm review queue", () => {
     const context = buildTestContext();
     const created = await recordReviewItem(context, "rgs", {
       ...baseInput,
-      proposedValue: "IN_PROGRESS",
+      proposedValue: "DOCS_UNDER_REVIEW",
       confidence: 0.82,
       detail: "Two statuses matched the cell equally well",
     });
-    expect(created.proposedValue).toBe("IN_PROGRESS");
+    expect(created.proposedValue).toBe("DOCS_UNDER_REVIEW");
     expect(created.confidence).toBe(0.82);
     expect(created.detail).toBe("Two statuses matched the cell equally well");
 
     const loaded = await getReviewItemOrThrow(context, "rgs", created.reviewItemId);
-    expect(loaded.proposedValue).toBe("IN_PROGRESS");
+    expect(loaded.proposedValue).toBe("DOCS_UNDER_REVIEW");
     expect(loaded.confidence).toBe(0.82);
     expect(loaded.detail).toBe("Two statuses matched the cell equally well");
   });
@@ -147,7 +147,7 @@ describe("crm review queue", () => {
       context,
       "rgs",
       created.reviewItemId,
-      { reviewStatus: "APPLIED", resolvedValue: "IN_PROGRESS" },
+      { reviewStatus: "APPLIED", resolvedValue: "DOCS_UNDER_REVIEW" },
       "ops@rgs.test",
     );
 
@@ -156,7 +156,7 @@ describe("crm review queue", () => {
     expect((await listReviewItems(context, "rgs", "APPLIED")).reviewItems).toHaveLength(1);
     const resolved = await getReviewItemOrThrow(context, "rgs", created.reviewItemId);
     expect(resolved.reviewStatus).toBe("APPLIED");
-    expect(resolved.resolvedValue).toBe("IN_PROGRESS");
+    expect(resolved.resolvedValue).toBe("DOCS_UNDER_REVIEW");
     expect(resolved.resolvedBy).toBe("ops@rgs.test");
     expect(resolved.resolvedAt).toBe("2026-07-23T10:00:00.000Z");
   });

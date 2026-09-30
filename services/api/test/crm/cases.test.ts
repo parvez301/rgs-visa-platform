@@ -7,6 +7,7 @@ import {
   caseStatusGsi1Pk,
   travellerPartitionKey,
 } from "../../src/domain/crm/keys";
+import { addApplicant } from "../../src/domain/crm/applicantEdits";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { readRefClaim } from "../../src/domain/crm/refClaims";
@@ -319,13 +320,13 @@ describe("crm cases", () => {
   it("moves the case status through a legal transition and logs it", async () => {
     const context = buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
-    const moved = await changeCaseStatus(context, "rgs", created.caseId, "IN_PROGRESS", "ops@rgs.test");
-    expect(moved.caseStatus).toBe("IN_PROGRESS");
+    const moved = await changeCaseStatus(context, "rgs", created.caseId, "DOCS_UNDER_REVIEW", "ops@rgs.test");
+    expect(moved.caseStatus).toBe("DOCS_UNDER_REVIEW");
 
     const events = await listCaseEvents(context, "rgs", created.caseId);
     const statusEvent = events.find((event) => event.eventType === "CASE_STATUS_CHANGED");
     expect(statusEvent!.meta["fromStatus"]).toBe("NEW");
-    expect(statusEvent!.meta["toStatus"]).toBe("IN_PROGRESS");
+    expect(statusEvent!.meta["toStatus"]).toBe("DOCS_UNDER_REVIEW");
   });
 
   it("refuses an illegal case-status transition with a 409", async () => {
@@ -334,7 +335,7 @@ describe("crm cases", () => {
     await changeCaseStatus(context, "rgs", created.caseId, "WITHDRAWN", "ops@rgs.test");
     // WITHDRAWN is terminal — nothing may leave it.
     await expect(
-      changeCaseStatus(context, "rgs", created.caseId, "IN_PROGRESS", "ops@rgs.test"),
+      changeCaseStatus(context, "rgs", created.caseId, "DOCS_UNDER_REVIEW", "ops@rgs.test"),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
@@ -395,10 +396,10 @@ describe("crm cases", () => {
     const created = await seedCase(context, partnerId);
     expect((await listCasesByStatus(context, "rgs", "NEW")).cases).toHaveLength(1);
 
-    await changeCaseStatus(context, "rgs", created.caseId, "IN_PROGRESS", "ops@rgs.test");
+    await changeCaseStatus(context, "rgs", created.caseId, "DOCS_UNDER_REVIEW", "ops@rgs.test");
     // The GSI1 entry must move with the status, or the queue shows stale rows.
     expect((await listCasesByStatus(context, "rgs", "NEW")).cases).toHaveLength(0);
-    expect((await listCasesByStatus(context, "rgs", "IN_PROGRESS")).cases).toHaveLength(1);
+    expect((await listCasesByStatus(context, "rgs", "DOCS_UNDER_REVIEW")).cases).toHaveLength(1);
   });
 
   it("lists cases by partner", async () => {
@@ -760,7 +761,7 @@ describe("crm cases", () => {
       "APPROVED",
       "ops@rgs.test",
     );
-    expect(decided.caseStatus).toBe("DECIDED");
+    expect(decided.caseStatus).toBe("VISA_GRANTED");
 
     await expect(
       changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "PENDING", "ops@rgs.test"),
@@ -770,7 +771,82 @@ describe("crm cases", () => {
     // short-circuits once DECIDED, so nothing else would put this right.
     const reloaded = await getCase(context, "rgs", created.caseId);
     expect(reloaded.applicants[0]!.outcome).toBe("APPROVED");
-    expect(reloaded.caseStatus).toBe("DECIDED");
+    expect(reloaded.caseStatus).toBe("VISA_GRANTED");
+  });
+
+  it("derives VISA_REFUSED for a single rejected applicant and logs the transition", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    const applicantRef = created.applicants[0]!.applicantRef;
+    const refused = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      applicantRef,
+      "REJECTED",
+      "ops@rgs.test",
+    );
+    expect(refused.caseStatus).toBe("VISA_REFUSED");
+    const events = await listCaseEvents(context, "rgs", created.caseId);
+    const statusEvent = events.find((event) => event.eventType === "CASE_STATUS_CHANGED");
+    expect(statusEvent!.meta["toStatus"]).toBe("VISA_REFUSED");
+  });
+
+  it("moves a desk-marked DECIDED individual case on to VISA_GRANTED when the applicant is approved", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    await changeCaseStatus(context, "rgs", created.caseId, "DECIDED", "ops@rgs.test");
+    const granted = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      created.applicants[0]!.applicantRef,
+      "APPROVED",
+      "ops@rgs.test",
+    );
+    expect(granted.caseStatus).toBe("VISA_GRANTED");
+  });
+
+  it("widens an individual VISA_GRANTED case to DECIDED once a second applicant is added and approved", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    const granted = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      created.applicants[0]!.applicantRef,
+      "APPROVED",
+      "ops@rgs.test",
+    );
+    expect(granted.caseStatus).toBe("VISA_GRANTED");
+
+    const secondTravellerId = await seedTraveller(context, "Second Traveller");
+    const grown = await addApplicant(
+      context,
+      "rgs",
+      created.caseId,
+      { travellerId: secondTravellerId },
+      "ops@rgs.test",
+    );
+    expect(grown.applicants).toHaveLength(2);
+    const secondApplicantRef = grown.applicants[1]!.applicantRef;
+
+    const decided = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      secondApplicantRef,
+      "APPROVED",
+      "ops@rgs.test",
+    );
+
+    expect(decided.caseStatus).toBe("DECIDED");
+    expect((await getCase(context, "rgs", created.caseId)).caseStatus).toBe("DECIDED");
+    const events = await listCaseEvents(context, "rgs", created.caseId);
+    const wideningEvent = events.find(
+      (event) => event.eventType === "CASE_STATUS_CHANGED" && event.meta["toStatus"] === "DECIDED",
+    );
+    expect(wideningEvent?.meta["fromStatus"]).toBe("VISA_GRANTED");
   });
 
   it("refuses a no-op outcome change with a 409", async () => {
@@ -1000,10 +1076,10 @@ describe("countCasesByField", () => {
     await seedCase(context, partnerId, "31377");
     await seedCase(context, partnerId, "31378");
     const thirdCase = await seedCase(context, partnerId, "31379");
-    await changeCaseStatus(context, "rgs", thirdCase.caseId, "IN_PROGRESS", "ops@rgs.test");
+    await changeCaseStatus(context, "rgs", thirdCase.caseId, "DOCS_UNDER_REVIEW", "ops@rgs.test");
 
     const counted = await countCasesByField(context, "rgs", "caseStatus");
-    expect(counted.counts).toEqual({ NEW: 2, IN_PROGRESS: 1 });
+    expect(counted.counts).toEqual({ NEW: 2, DOCS_UNDER_REVIEW: 1 });
     expect(counted.total).toBe(3);
     expect(counted.uncountedCaseIds).toEqual([]);
   });

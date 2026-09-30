@@ -23,8 +23,8 @@ describe("ReviewItemSchema", () => {
   });
 
   it("keeps a proposed value and a confidence score when pass 2 supplies them", () => {
-    const parsed = ReviewItemSchema.parse({ ...validItem, proposedValue: "IN_PROGRESS", confidence: 0.82 });
-    expect(parsed.proposedValue).toBe("IN_PROGRESS");
+    const parsed = ReviewItemSchema.parse({ ...validItem, proposedValue: "DOCS_UNDER_REVIEW", confidence: 0.82 });
+    expect(parsed.proposedValue).toBe("DOCS_UNDER_REVIEW");
     expect(parsed.confidence).toBe(0.82);
   });
 

@@ -1,3 +1,5 @@
+import type { crm } from "@rgs/shared";
+
 /**
  * Every CRM key format lives here and nowhere else. Shapes come from spec §5.
  * A tenant segment is mandatory on every partition key: v1 serves one tenant,
@@ -182,6 +184,10 @@ export const CRM_USER_PREFS_SORT_KEY = "PREFS";
  * id: a user's prefs row is looked up by who they are, never listed, so
  * there is nothing for a generated id to do here.
  */
+export function statusEmailTemplatePartitionKey(tenantId: string, caseStatus: crm.CaseStatus): string {
+  return `TENANT#${tenantId}#STATUS_EMAIL_TEMPLATE#${caseStatus}`;
+}
+
 export function crmUserPrefsPartitionKey(tenantId: string, email: string): string {
   return `TENANT#${tenantId}#CRM_USER#${email}`;
 }

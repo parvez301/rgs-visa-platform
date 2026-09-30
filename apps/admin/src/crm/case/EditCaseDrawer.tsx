@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { crm } from "@rgs/shared";
-import { adminApi } from "../../lib/adminApi";
 import { useAuth } from "../../lib/auth";
 import { crmClient, type CaseView } from "../api/crmClient";
 import { crmQueryKeys, usePartners } from "../api/hooks";
@@ -47,8 +46,11 @@ export function EditCaseDrawer({ caseRecord, onClose }: EditCaseDrawerProps) {
   const queryClient = useQueryClient();
   const partnersQuery = usePartners();
   const countriesQuery = useQuery({
-    queryKey: ["crm", "countries"],
-    queryFn: () => adminApi.listCountries(idToken!),
+    queryKey: ["crm", "destination-countries"],
+    queryFn: async () => {
+      const response = await crmClient.listDestinationCountries(idToken!);
+      return response.countries;
+    },
     enabled: idToken !== null,
   });
 

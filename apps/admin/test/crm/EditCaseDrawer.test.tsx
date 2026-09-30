@@ -27,7 +27,7 @@ const CASE_VIEW: CaseView = {
   partnerId: "ptn_1",
   destinationCountry: "JP",
   visaType: "TOURIST",
-  caseStatus: "IN_PROGRESS",
+  caseStatus: "DOCS_UNDER_REVIEW",
   billingStatus: "UNBILLED",
   receivedDate: "2026-09-01",
   expectedCollectionDate: "2026-09-20",
@@ -72,6 +72,11 @@ function renderEditDrawer(
       url: requestUrl,
       body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
     });
+    if (requestUrl.endsWith("/crm/destination-countries")) {
+      return jsonResponse(200, {
+        countries: [{ countryCode: "JP", countryName: "Japan" }],
+      });
+    }
     if (requestUrl.endsWith("/config/countries")) {
       return jsonResponse(200, {
         countryProducts: [{ countryCode: "JP", countryName: "Japan" }],

@@ -68,7 +68,7 @@ describe("Timeline", () => {
       <Timeline
         events={[
           { eventId: "e1", eventType: "CASE_CREATED", caseId: "case_1", actorEmail: "ops@rgs.test", meta: { caseRef: "RGS-1001", caseType: "VISA" }, createdAt: "2026-03-04T09:00:00.000Z" },
-          { eventId: "e2", eventType: "CASE_STATUS_CHANGED", caseId: "case_1", actorEmail: "ops@rgs.test", meta: { fromStatus: "NEW", toStatus: "IN_PROGRESS" }, createdAt: "2026-03-04T10:00:00.000Z" },
+          { eventId: "e2", eventType: "CASE_STATUS_CHANGED", caseId: "case_1", actorEmail: "ops@rgs.test", meta: { fromStatus: "NEW", toStatus: "DOCS_UNDER_REVIEW" }, createdAt: "2026-03-04T10:00:00.000Z" },
           { eventId: "e3", eventType: "BILLING_CHANGED", caseId: "case_1", actorEmail: "desk@rgs.test", meta: { fromBillingStatus: "UNBILLED", toBillingStatus: "BILL_SENT" }, createdAt: "2026-03-04T11:00:00.000Z" },
         ]}
       />,
@@ -109,15 +109,28 @@ describe("Timeline", () => {
     render(
       <Timeline
         events={[
-          { eventId: "e1", eventType: "CLIENT_NOTIFIED", caseId: "case_1", actorEmail: "ops@rgs.test", meta: { channel: "email", toAddress: "priya@example.com", fromStatus: "NEW", toStatus: "IN_PROGRESS" }, createdAt: "2026-03-04T10:00:00.000Z" },
+          { eventId: "e1", eventType: "CLIENT_NOTIFIED", caseId: "case_1", actorEmail: "ops@rgs.test", meta: { channel: "email", toAddress: "priya@example.com", fromStatus: "NEW", toStatus: "DOCS_UNDER_REVIEW" }, createdAt: "2026-03-04T10:00:00.000Z" },
         ]}
       />,
     );
 
     expect(screen.getByText("Client notified by ops@rgs.test")).toBeInTheDocument();
     expect(screen.getByText(/Email to priya@example.com/)).toBeInTheDocument();
-    expect(screen.getByText(/New/)).toBeInTheDocument();
-    expect(screen.getByText(/In progress/)).toBeInTheDocument();
+    expect(screen.getByText(/Application Received/)).toBeInTheDocument();
+    expect(screen.getByText(/Documents Under Review/)).toBeInTheDocument();
+  });
+
+  it("reads a CREATE notification as an initial email, not a transition", () => {
+    render(
+      <Timeline
+        events={[
+          { eventId: "e2", eventType: "PARTNER_NOTIFIED", caseId: "case_1", actorEmail: "ops@rgs.test", meta: { channel: "email", toAddress: "desk@skyline.test", toStatus: "NEW", reason: "CREATE" }, createdAt: "2026-03-04T10:00:00.000Z" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Partner notified by ops@rgs.test")).toBeInTheDocument();
+    expect(screen.getByText("Email to desk@skyline.test on create (Application Received)")).toBeInTheDocument();
   });
 });
 

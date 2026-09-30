@@ -35,7 +35,7 @@ function buildRows(rowCount: number): crm.LedgerRow[] {
     destinationCountry: "AE",
     caseType: "VISA" as const,
     visaType: "TOURIST" as const,
-    caseStatus: "IN_PROGRESS" as const,
+    caseStatus: "DOCS_UNDER_REVIEW" as const,
     billingStatus: "UNKNOWN" as const,
     receivedDate: "2026-03-04",
     totalInr: 12000,
