@@ -10,6 +10,7 @@ export const MIGRATION_ACTOR = "migration@raysglobalservices.com";
 export interface MigrateCountryDocumentsCliDependencies {
   buildContext: () => AppContext;
   logSummary: (summary: Record<string, unknown>) => void;
+  logError: (message: string) => void;
 }
 
 export async function runMigrateCountryDocumentsToProductsCli(
@@ -24,6 +25,19 @@ export async function runMigrateCountryDocumentsToProductsCli(
     productsUpdated: report.productsUpdated,
     productsSkippedAlreadyMigrated: report.productsSkippedAlreadyMigrated,
     checklistLabelsMerged: report.checklistLabelsMerged,
+    productsSkippedInvalid: report.productsSkippedInvalid,
+    checklistsSkippedCorrupt: report.checklistsSkippedCorrupt,
+    productsSkippedCorruptChecklist: report.productsSkippedCorruptChecklist,
   });
-  return { exitCode: 0, report };
+  for (const invalidProductDetail of report.invalidProductDetails) {
+    dependencies.logError(`Product left unmigrated (invalid): ${invalidProductDetail}`);
+  }
+  if (report.corruptChecklistCountryCodes.length > 0) {
+    dependencies.logError(
+      `Countries left unmigrated (unreadable checklist, fix then re-run): ${report.corruptChecklistCountryCodes.join(", ")}`,
+    );
+  }
+  // Non-zero when anything was left behind, so a scripted run notices the re-run is needed.
+  const leftUnmigrated = report.productsSkippedInvalid + report.productsSkippedCorruptChecklist;
+  return { exitCode: leftUnmigrated > 0 ? 1 : 0, report };
 }

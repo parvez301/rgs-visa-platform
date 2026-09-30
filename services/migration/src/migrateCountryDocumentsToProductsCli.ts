@@ -5,6 +5,7 @@ import { runMigrateCountryDocumentsToProductsCli } from "./runMigrateCountryDocu
 const cliResult = await runMigrateCountryDocumentsToProductsCli({
   buildContext: buildProductionContext,
   logSummary: (summary) => console.table(summary),
+  logError: (message) => console.error(message),
 });
 
 process.exitCode = cliResult.exitCode;

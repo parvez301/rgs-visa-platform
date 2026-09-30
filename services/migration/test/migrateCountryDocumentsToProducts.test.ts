@@ -12,14 +12,27 @@ import { InMemoryEmailSender } from "@rgs/api/src/lib/email";
 import type { AppContext } from "@rgs/api/src/lib/context";
 import { listCountryConfig } from "@rgs/api/src/domain/config";
 import { findCountryChecklist, putCountryChecklist } from "@rgs/api/src/domain/crm/countryChecklist";
+import { META_SORT_KEY, countryChecklistPartitionKey } from "@rgs/api/src/domain/crm/keys";
 import {
   migrateCountryDocumentsToProducts,
   parseCountryProductForMigration,
 } from "../src/migrateCountryDocumentsToProducts";
+import { runMigrateCountryDocumentsToProductsCli } from "../src/runMigrateCountryDocumentsToProductsCli";
 
 const TENANT_ID = "rgs";
 const ACTOR_EMAIL = "migration@raysglobalservices.com";
 const CONFIG_PARTITION_KEY = "CONFIG#COUNTRY";
+
+const EMPTY_REPORT = {
+  productsUpdated: 0,
+  productsSkippedAlreadyMigrated: 0,
+  checklistLabelsMerged: 0,
+  productsSkippedInvalid: 0,
+  invalidProductDetails: [],
+  checklistsSkippedCorrupt: 0,
+  corruptChecklistCountryCodes: [],
+  productsSkippedCorruptChecklist: 0,
+};
 
 function buildContext(): AppContext {
   return {
@@ -78,11 +91,7 @@ describe("migrateCountryDocumentsToProducts", () => {
       { label: "Custom letter" },
       { label: DOC_TYPE_LABELS.PASSPORT_BIO, portalDocType: "PASSPORT_BIO" },
     ]);
-    expect(report).toEqual({
-      productsUpdated: 1,
-      productsSkippedAlreadyMigrated: 0,
-      checklistLabelsMerged: 2,
-    });
+    expect(report).toEqual({ ...EMPTY_REPORT, productsUpdated: 1, checklistLabelsMerged: 2 });
     expect(await readRawProduct(context, "AE")).not.toHaveProperty("docsRequired");
   });
 
@@ -96,11 +105,7 @@ describe("migrateCountryDocumentsToProducts", () => {
     expect(ae?.requiredDocuments).toEqual(
       requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT"]),
     );
-    expect(report).toEqual({
-      productsUpdated: 1,
-      productsSkippedAlreadyMigrated: 0,
-      checklistLabelsMerged: 0,
-    });
+    expect(report).toEqual({ ...EMPTY_REPORT, productsUpdated: 1 });
     expect(await readRawProduct(context, "AE")).not.toHaveProperty("docsRequired");
   });
 
@@ -179,11 +184,7 @@ describe("migrateCountryDocumentsToProducts", () => {
     );
     const secondReport = await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
 
-    expect(secondReport).toEqual({
-      productsUpdated: 0,
-      productsSkippedAlreadyMigrated: 1,
-      checklistLabelsMerged: 0,
-    });
+    expect(secondReport).toEqual({ ...EMPTY_REPORT, productsSkippedAlreadyMigrated: 1 });
     expect(await readRawProduct(context, "AE")).toEqual(afterFirstRun);
   });
 
@@ -206,11 +207,70 @@ describe("migrateCountryDocumentsToProducts", () => {
   it("does nothing when the catalog was never seeded into the table", async () => {
     const context = buildContext();
     const report = await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
-    expect(report).toEqual({
-      productsUpdated: 0,
-      productsSkippedAlreadyMigrated: 0,
-      checklistLabelsMerged: 0,
+    expect(report).toEqual(EMPTY_REPORT);
+  });
+});
+
+describe("migrateCountryDocumentsToProducts — bad rows do not block the run", () => {
+  it("leaves a product whose merged documents fail the schema untouched and migrates the rest", async () => {
+    const context = buildContext();
+    // Duplicate docsRequired → duplicate label and portalDocType: CountryProductSchema rejects it.
+    await putLegacyProduct(context, "AE", ["PHOTO", "PHOTO"]);
+    await putLegacyProduct(context, "TH", ["PASSPORT_BIO"]);
+
+    const report = await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
+
+    expect(report.productsUpdated).toBe(1);
+    expect(report.productsSkippedInvalid).toBe(1);
+    expect(report.invalidProductDetails).toHaveLength(1);
+    expect(report.invalidProductDetails[0]).toMatch(/^AE#.*requiredDocuments/);
+    const untouched = await readRawProduct(context, "AE");
+    expect(untouched["docsRequired"]).toEqual(["PHOTO", "PHOTO"]);
+    expect(untouched).not.toHaveProperty("requiredDocuments");
+    const migrated = await readRawProduct(context, "TH");
+    expect(migrated).not.toHaveProperty("docsRequired");
+    expect(migrated["requiredDocuments"]).toEqual(requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO"]));
+  });
+
+  it("leaves a country unmigrated when its checklist is unreadable, then folds it on re-run once repaired", async () => {
+    const context = buildContext();
+    await putLegacyProduct(context, "AE", ["PASSPORT_BIO"]);
+    await putLegacyProduct(context, "TH", ["PHOTO"]);
+    await context.table.put({
+      PK: countryChecklistPartitionKey(TENANT_ID, "AE"),
+      SK: META_SORT_KEY,
+      countryCode: "AE",
+      requiredDocuments: "not-a-list",
     });
+
+    const firstReport = await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
+
+    expect(firstReport).toEqual({
+      ...EMPTY_REPORT,
+      productsUpdated: 1,
+      checklistsSkippedCorrupt: 1,
+      corruptChecklistCountryCodes: ["AE"],
+      productsSkippedCorruptChecklist: 1,
+    });
+    // The desk's (unreadable) list was not silently replaced by the baseline.
+    expect((await readRawProduct(context, "AE"))["docsRequired"]).toEqual(["PASSPORT_BIO"]);
+    expect(await readRawProduct(context, "TH")).not.toHaveProperty("docsRequired");
+
+    await putCountryChecklist(
+      context,
+      TENANT_ID,
+      { countryCode: "AE", requiredDocuments: ["Custom letter"] },
+      "desk@rgs.test",
+    );
+    const secondReport = await migrateCountryDocumentsToProducts(context, TENANT_ID, ACTOR_EMAIL);
+
+    expect(secondReport).toEqual({
+      ...EMPTY_REPORT,
+      productsUpdated: 1,
+      productsSkippedAlreadyMigrated: 1,
+      checklistLabelsMerged: 1,
+    });
+    expect((await readRawProduct(context, "AE"))["requiredDocuments"]).toEqual([{ label: "Custom letter" }]);
   });
 });
 
@@ -250,5 +310,35 @@ describe("parseCountryProductForMigration", () => {
         docsRequired: ["NOT_A_DOC"],
       }),
     ).toThrow(/AE#AE-E-VISA.*docsRequired/);
+  });
+});
+
+describe("runMigrateCountryDocumentsToProductsCli", () => {
+  it("exits 1 and names what was left behind when a product is invalid", async () => {
+    const context = buildContext();
+    await putLegacyProduct(context, "AE", ["PHOTO", "PHOTO"]);
+    const errorLines: string[] = [];
+
+    const { exitCode, report } = await runMigrateCountryDocumentsToProductsCli({
+      buildContext: () => context,
+      logSummary: () => {},
+      logError: (message) => errorLines.push(message),
+    });
+
+    expect(exitCode).toBe(1);
+    expect(report.productsSkippedInvalid).toBe(1);
+    expect(errorLines).toHaveLength(1);
+    expect(errorLines[0]).toMatch(/AE#/);
+  });
+
+  it("exits 0 on a clean run", async () => {
+    const context = buildContext();
+    await putLegacyProduct(context, "AE", ["PASSPORT_BIO"]);
+    const { exitCode } = await runMigrateCountryDocumentsToProductsCli({
+      buildContext: () => context,
+      logSummary: () => {},
+      logError: () => {},
+    });
+    expect(exitCode).toBe(0);
   });
 });

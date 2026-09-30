@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  CountryProductSchema,
   DOC_TYPES,
   RequiredDocumentSchema,
   docTypeForLabel,
@@ -9,6 +10,7 @@ import {
 } from "@rgs/shared";
 import { findCountryChecklist } from "@rgs/api/src/domain/crm/countryChecklist";
 import type { AppContext } from "@rgs/api/src/lib/context";
+import { CorruptRecordError } from "@rgs/api/src/lib/errors";
 import { logActivity } from "@rgs/api/src/lib/context";
 import { stripStorageKeys } from "@rgs/api/src/lib/storedRecords";
 
@@ -20,6 +22,18 @@ export interface MigrateCountryDocumentsReport {
   productsSkippedAlreadyMigrated: number;
   /** Checklist labels written into products; a checklist shared by N products of one country counts N times. */
   checklistLabelsMerged: number;
+  /**
+   * Products whose merged result failed `CountryProductSchema` (duplicate label or
+   * portalDocType, fulfilled country with no documents, ...). Left exactly as stored.
+   */
+  productsSkippedInvalid: number;
+  /** One "countryCode#productCode: reason" line per invalid product, for the operator. */
+  invalidProductDetails: string[];
+  /** Countries whose checklist row is unreadable; their products are left unmigrated. */
+  checklistsSkippedCorrupt: number;
+  corruptChecklistCountryCodes: string[];
+  /** Products left unmigrated because their country's checklist is unreadable. */
+  productsSkippedCorruptChecklist: number;
 }
 
 /**
@@ -107,6 +121,11 @@ function requiredDocumentsFromChecklistLabels(checklistLabels: readonly string[]
  * labels, replaces the product's baseline wholesale; otherwise the baseline
  * (`docsRequired`) is converted label-for-label. `docsRequired` is dropped on
  * write. Already-converted rows are skipped. Checklist rows are left in place.
+ *
+ * One bad row never blocks the rest: a merged product that fails
+ * `CountryProductSchema`, or whose country checklist is unreadable, is left
+ * exactly as stored, counted and named in the report, and picked up by a
+ * re-run once the data is fixed.
  */
 export async function migrateCountryDocumentsToProducts(
   context: AppContext,
@@ -114,22 +133,40 @@ export async function migrateCountryDocumentsToProducts(
   actorEmail: string,
 ): Promise<MigrateCountryDocumentsReport> {
   const storedItems = await context.table.query(CONFIG_PARTITION_KEY);
-  const checklistLabelsByCountry = new Map<string, readonly string[]>();
-
-  async function checklistLabelsFor(countryCode: string): Promise<readonly string[]> {
-    const cachedLabels = checklistLabelsByCountry.get(countryCode);
-    if (cachedLabels !== undefined) return cachedLabels;
-    const checklist = await findCountryChecklist(context, tenantId, countryCode);
-    const labels = checklist?.requiredDocuments ?? [];
-    checklistLabelsByCountry.set(countryCode, labels);
-    return labels;
-  }
-
   const report: MigrateCountryDocumentsReport = {
     productsUpdated: 0,
     productsSkippedAlreadyMigrated: 0,
     checklistLabelsMerged: 0,
+    productsSkippedInvalid: 0,
+    invalidProductDetails: [],
+    checklistsSkippedCorrupt: 0,
+    corruptChecklistCountryCodes: [],
+    productsSkippedCorruptChecklist: 0,
   };
+
+  const checklistLabelsByCountry = new Map<string, readonly string[] | "CORRUPT">();
+
+  /**
+   * "CORRUPT" rather than a silent fallback to the baseline: converting the
+   * product without the checklist would drop the desk's edits AND, because
+   * converted rows are skipped on re-run, make that loss permanent.
+   */
+  async function checklistLabelsFor(countryCode: string): Promise<readonly string[] | "CORRUPT"> {
+    const cachedLabels = checklistLabelsByCountry.get(countryCode);
+    if (cachedLabels !== undefined) return cachedLabels;
+    let labels: readonly string[] | "CORRUPT";
+    try {
+      const checklist = await findCountryChecklist(context, tenantId, countryCode);
+      labels = checklist?.requiredDocuments ?? [];
+    } catch (error) {
+      if (!(error instanceof CorruptRecordError)) throw error;
+      labels = "CORRUPT";
+      report.checklistsSkippedCorrupt += 1;
+      report.corruptChecklistCountryCodes.push(countryCode);
+    }
+    checklistLabelsByCountry.set(countryCode, labels);
+    return labels;
+  }
 
   for (const storedItem of storedItems) {
     const product = parseCountryProductForMigration(storedItem);
@@ -139,18 +176,37 @@ export async function migrateCountryDocumentsToProducts(
       continue;
     }
 
+    const checklistLabels = await checklistLabelsFor(product.countryCode);
+    if (checklistLabels === "CORRUPT") {
+      report.productsSkippedCorruptChecklist += 1;
+      continue;
+    }
+
     const baselineDocuments =
       product.legacyDocTypes !== undefined
         ? requiredDocumentsFromLegacyDocTypes(product.legacyDocTypes)
         : (product.requiredDocuments ?? []);
-    const checklistDocuments = requiredDocumentsFromChecklistLabels(
-      await checklistLabelsFor(product.countryCode),
-    );
+    const checklistDocuments = requiredDocumentsFromChecklistLabels(checklistLabels);
     const mergedDocuments = checklistDocuments.length > 0 ? checklistDocuments : baselineDocuments;
 
     // A converted row with nothing to add (no checklist, empty baseline) has no work left.
     if (!isLegacyRow && checklistDocuments.length === 0) {
       report.productsSkippedAlreadyMigrated += 1;
+      continue;
+    }
+
+    const validation = CountryProductSchema.safeParse({
+      ...product.attributes,
+      requiredDocuments: mergedDocuments,
+    });
+    if (!validation.success) {
+      const firstIssue = validation.error.issues[0];
+      report.productsSkippedInvalid += 1;
+      report.invalidProductDetails.push(
+        `${product.countryCode}#${product.productCode}: ${
+          firstIssue ? `${firstIssue.path.join(".")}: ${firstIssue.message}` : "invalid country product"
+        }`,
+      );
       continue;
     }
 
