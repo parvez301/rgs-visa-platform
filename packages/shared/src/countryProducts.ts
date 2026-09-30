@@ -228,7 +228,9 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     serviceFeeInr: 3500,
     processingDays: 30,
     // Home Affairs discourages booking flights before grant — no itinerary here
-    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF"]),
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes([
+      "PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF",
+    ]),
     active: true,
   },
   {
@@ -244,7 +246,9 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 7500,
     serviceFeeInr: 3500,
     processingDays: 45,
-    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF"]),
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes([
+      "PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF",
+    ]),
     active: true,
   },
   {
@@ -260,7 +264,9 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 17500,
     serviceFeeInr: 3500,
     processingDays: 30,
-    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "EMPLOYMENT_PROOF"]),
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes([
+      "PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "EMPLOYMENT_PROOF",
+    ]),
     active: true,
   },
   {
@@ -276,7 +282,9 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 4300,
     serviceFeeInr: 1500,
     processingDays: 7,
-    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING"]),
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes([
+      "PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING",
+    ]),
     active: true,
   },
   {
@@ -293,7 +301,9 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     serviceFeeInr: 1500,
     processingDays: 3,
     // Yellow fever certificate mandatory for all arrivals into Uganda
-    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "YELLOW_FEVER_CERT", "FLIGHT_ITINERARY"]),
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes([
+      "PASSPORT_BIO", "PHOTO", "YELLOW_FEVER_CERT", "FLIGHT_ITINERARY",
+    ]),
     active: true,
   },
   {
@@ -309,7 +319,9 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 21500,
     serviceFeeInr: 2500,
     processingDays: 5,
-    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "BANK_STATEMENT"]),
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes([
+      "PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "BANK_STATEMENT",
+    ]),
     active: true,
   },
   {
@@ -326,7 +338,9 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     serviceFeeInr: 1500,
     processingDays: 7,
     // Cover letter addressed to the Director General of Immigration
-    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "COVER_LETTER"]),
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes([
+      "PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "COVER_LETTER",
+    ]),
     active: true,
   },
 ];
