@@ -1,5 +1,6 @@
 import { COUNTRY_PRODUCTS, crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
+import { CorruptRecordError } from "../../lib/errors";
 import { resolveCaseTravellers } from "./caseTravellers";
 import { recordCrmEvent } from "./crmEvents";
 import { getPartnerOrThrow } from "./partners";
@@ -97,7 +98,7 @@ function buildStatusEmailVars(crmCase: crm.CrmCase, travellers: crm.CaseTravelle
 
 /**
  * Renders the announced status's template and sends it to the vendor and the
- * client. A missing or disabled template sends nothing and records nothing --
+ * client. A missing, disabled or corrupt template sends nothing and records nothing --
  * the old hard-coded generic body is deliberately gone (spec §4.4), so an
  * unseeded environment is silent rather than wrong. Each recipient is
  * independent: no address → no send and no event for that recipient only. Send
@@ -113,7 +114,19 @@ async function sendStatusTemplateMail(
   actorEmail: string,
   eventMeta: Record<string, string>,
 ): Promise<void> {
-  const template = await getStatusEmailTemplate(context, tenantId, announcedStatus);
+  let template: crm.StatusEmailTemplate | undefined;
+  try {
+    template = await getStatusEmailTemplate(context, tenantId, announcedStatus);
+  } catch (error) {
+    // A corrupt template row is an ops problem, not the desk's: the status
+    // change already succeeded, so treat it like a missing template and stay
+    // silent rather than turning a 409 into a failed status change.
+    if (!(error instanceof CorruptRecordError)) throw error;
+    console.warn(
+      `Status email skipped for case ${crmCase.caseId}: template for ${announcedStatus} is corrupt (${error.message})`,
+    );
+    return;
+  }
   if (template === undefined || !template.enabled) return;
 
   const partner = await getPartnerOrThrow(context, tenantId, crmCase.partnerId);

@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildTestContext, type TestContext } from "../helpers";
 import { changeCaseStatus, createCase, getCase, updateCaseDetails } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
-import { META_SORT_KEY, travellerPartitionKey } from "../../src/domain/crm/keys";
+import { META_SORT_KEY, statusEmailTemplatePartitionKey, travellerPartitionKey } from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertStatusEmailTemplate } from "../../src/domain/crm/statusEmailTemplates";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
@@ -335,6 +335,42 @@ describe("status-change email", () => {
 
     expect(context.email.sentEmails).toHaveLength(0);
     expect((await getCase(context, TENANT_ID, created.caseId)).caseStatus).toBe("DOCS_UNDER_REVIEW");
+  });
+
+  it("skips the send when the status's template row is corrupt, and the status change and create still succeed", async () => {
+    const context = buildTestContext();
+    for (const corruptStatus of ["NEW", "DOCS_UNDER_REVIEW"] as const) {
+      await context.table.put({
+        PK: statusEmailTemplatePartitionKey(TENANT_ID, corruptStatus),
+        SK: META_SORT_KEY,
+        tenantId: TENANT_ID,
+        caseStatus: corruptStatus,
+        subject: 42,
+      });
+    }
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const created = await seedCase(context, {
+        caseRef: "RGS-CORRUPT-1",
+        partnerContactEmail: "desk@skyline.test",
+        clientEmail: "asha@example.com",
+      });
+      expect(created.caseRef).toBe("RGS-CORRUPT-1");
+
+      const changed = await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+
+      expect(changed.caseStatus).toBe("DOCS_UNDER_REVIEW");
+      expect((await getCase(context, TENANT_ID, created.caseId)).caseStatus).toBe("DOCS_UNDER_REVIEW");
+      expect(context.email.sentEmails).toHaveLength(0);
+      const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+      expect(
+        events.some((event) => event.eventType === "PARTNER_NOTIFIED" || event.eventType === "CLIENT_NOTIFIED"),
+      ).toBe(false);
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("uses an edited template verbatim, subject included", async () => {
