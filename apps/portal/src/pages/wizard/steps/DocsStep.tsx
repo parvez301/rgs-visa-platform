@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import type {
-  Application,
-  ApplicationDocument,
-  DocType,
+import {
+  portalDocTypesFromProduct,
+  type Application,
+  type ApplicationDocument,
+  type DocType,
 } from "@rgs/shared";
 import { portalApi, uploadFileToPresignedUrl } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
@@ -75,7 +76,8 @@ export function DocsStep({
     [countriesQuery.data, application.countryCode],
   );
 
-  const requiredDocTypes = countryProduct?.docsRequired ?? [];
+  // Only checklist rows mapped to a portal DocType get an upload slot.
+  const requiredDocTypes = countryProduct ? portalDocTypesFromProduct(countryProduct) : [];
 
   const allSlotsFilled = application.travellers.every((_, travellerIndex) =>
     requiredDocTypes.every((docType) => {

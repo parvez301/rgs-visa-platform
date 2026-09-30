@@ -3,6 +3,7 @@ import {
   DOC_TYPES,
   DOC_TYPE_LABELS as sharedDocTypeLabels,
   labelsForDocTypes,
+  requiredDocumentsFromLegacyDocTypes,
   type CountryProduct,
 } from "@rgs/shared";
 import { DOC_TYPE_LABELS } from "../src/lib/countryContent";
@@ -21,48 +22,52 @@ const baseProduct: CountryProduct = {
   governmentFeeInr: 1000,
   serviceFeeInr: 500,
   processingDays: 3,
-  docsRequired: ["PASSPORT_BIO", "PHOTO"],
+  requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO"]),
   active: true,
 };
 
 describe("documentLabelsForMarketing", () => {
-  it("prefers CRM checklist labels when present", () => {
-    const labels = documentLabelsForMarketing({
-      ...baseProduct,
-      requiredDocumentLabels: ["Emirates ID copy", "Photo"],
-    });
-    expect(labels).toEqual(["Emirates ID copy", "Photo"]);
+  it("returns requiredDocuments labels in order, mapped or not", () => {
+    expect(
+      documentLabelsForMarketing({
+        ...baseProduct,
+        requiredDocuments: [
+          { label: "Emirates ID copy" },
+          { label: "Photo", portalDocType: "PHOTO" },
+        ],
+      }),
+    ).toEqual(["Emirates ID copy", "Photo"]);
   });
 
-  it("falls back to DocType labels when labels are absent", () => {
+  it("uses the checklist labels of a legacy-converted product", () => {
     expect(documentLabelsForMarketing(baseProduct)).toEqual([
       "Passport bio page",
       "Passport-size photo",
     ]);
   });
 
-  it("falls back to DocType labels when labels are empty", () => {
-    expect(
-      documentLabelsForMarketing({ ...baseProduct, requiredDocumentLabels: [] }),
-    ).toEqual(["Passport bio page", "Passport-size photo"]);
+  it("returns an empty list when there are no documents", () => {
+    expect(documentLabelsForMarketing({ ...baseProduct, requiredDocuments: [] })).toEqual([]);
   });
 });
 
 /**
- * The seed maps Config `docsRequired` through shared's `labelsForDocTypes` and
- * writes the result into the CRM checklist, which then *wins* over this
- * fallback on the public page. If the two maps ever diverge, running the seed
- * rewrites client-facing copy with no diff to review — so pin that they agree.
+ * Seeds and the migration build `requiredDocuments` from DocTypes via shared's
+ * `requiredDocumentsFromLegacyDocTypes`, so the public page shows shared's
+ * DocType copy. Pin that the marketing map and those labels agree.
  */
 describe("public document copy has exactly one source", () => {
   it("uses the shared map rather than a marketing-local copy", () => {
     expect(DOC_TYPE_LABELS).toBe(sharedDocTypeLabels);
   });
 
-  it("renders the same strings whether they come from the seed or the fallback", () => {
+  it("renders the same strings as shared DocType labels", () => {
     const everyDocType = [...DOC_TYPES];
     expect(labelsForDocTypes(everyDocType)).toEqual(
-      documentLabelsForMarketing({ ...baseProduct, docsRequired: everyDocType }),
+      documentLabelsForMarketing({
+        ...baseProduct,
+        requiredDocuments: requiredDocumentsFromLegacyDocTypes(everyDocType),
+      }),
     );
   });
 
