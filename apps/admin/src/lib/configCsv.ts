@@ -1,4 +1,11 @@
-import { CountryProductSchema, type CountryProduct, type DocType } from "@rgs/shared";
+import {
+  CountryProductSchema,
+  DOC_TYPES,
+  requiredDocumentsFromLegacyDocTypes,
+  type CountryProduct,
+  type DocType,
+  type RequiredDocument,
+} from "@rgs/shared";
 
 export const CONFIG_CSV_HEADERS = [
   "countryCode",
@@ -13,10 +20,13 @@ export const CONFIG_CSV_HEADERS = [
   "governmentFeeInr",
   "serviceFeeInr",
   "processingDays",
-  "docsRequired",
+  "requiredDocuments",
   "active",
   "officialUrl",
 ] as const;
+
+/** Older exports used this column name; still accepted on import. */
+const LEGACY_DOCS_HEADER = "docsRequired";
 
 export type ConfigCsvHeader = (typeof CONFIG_CSV_HEADERS)[number];
 
@@ -34,10 +44,106 @@ function escapeCsvCell(value: string): string {
   return value;
 }
 
+function escapeDocumentText(text: string): string {
+  return text.replace(/[\\;|]/g, (character) => `\\${character}`);
+}
+
+/** `Label|DOC_TYPE;Label2` — DocType optional; backslash, `;` and `|` inside a label are backslash-escaped. */
+export function serializeRequiredDocuments(
+  requiredDocuments: readonly RequiredDocument[],
+): string {
+  return requiredDocuments
+    .map((requiredDocument) =>
+      requiredDocument.portalDocType === undefined
+        ? escapeDocumentText(requiredDocument.label)
+        : `${escapeDocumentText(requiredDocument.label)}|${requiredDocument.portalDocType}`,
+    )
+    .join(";");
+}
+
+function isDocType(value: string): value is DocType {
+  return (DOC_TYPES as readonly string[]).includes(value);
+}
+
+/** Split on an unescaped separator, keeping escape sequences intact for later unescaping. */
+function splitUnescaped(text: string, separator: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (character === "\\" && index + 1 < text.length) {
+      current += character + text[index + 1]!;
+      index += 1;
+      continue;
+    }
+    if (character === separator) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  parts.push(current);
+  return parts;
+}
+
+function unescapeDocumentText(text: string): string {
+  return text.replace(/\\([\\;|])/g, "$1");
+}
+
+/**
+ * Legacy cells were `PASSPORT_BIO|PHOTO` (DocType enums only). When every
+ * `|` segment is a DocType, coerce via the shared legacy bridge.
+ */
+function looksLikeLegacyDocTypeCell(cell: string): boolean {
+  if (cell.includes(";") || cell.includes("\\")) return false;
+  const segments = cell.split("|").map((segment) => segment.trim());
+  return segments.length > 0 && segments.every((segment) => isDocType(segment));
+}
+
+export function parseRequiredDocuments(
+  cell: string,
+): { requiredDocuments: RequiredDocument[]; error: string | null } {
+  const trimmed = cell.trim();
+  if (trimmed.length === 0) return { requiredDocuments: [], error: null };
+  if (looksLikeLegacyDocTypeCell(trimmed)) {
+    const docTypes = trimmed.split("|").map((segment) => segment.trim()) as DocType[];
+    return { requiredDocuments: requiredDocumentsFromLegacyDocTypes(docTypes), error: null };
+  }
+  const requiredDocuments: RequiredDocument[] = [];
+  for (const entry of splitUnescaped(trimmed, ";")) {
+    if (entry.trim().length === 0) continue;
+    const segments = splitUnescaped(entry, "|");
+    if (segments.length > 2) {
+      return {
+        requiredDocuments: [],
+        error: `requiredDocuments: "${entry.trim()}" has more than one "|" (escape a literal pipe with a backslash)`,
+      };
+    }
+    const label = unescapeDocumentText(segments[0]!).trim();
+    if (label.length === 0) {
+      return { requiredDocuments: [], error: "requiredDocuments: document label is empty" };
+    }
+    const docTypeText = segments[1]?.trim() ?? "";
+    if (docTypeText.length === 0) {
+      requiredDocuments.push({ label });
+      continue;
+    }
+    if (!isDocType(docTypeText)) {
+      return {
+        requiredDocuments: [],
+        error: `requiredDocuments: unknown portal DocType "${docTypeText}"`,
+      };
+    }
+    requiredDocuments.push({ label, portalDocType: docTypeText });
+  }
+  return { requiredDocuments, error: null };
+}
+
 function productToCsvRow(countryProduct: CountryProduct): string {
   const cells: string[] = CONFIG_CSV_HEADERS.map((header) => {
-    if (header === "docsRequired") {
-      return escapeCsvCell(countryProduct.docsRequired.join("|"));
+    if (header === "requiredDocuments") {
+      return escapeCsvCell(serializeRequiredDocuments(countryProduct.requiredDocuments));
     }
     if (header === "active") {
       return countryProduct.active ? "true" : "false";
@@ -123,6 +229,10 @@ function buildProductFromCells(
     raw[header] = (cells[index] ?? "").trim();
   });
 
+  if (!("requiredDocuments" in raw) && LEGACY_DOCS_HEADER in raw) {
+    raw.requiredDocuments = raw[LEGACY_DOCS_HEADER]!;
+  }
+
   for (const requiredHeader of CONFIG_CSV_HEADERS) {
     if (!(requiredHeader in raw) && requiredHeader !== "officialUrl") {
       return { product: null, error: `Missing column: ${requiredHeader}` };
@@ -156,10 +266,12 @@ function buildProductFromCells(
     numbers[fieldName] = parsed;
   }
 
-  const docsRaw = raw.docsRequired ?? "";
-  const docsRequired = (
-    docsRaw.length === 0 ? [] : docsRaw.split("|").map((docType) => docType.trim())
-  ).filter((docType) => docType.length > 0) as DocType[];
+  const { requiredDocuments, error: requiredDocumentsError } = parseRequiredDocuments(
+    raw.requiredDocuments ?? "",
+  );
+  if (requiredDocumentsError !== null) {
+    return { product: null, error: requiredDocumentsError };
+  }
 
   const officialUrlRaw = (raw.officialUrl ?? "").trim();
   const candidate = {
@@ -175,7 +287,7 @@ function buildProductFromCells(
     governmentFeeInr: numbers.governmentFeeInr,
     serviceFeeInr: numbers.serviceFeeInr,
     processingDays: numbers.processingDays,
-    docsRequired,
+    requiredDocuments,
     active: activeParsed,
     ...(officialUrlRaw.length > 0 ? { officialUrl: officialUrlRaw } : {}),
   };
@@ -199,7 +311,10 @@ export function parseConfigCsv(csvText: string): ParsedConfigCsvRow[] {
 
   const headerCells = splitCsvLine(lines[0]!).map((cell) => cell.trim());
   const missingHeaders = CONFIG_CSV_HEADERS.filter(
-    (header) => header !== "officialUrl" && !headerCells.includes(header),
+    (header) =>
+      header !== "officialUrl" &&
+      !headerCells.includes(header) &&
+      !(header === "requiredDocuments" && headerCells.includes(LEGACY_DOCS_HEADER)),
   );
   if (missingHeaders.length > 0) {
     return [
@@ -249,9 +364,11 @@ export function productsEqual(
     leftProduct.processingDays === rightProduct.processingDays &&
     leftProduct.active === rightProduct.active &&
     (leftProduct.officialUrl ?? "") === (rightProduct.officialUrl ?? "") &&
-    leftProduct.docsRequired.length === rightProduct.docsRequired.length &&
-    leftProduct.docsRequired.every(
-      (docType, index) => docType === rightProduct.docsRequired[index],
+    leftProduct.requiredDocuments.length === rightProduct.requiredDocuments.length &&
+    leftProduct.requiredDocuments.every(
+      (requiredDocument, index) =>
+        requiredDocument.label === rightProduct.requiredDocuments[index]?.label &&
+        requiredDocument.portalDocType === rightProduct.requiredDocuments[index]?.portalDocType,
     )
   );
 }

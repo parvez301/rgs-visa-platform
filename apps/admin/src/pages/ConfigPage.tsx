@@ -3,11 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   COUNTRY_TIERS,
   DOC_TYPES,
+  DOC_TYPE_LABELS,
+  portalDocTypesFromProduct,
   REGIONS,
   VISA_TYPES,
   type CountryProduct,
   type CountryTier,
   type DocType,
+  type RequiredDocument,
   type Region,
   type VisaType,
 } from "@rgs/shared";
@@ -21,18 +24,6 @@ import {
   serializeConfigCsv,
   type ImportPreviewRow,
 } from "../lib/configCsv";
-
-const DOC_TYPE_LABELS: Record<DocType, string> = {
-  PASSPORT_BIO: "Passport bio page",
-  PHOTO: "Passport-size photo",
-  BANK_STATEMENT: "Bank statements",
-  FLIGHT_ITINERARY: "Flight itinerary",
-  HOTEL_BOOKING: "Hotel booking",
-  YELLOW_FEVER_CERT: "Yellow fever cert",
-  ITR: "ITR",
-  EMPLOYMENT_PROOF: "Employment proof",
-  COVER_LETTER: "Cover letter",
-};
 
 type TierFilter = "ALL" | "FULFILLED" | "INFO_ONLY" | "INACTIVE";
 
@@ -335,7 +326,9 @@ export function ConfigPage() {
                         setFormError(null);
                         setEditingProduct({
                           ...countryProduct,
-                          docsRequired: [...countryProduct.docsRequired],
+                          requiredDocuments: countryProduct.requiredDocuments.map((requiredDocument) => ({
+                            ...requiredDocument,
+                          })),
                         });
                       }}
                       className="text-sm font-semibold text-rgs-red hover:underline"
@@ -394,10 +387,17 @@ export function ConfigPage() {
             if (
               editingProduct.active &&
               editingProduct.tier === "FULFILLED" &&
-              editingProduct.docsRequired.length === 0
+              editingProduct.requiredDocuments.length === 0
             ) {
               setFormError(
                 "Cannot activate a Fulfilled country without a documents checklist. Add at least one required document, or switch tier to Info only.",
+              );
+              return;
+            }
+            const portalDocTypes = portalDocTypesFromProduct(editingProduct);
+            if (new Set(portalDocTypes).size !== portalDocTypes.length) {
+              setFormError(
+                "Each portal document type can be used only once. Remove the duplicate portal upload.",
               );
               return;
             }
@@ -536,12 +536,54 @@ function ConfigEditDrawer({
     });
   }
 
-  function toggleDocType(docType: DocType): void {
-    const isSelected = countryProduct.docsRequired.includes(docType);
-    const nextDocs = isSelected
-      ? countryProduct.docsRequired.filter((requiredDoc) => requiredDoc !== docType)
-      : [...countryProduct.docsRequired, docType];
-    onChange({ ...countryProduct, docsRequired: nextDocs });
+  const [newDocumentLabel, setNewDocumentLabel] = useState("");
+  const [documentError, setDocumentError] = useState<string | null>(null);
+
+  function setRequiredDocuments(requiredDocuments: RequiredDocument[]): void {
+    onChange({ ...countryProduct, requiredDocuments });
+  }
+
+  function addDocument(): void {
+    const label = newDocumentLabel.trim();
+    if (label.length === 0) {
+      setDocumentError("Enter a document label.");
+      return;
+    }
+    const isDuplicate = countryProduct.requiredDocuments.some(
+      (requiredDocument) => requiredDocument.label.trim().toLowerCase() === label.toLowerCase(),
+    );
+    if (isDuplicate) {
+      setDocumentError(`"${label}" is already in the list.`);
+      return;
+    }
+    setDocumentError(null);
+    setNewDocumentLabel("");
+    setRequiredDocuments([...countryProduct.requiredDocuments, { label }]);
+  }
+
+  function setPortalDocType(documentIndex: number, rawValue: string): void {
+    setRequiredDocuments(
+      countryProduct.requiredDocuments.map((requiredDocument, index) => {
+        if (index !== documentIndex) return requiredDocument;
+        if (rawValue === "") return { label: requiredDocument.label };
+        return { label: requiredDocument.label, portalDocType: rawValue as DocType };
+      }),
+    );
+  }
+
+  function moveDocument(documentIndex: number, direction: -1 | 1): void {
+    const targetIndex = documentIndex + direction;
+    if (targetIndex < 0 || targetIndex >= countryProduct.requiredDocuments.length) return;
+    const nextDocuments = [...countryProduct.requiredDocuments];
+    const [moved] = nextDocuments.splice(documentIndex, 1);
+    nextDocuments.splice(targetIndex, 0, moved!);
+    setRequiredDocuments(nextDocuments);
+  }
+
+  function removeDocument(documentIndex: number): void {
+    setRequiredDocuments(
+      countryProduct.requiredDocuments.filter((_, index) => index !== documentIndex),
+    );
   }
 
   const inputClasses =
@@ -676,19 +718,97 @@ function ConfigEditDrawer({
           ))}
 
           <div>
-            <p className="mb-2 text-sm font-medium">Required documents</p>
-            <div className="space-y-2">
-              {DOC_TYPES.map((docType) => (
-                <label key={docType} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={countryProduct.docsRequired.includes(docType)}
-                    onChange={() => toggleDocType(docType)}
-                  />
-                  {DOC_TYPE_LABELS[docType]}
-                </label>
-              ))}
+            <p className="mb-1 text-sm font-medium">Required documents</p>
+            <p className="mb-2 text-xs text-ink-soft">
+              Client-visible checklist. Pick a portal upload only when the portal can collect
+              that document.
+            </p>
+            {countryProduct.requiredDocuments.length === 0 ? (
+              <p className="mb-2 text-xs text-ink-soft">No documents yet.</p>
+            ) : (
+              <ul className="mb-3 space-y-2">
+                {countryProduct.requiredDocuments.map((requiredDocument, documentIndex) => (
+                  <li
+                    key={`${documentIndex}-${requiredDocument.label}`}
+                    className="rounded-xl border border-line px-3 py-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-sm">{requiredDocument.label}</span>
+                      <div className="flex shrink-0 gap-1 text-xs">
+                        <button
+                          type="button"
+                          aria-label={`Move ${requiredDocument.label} up`}
+                          disabled={documentIndex === 0}
+                          onClick={() => moveDocument(documentIndex, -1)}
+                          className="rounded border border-line px-1.5 py-0.5 disabled:opacity-40"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Move ${requiredDocument.label} down`}
+                          disabled={documentIndex === countryProduct.requiredDocuments.length - 1}
+                          onClick={() => moveDocument(documentIndex, 1)}
+                          className="rounded border border-line px-1.5 py-0.5 disabled:opacity-40"
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${requiredDocument.label}`}
+                          onClick={() => removeDocument(documentIndex)}
+                          className="rounded border border-line px-1.5 py-0.5 text-rgs-red"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                    <select
+                      aria-label={`Portal upload for ${requiredDocument.label}`}
+                      className={`${inputClasses} mt-2`}
+                      value={requiredDocument.portalDocType ?? ""}
+                      onChange={(changeEvent) =>
+                        setPortalDocType(documentIndex, changeEvent.target.value)
+                      }
+                    >
+                      <option value="">—</option>
+                      {DOC_TYPES.map((docType) => (
+                        <option key={docType} value={docType}>
+                          {docType} ({DOC_TYPE_LABELS[docType]})
+                        </option>
+                      ))}
+                    </select>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                aria-label="Document label"
+                className={inputClasses}
+                placeholder="e.g. Office form"
+                value={newDocumentLabel}
+                onChange={(changeEvent) => {
+                  setNewDocumentLabel(changeEvent.target.value);
+                  setDocumentError(null);
+                }}
+                onKeyDown={(keyEvent) => {
+                  if (keyEvent.key === "Enter") {
+                    keyEvent.preventDefault();
+                    addDocument();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={addDocument}
+                className="shrink-0 rounded-full border border-line px-4 py-2 text-sm font-semibold hover:border-ink transition-colors"
+              >
+                Add document
+              </button>
             </div>
+            {documentError && <p className="mt-1 text-xs text-rgs-red">{documentError}</p>}
           </div>
 
           <label className="flex items-center gap-2 text-sm font-medium">
