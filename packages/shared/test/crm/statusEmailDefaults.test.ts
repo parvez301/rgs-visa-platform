@@ -29,4 +29,16 @@ describe("defaultStatusEmailTemplate", () => {
       "{{applicationId}} – Application Received – {{clientName}} – {{countryVisaType}}",
     );
   });
+
+  it("keeps country/visa, date, time and centre of Appointment Booked on separate lines", () => {
+    const bodyLines = defaultStatusEmailTemplate("APPOINTMENT_SET").body.split("\n");
+    const countryVisaLines = bodyLines.filter((line) => line.includes("{{countryVisaType}}"));
+    expect(countryVisaLines).toHaveLength(1);
+    for (const optionalToken of ["{{appointmentDate}}", "{{appointmentTime}}", "{{centre}}"]) {
+      const tokenLines = bodyLines.filter((line) => line.includes(optionalToken));
+      expect(tokenLines).toHaveLength(1);
+      expect(tokenLines[0]).not.toContain("{{countryVisaType}}");
+      expect(tokenLines[0]!.match(/\{\{/g)).toHaveLength(1);
+    }
+  });
 });

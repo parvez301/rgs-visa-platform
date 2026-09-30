@@ -93,7 +93,13 @@ const DEFAULT_BODIES: Record<CaseStatus, string> = {
   APPOINTMENT_SET: [
     "Dear {{clientName}},",
     "",
-    "Your visa appointment for {{countryVisaType}} has been confirmed for {{appointmentDate}} at {{appointmentTime}} at {{centre}}.",
+    "Your visa appointment for {{countryVisaType}} has been confirmed.",
+    "",
+    // One token per line: the renderer drops a line whose tokens are all blank,
+    // so an unset date, or the reserved time/centre, never leaves "at  at ." behind.
+    "Appointment date: {{appointmentDate}}",
+    "Appointment time: {{appointmentTime}}",
+    "Centre: {{centre}}",
     "",
     "Please ensure you carry all required original documents.",
     "",

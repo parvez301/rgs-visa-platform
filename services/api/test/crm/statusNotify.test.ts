@@ -242,17 +242,33 @@ describe("status-change email", () => {
     expect(context.email.sentEmails.at(-1)!.bodyText).toBe("Hello\n\nBye");
   });
 
-  it("fills the appointment date as DD MMM YYYY when set, and leaves no date or raw token when it is not", async () => {
+  it("fills the appointment date as DD MMM YYYY when set, without broken 'at' copy from the blank time and centre", async () => {
     const context = buildTestContext();
     const withDate = await seedCase(context, { caseRef: "RGS-APPT-A", partnerContactEmail: "desk@skyline.test" });
     await updateCaseDetails(context, TENANT_ID, withDate.caseId, { appointmentDate: "2026-10-03" }, ACTOR);
     await changeCaseStatus(context, TENANT_ID, withDate.caseId, "APPOINTMENT_SET", ACTOR);
-    expect(context.email.sentEmails.at(-1)!.bodyText).toContain("confirmed for 03 Oct 2026");
 
+    const bodyWithDate = context.email.sentEmails.at(-1)!.bodyText;
+    expect(bodyWithDate).toContain("Your visa appointment for United Arab Emirates Tourist has been confirmed.");
+    expect(bodyWithDate).toContain("Appointment date: 03 Oct 2026");
+    expect(bodyWithDate).not.toContain("Appointment time");
+    expect(bodyWithDate).not.toContain("Centre:");
+    expect(bodyWithDate).not.toMatch(/at\s+at/);
+    expect(bodyWithDate).not.toMatch(/\bat\s*\./);
+    expect(bodyWithDate).not.toContain("{{");
+  });
+
+  it("drops the whole appointment block when no date is set", async () => {
+    const context = buildTestContext();
     const withoutDate = await seedCase(context, { caseRef: "RGS-APPT-B", partnerContactEmail: "desk@skyline.test" });
     await changeCaseStatus(context, TENANT_ID, withoutDate.caseId, "APPOINTMENT_SET", ACTOR);
+
     const bodyText = context.email.sentEmails.at(-1)!.bodyText;
-    expect(bodyText).not.toMatch(/\d{2} [A-Z][a-z]{2} \d{4}/);
+    expect(bodyText).toContain("has been confirmed.");
+    expect(bodyText).not.toContain("Appointment date");
+    expect(bodyText).not.toMatch(/at\s+at/);
+    expect(bodyText).not.toMatch(/\bat\s*\./);
+    expect(bodyText).not.toMatch(/\n\n\n/);
     expect(bodyText).not.toContain("{{");
   });
 
