@@ -16,7 +16,7 @@ import {
 
 describe("crm barrel export", () => {
   it("exposes the state machines", () => {
-    expect(canTransitionCaseStatus("NEW", "IN_PROGRESS")).toBe(true);
+    expect(canTransitionCaseStatus("NEW", "DOCS_UNDER_REVIEW")).toBe(true);
     expect(CASE_STATUSES).toContain("APPOINTMENT_SET");
   });
 

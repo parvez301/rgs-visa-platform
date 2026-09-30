@@ -6,24 +6,75 @@ import {
   canTransitionOutcome,
   deriveCaseStatusFromApplicants,
   isCaseClosable,
+  isCaseGroup,
 } from "../../src/crm/stateMachines";
 
 describe("case status machine", () => {
   it("walks the happy path forward", () => {
-    expect(canTransitionCaseStatus("NEW", "IN_PROGRESS")).toBe(true);
-    expect(canTransitionCaseStatus("IN_PROGRESS", "APPOINTMENT_SET")).toBe(true);
-    expect(canTransitionCaseStatus("APPOINTMENT_SET", "SUBMITTED")).toBe(true);
-    expect(canTransitionCaseStatus("SUBMITTED", "DECIDED")).toBe(true);
-    expect(canTransitionCaseStatus("DECIDED", "CLOSED")).toBe(true);
+    const happyPath = [
+      "NEW",
+      "DOCS_UNDER_REVIEW",
+      "ADDITIONAL_DOCS_REQUIRED",
+      "READY_FOR_SUBMISSION",
+      "APPOINTMENT_SET",
+      "SUBMITTED",
+      "UNDER_PROCESS",
+      "PASSPORT_RECEIVED",
+      "DECIDED",
+      "CLOSED",
+    ] as const;
+    for (let stepIndex = 0; stepIndex < happyPath.length - 1; stepIndex += 1) {
+      expect(canTransitionCaseStatus(happyPath[stepIndex]!, happyPath[stepIndex + 1]!)).toBe(true);
+    }
+  });
+
+  it("decides an individual case into VISA_GRANTED or VISA_REFUSED, then closes it", () => {
+    for (const verdictStatus of ["VISA_GRANTED", "VISA_REFUSED"] as const) {
+      expect(canTransitionCaseStatus("PASSPORT_RECEIVED", verdictStatus)).toBe(true);
+      expect(canTransitionCaseStatus("DECIDED", verdictStatus)).toBe(true);
+      expect(canTransitionCaseStatus(verdictStatus, "CLOSED")).toBe(true);
+    }
+  });
+
+  it("skips ahead from an early live status to any later stage and CLOSED", () => {
+    for (const earlyStatus of ["NEW", "DOCS_UNDER_REVIEW", "ADDITIONAL_DOCS_REQUIRED"] as const) {
+      for (const laterStatus of [
+        "UNDER_PROCESS",
+        "PASSPORT_RECEIVED",
+        "DECIDED",
+        "VISA_GRANTED",
+        "VISA_REFUSED",
+        "CLOSED",
+      ] as const) {
+        expect(canTransitionCaseStatus(earlyStatus, laterStatus)).toBe(true);
+      }
+    }
+  });
+
+  it("reopens every decision status to SUBMITTED", () => {
+    for (const decisionStatus of ["DECIDED", "VISA_GRANTED", "VISA_REFUSED"] as const) {
+      expect(canTransitionCaseStatus(decisionStatus, "SUBMITTED")).toBe(true);
+    }
+  });
+
+  it("does not let VISA_GRANTED and VISA_REFUSED swap, since they are siblings", () => {
+    expect(canTransitionCaseStatus("VISA_GRANTED", "VISA_REFUSED")).toBe(false);
+    expect(canTransitionCaseStatus("VISA_REFUSED", "VISA_GRANTED")).toBe(false);
+  });
+
+  it("refuses to move backwards through the new stages", () => {
+    expect(canTransitionCaseStatus("UNDER_PROCESS", "READY_FOR_SUBMISSION")).toBe(false);
+    expect(canTransitionCaseStatus("PASSPORT_RECEIVED", "UNDER_PROCESS")).toBe(false);
+    expect(canTransitionCaseStatus("VISA_GRANTED", "DECIDED")).toBe(false);
   });
 
   it("allows skipping the appointment step, since e-visas have no appointment", () => {
-    expect(canTransitionCaseStatus("IN_PROGRESS", "SUBMITTED")).toBe(true);
+    expect(canTransitionCaseStatus("DOCS_UNDER_REVIEW", "SUBMITTED")).toBe(true);
   });
 
   it("refuses to move backwards", () => {
-    expect(canTransitionCaseStatus("SUBMITTED", "IN_PROGRESS")).toBe(false);
-    expect(canTransitionCaseStatus("DECIDED", "IN_PROGRESS")).toBe(false);
+    expect(canTransitionCaseStatus("SUBMITTED", "DOCS_UNDER_REVIEW")).toBe(false);
+    expect(canTransitionCaseStatus("DECIDED", "DOCS_UNDER_REVIEW")).toBe(false);
     expect(canTransitionCaseStatus("DECIDED", "APPOINTMENT_SET")).toBe(false);
     expect(canTransitionCaseStatus("DECIDED", "NEW")).toBe(false);
   });
@@ -46,13 +97,13 @@ describe("case status machine", () => {
   });
 
   it("refuses to leave a terminal status", () => {
-    expect(canTransitionCaseStatus("CLOSED", "IN_PROGRESS")).toBe(false);
-    expect(canTransitionCaseStatus("WITHDRAWN", "IN_PROGRESS")).toBe(false);
+    expect(canTransitionCaseStatus("CLOSED", "DOCS_UNDER_REVIEW")).toBe(false);
+    expect(canTransitionCaseStatus("WITHDRAWN", "DOCS_UNDER_REVIEW")).toBe(false);
     expect(canTransitionCaseStatus("DUPLICATE", "NEW")).toBe(false);
   });
 
   it("allows the off-ramps from any live status", () => {
-    for (const liveStatus of ["NEW", "IN_PROGRESS", "APPOINTMENT_SET", "SUBMITTED"] as const) {
+    for (const liveStatus of ["NEW", "DOCS_UNDER_REVIEW", "APPOINTMENT_SET", "SUBMITTED"] as const) {
       expect(canTransitionCaseStatus(liveStatus, "WITHDRAWN")).toBe(true);
       expect(canTransitionCaseStatus(liveStatus, "DUPLICATE")).toBe(true);
       expect(canTransitionCaseStatus(liveStatus, "NOT_SUBMITTED")).toBe(true);
@@ -61,8 +112,8 @@ describe("case status machine", () => {
 
   it("reaches DECIDED and CLOSED from any live status, since real rows skip steps", () => {
     // REF 31376: Status "Handover" (-> CLOSED) with no prior DECIDED.
-    expect(canTransitionCaseStatus("IN_PROGRESS", "DECIDED")).toBe(true);
-    expect(canTransitionCaseStatus("IN_PROGRESS", "CLOSED")).toBe(true);
+    expect(canTransitionCaseStatus("DOCS_UNDER_REVIEW", "DECIDED")).toBe(true);
+    expect(canTransitionCaseStatus("DOCS_UNDER_REVIEW", "CLOSED")).toBe(true);
     expect(canTransitionCaseStatus("SUBMITTED", "CLOSED")).toBe(true);
     expect(canTransitionCaseStatus("NEW", "DECIDED")).toBe(true);
     expect(canTransitionCaseStatus("NEW", "CLOSED")).toBe(true);
@@ -70,14 +121,23 @@ describe("case status machine", () => {
     expect(canTransitionCaseStatus("APPOINTMENT_SET", "CLOSED")).toBe(true);
   });
 
-  it("agrees with deriveCaseStatusFromApplicants once it reports DECIDED", () => {
-    const derivedStatus = deriveCaseStatusFromApplicants("IN_PROGRESS", ["APPROVED"]);
-    expect(derivedStatus).toBe("DECIDED");
-    expect(canTransitionCaseStatus("IN_PROGRESS", derivedStatus)).toBe(true);
+  it("agrees with deriveCaseStatusFromApplicants once it reports a decision", () => {
+    const derivedStatus = deriveCaseStatusFromApplicants("DOCS_UNDER_REVIEW", ["APPROVED"], {
+      isGroup: false,
+    });
+    expect(derivedStatus).toBe("VISA_GRANTED");
+    expect(canTransitionCaseStatus("DOCS_UNDER_REVIEW", derivedStatus)).toBe(true);
+    const derivedGroupStatus = deriveCaseStatusFromApplicants(
+      "DOCS_UNDER_REVIEW",
+      ["APPROVED", "APPROVED"],
+      { isGroup: true },
+    );
+    expect(derivedGroupStatus).toBe("DECIDED");
+    expect(canTransitionCaseStatus("DOCS_UNDER_REVIEW", derivedGroupStatus)).toBe(true);
   });
 
   it("still refuses to re-enter a terminal status even after widening DECIDED/CLOSED reachability", () => {
-    expect(canTransitionCaseStatus("WITHDRAWN", "IN_PROGRESS")).toBe(false);
+    expect(canTransitionCaseStatus("WITHDRAWN", "DOCS_UNDER_REVIEW")).toBe(false);
     expect(canTransitionCaseStatus("WITHDRAWN", "DECIDED")).toBe(false);
     expect(canTransitionCaseStatus("WITHDRAWN", "CLOSED")).toBe(false);
     expect(canTransitionCaseStatus("CLOSED", "DECIDED")).toBe(false);
@@ -133,46 +193,107 @@ describe("billing machine", () => {
   });
 });
 
+describe("isCaseGroup", () => {
+  it("is true when groupName is set even for one applicant", () => {
+    expect(isCaseGroup({ groupName: "Sharma Family", applicantCount: 1 })).toBe(true);
+    expect(isCaseGroup({ applicantCount: 1 })).toBe(false);
+    expect(isCaseGroup({ applicantCount: 2 })).toBe(true);
+  });
+});
+
 describe("deriveCaseStatusFromApplicants", () => {
-  it("becomes DECIDED once every applicant is APPROVED or REJECTED", () => {
-    expect(deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "REJECTED"])).toBe("DECIDED");
+  it("derives VISA_GRANTED for an individual when the only applicant is APPROVED", () => {
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED"], { isGroup: false }),
+    ).toBe("VISA_GRANTED");
+  });
+
+  it("derives VISA_REFUSED for an individual when the only applicant is REJECTED", () => {
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", ["REJECTED"], { isGroup: false }),
+    ).toBe("VISA_REFUSED");
+  });
+
+  it("derives DECIDED for a group even when every applicant is APPROVED", () => {
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "APPROVED"], { isGroup: true }),
+    ).toBe("DECIDED");
+  });
+
+  it("derives DECIDED for a group with mixed APPROVED and REJECTED", () => {
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "REJECTED"], { isGroup: true }),
+    ).toBe("DECIDED");
+  });
+
+  it("falls back to DECIDED for a mixed outcome even when not flagged as a group", () => {
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "REJECTED"], { isGroup: false }),
+    ).toBe("DECIDED");
   });
 
   it("stays put while any applicant is still pending", () => {
-    expect(deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "PENDING"])).toBe("SUBMITTED");
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "PENDING"], { isGroup: true }),
+    ).toBe("SUBMITTED");
   });
 
-  it("does not drag a terminal case back to DECIDED", () => {
-    expect(deriveCaseStatusFromApplicants("WITHDRAWN", ["APPROVED"])).toBe("WITHDRAWN");
-    expect(deriveCaseStatusFromApplicants("CLOSED", ["APPROVED"])).toBe("CLOSED");
+  it("does not drag a terminal case back to a decision status", () => {
+    expect(
+      deriveCaseStatusFromApplicants("WITHDRAWN", ["APPROVED"], { isGroup: false }),
+    ).toBe("WITHDRAWN");
+    expect(deriveCaseStatusFromApplicants("CLOSED", ["APPROVED"], { isGroup: false })).toBe(
+      "CLOSED",
+    );
   });
 
   it("treats a case with no applicants as unchanged", () => {
-    expect(deriveCaseStatusFromApplicants("IN_PROGRESS", [])).toBe("IN_PROGRESS");
+    expect(deriveCaseStatusFromApplicants("DOCS_UNDER_REVIEW", [], { isGroup: false })).toBe(
+      "DOCS_UNDER_REVIEW",
+    );
   });
 
   it("does not treat a sent-back applicant as decided", () => {
     // SENT_BACK is a file returning to work, not a decision on it.
-    expect(deriveCaseStatusFromApplicants("SUBMITTED", ["SENT_BACK"])).toBe("SUBMITTED");
-    expect(deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "SENT_BACK"])).toBe(
+    expect(deriveCaseStatusFromApplicants("SUBMITTED", ["SENT_BACK"], { isGroup: false })).toBe(
       "SUBMITTED",
     );
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "SENT_BACK"], { isGroup: true }),
+    ).toBe("SUBMITTED");
+  });
+
+  it("reopens VISA_GRANTED to SUBMITTED when an applicant becomes live again", () => {
+    expect(
+      deriveCaseStatusFromApplicants("VISA_GRANTED", ["SENT_BACK"], { isGroup: false }),
+    ).toBe("SUBMITTED");
+    expect(
+      deriveCaseStatusFromApplicants("VISA_REFUSED", ["PENDING"], { isGroup: false }),
+    ).toBe("SUBMITTED");
   });
 
   it("reopens a DECIDED case the moment an applicant is live again", () => {
     // The case was marked decided — by hand, or by an import — and then the
     // embassy sent one file back. Short-circuiting on DECIDED left the case
     // decided while holding a SENT_BACK applicant, with no way out but CLOSED.
-    expect(deriveCaseStatusFromApplicants("DECIDED", ["APPROVED", "SENT_BACK"])).toBe("SUBMITTED");
-    expect(deriveCaseStatusFromApplicants("DECIDED", ["SENT_BACK"])).toBe("SUBMITTED");
+    expect(
+      deriveCaseStatusFromApplicants("DECIDED", ["APPROVED", "SENT_BACK"], { isGroup: true }),
+    ).toBe("SUBMITTED");
+    expect(deriveCaseStatusFromApplicants("DECIDED", ["SENT_BACK"], { isGroup: false })).toBe(
+      "SUBMITTED",
+    );
     // The resubmission puts that applicant back to PENDING; still not decided.
-    expect(deriveCaseStatusFromApplicants("DECIDED", ["APPROVED", "PENDING"])).toBe("SUBMITTED");
+    expect(
+      deriveCaseStatusFromApplicants("DECIDED", ["APPROVED", "PENDING"], { isGroup: true }),
+    ).toBe("SUBMITTED");
   });
 
   it("leaves a DECIDED case decided while every applicant really is decided", () => {
-    expect(deriveCaseStatusFromApplicants("DECIDED", ["APPROVED", "REJECTED"])).toBe("DECIDED");
+    expect(
+      deriveCaseStatusFromApplicants("DECIDED", ["APPROVED", "REJECTED"], { isGroup: true }),
+    ).toBe("DECIDED");
     // A decided case with no applicant rows at all is not evidence of anything.
-    expect(deriveCaseStatusFromApplicants("DECIDED", [])).toBe("DECIDED");
+    expect(deriveCaseStatusFromApplicants("DECIDED", [], { isGroup: false })).toBe("DECIDED");
   });
 });
 
@@ -185,21 +306,28 @@ describe("the embassy sends one file of three back for a corrected photo", () =>
     // The file is actively being re-worked, so the case must NOT read DECIDED —
     // DECIDED cannot reach the off-ramps and only reopens to SUBMITTED, so the
     // case would drop out of every live queue while ops is still working it.
-    expect(deriveCaseStatusFromApplicants("SUBMITTED", outcomesAfterTheReturn)).toBe("SUBMITTED");
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", outcomesAfterTheReturn, { isGroup: true }),
+    ).toBe("SUBMITTED");
 
     // Ops fixes the photo and resubmits: the returned applicant goes back into
     // the queue as PENDING. This is the resubmission path.
     expect(canTransitionOutcome("SENT_BACK", "PENDING")).toBe(true);
     const outcomesAfterTheResubmission = ["APPROVED", "APPROVED", "PENDING"] as const;
-    expect(deriveCaseStatusFromApplicants("SUBMITTED", outcomesAfterTheResubmission)).toBe(
-      "SUBMITTED",
-    );
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", outcomesAfterTheResubmission, {
+        isGroup: true,
+      }),
+    ).toBe("SUBMITTED");
 
-    // Only when the resubmitted file is actually decided does the case decide.
+    // Only when the resubmitted file is actually decided does the case decide —
+    // a group reads DECIDED, never VISA_GRANTED, even with all three approved.
     expect(canTransitionOutcome("PENDING", "APPROVED")).toBe(true);
-    expect(deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "APPROVED", "APPROVED"])).toBe(
-      "DECIDED",
-    );
+    expect(
+      deriveCaseStatusFromApplicants("SUBMITTED", ["APPROVED", "APPROVED", "APPROVED"], {
+        isGroup: true,
+      }),
+    ).toBe("DECIDED");
   });
 });
 

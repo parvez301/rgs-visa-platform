@@ -7,23 +7,52 @@ import {
   type CustodyStatus,
 } from "./statuses";
 
-// DECIDED and CLOSED are reachable from every live status, not just their
-// happy-path predecessor: real e-visas are approved with no recorded
+// Every live status can reach any LATER happy-path status and CLOSED, not just
+// its immediate successor: real e-visas are approved with no recorded
 // SUBMITTED step, and non-visa cases (ATTESTATION/APOSTILLE/PASSPORT) close
 // via custody + billing without ever earning a per-applicant outcome
 // (spec §5 line 229, §6 line 261; e.g. REF 31376, Status "Handover", no
-// prior DECIDED).
+// prior DECIDED). The stages between NEW and PASSPORT_RECEIVED are desk-set,
+// so skipping any of them has to stay legal too.
+const CASE_STATUS_HAPPY_PATH: readonly CaseStatus[] = [
+  "NEW",
+  "DOCS_UNDER_REVIEW",
+  "ADDITIONAL_DOCS_REQUIRED",
+  "READY_FOR_SUBMISSION",
+  "APPOINTMENT_SET",
+  "SUBMITTED",
+  "UNDER_PROCESS",
+  "PASSPORT_RECEIVED",
+  "DECIDED",
+];
+
+// VISA_GRANTED and VISA_REFUSED are siblings, each a verdict on an individual
+// case that follows DECIDED: neither leads to the other.
+const CASE_STATUS_VERDICTS: readonly CaseStatus[] = ["VISA_GRANTED", "VISA_REFUSED"];
+
+/** Every status strictly after `fromStatus` on the happy path, plus CLOSED. */
+function laterHappyPathStatuses(fromStatus: CaseStatus): readonly CaseStatus[] {
+  const fromIndex = CASE_STATUS_HAPPY_PATH.indexOf(fromStatus);
+  return [...CASE_STATUS_HAPPY_PATH.slice(fromIndex + 1), ...CASE_STATUS_VERDICTS, "CLOSED"];
+}
+
+// SUBMITTED is the reopen edge from every decision status, not a step
+// backwards for its own sake: a decided case whose embassy hands a passport
+// back is live work again. Without it a decision status absorbed the case —
+// the off-ramps need a LIVE status, the derivation could not undo itself, and
+// the only exit left was to CLOSE a file that had actually come back.
 const CASE_STATUS_FORWARD_TRANSITIONS: Record<CaseStatus, readonly CaseStatus[]> = {
-  NEW: ["IN_PROGRESS", "APPOINTMENT_SET", "SUBMITTED", "DECIDED", "CLOSED"],
-  IN_PROGRESS: ["APPOINTMENT_SET", "SUBMITTED", "DECIDED", "CLOSED"],
-  APPOINTMENT_SET: ["SUBMITTED", "DECIDED", "CLOSED"],
-  SUBMITTED: ["DECIDED", "CLOSED"],
-  // SUBMITTED is the reopen edge, not a step backwards for its own sake: a
-  // decided case whose embassy hands a passport back is live work again. Without
-  // it DECIDED absorbed the case — the off-ramps need a LIVE status, the
-  // derivation could not undo itself, and the only exit left was to CLOSE a file
-  // that had actually come back.
-  DECIDED: ["SUBMITTED", "CLOSED"],
+  NEW: laterHappyPathStatuses("NEW"),
+  DOCS_UNDER_REVIEW: laterHappyPathStatuses("DOCS_UNDER_REVIEW"),
+  ADDITIONAL_DOCS_REQUIRED: laterHappyPathStatuses("ADDITIONAL_DOCS_REQUIRED"),
+  READY_FOR_SUBMISSION: laterHappyPathStatuses("READY_FOR_SUBMISSION"),
+  APPOINTMENT_SET: laterHappyPathStatuses("APPOINTMENT_SET"),
+  SUBMITTED: laterHappyPathStatuses("SUBMITTED"),
+  UNDER_PROCESS: laterHappyPathStatuses("UNDER_PROCESS"),
+  PASSPORT_RECEIVED: laterHappyPathStatuses("PASSPORT_RECEIVED"),
+  DECIDED: ["SUBMITTED", "VISA_GRANTED", "VISA_REFUSED", "CLOSED"],
+  VISA_GRANTED: ["SUBMITTED", "CLOSED"],
+  VISA_REFUSED: ["SUBMITTED", "CLOSED"],
   CLOSED: [],
   NOT_SUBMITTED: [],
   WITHDRAWN: [],
@@ -110,8 +139,26 @@ export function canTransitionBilling(
 }
 
 /**
- * A case becomes DECIDED once every applicant is APPROVED or REJECTED, and
- * reopens to SUBMITTED the moment one of them is live again.
+ * A group is a case with a groupName or more than one applicant. Its
+ * applicants' verdicts are individual, so no single visa outcome describes the
+ * whole case.
+ */
+export function isCaseGroup(input: {
+  groupName?: string | undefined;
+  applicantCount: number;
+}): boolean {
+  return input.groupName !== undefined || input.applicantCount > 1;
+}
+
+/**
+ * A case becomes a decision status once every applicant is APPROVED or
+ * REJECTED, and reopens to SUBMITTED the moment one of them is live again.
+ *
+ * Which decision status depends on the case shape. A group is always DECIDED —
+ * "every applicant approved" is still not one visa granted. An individual case
+ * reads VISA_GRANTED or VISA_REFUSED, so the client hears the actual verdict.
+ * A mixed outcome can only be a group, but falls back to DECIDED rather than
+ * guessing if a caller reports it as an individual.
  *
  * SENT_BACK deliberately does NOT count as a decision. The embassy returning
  * one file for a corrected photo is that file going back into work, not a
@@ -122,7 +169,8 @@ export function canTransitionBilling(
  * where the skip-ahead NEW -> DECIDED is legal and intended, or by an import —
  * stayed decided while holding a SENT_BACK or PENDING applicant. Every off-ramp
  * needs a LIVE status, so the only exit left was CLOSED: closing a file the
- * embassy had actually handed back.
+ * embassy had actually handed back. VISA_GRANTED and VISA_REFUSED reopen the
+ * same way.
  *
  * Terminal cases are never dragged back — migrated rows keep the status the
  * import assigned them (spec §5).
@@ -130,6 +178,7 @@ export function canTransitionBilling(
 export function deriveCaseStatusFromApplicants(
   currentCaseStatus: CaseStatus,
   applicantOutcomes: readonly ApplicantOutcome[],
+  options: { isGroup: boolean },
 ): CaseStatus {
   if (TERMINAL_CASE_STATUSES.includes(currentCaseStatus)) {
     return currentCaseStatus;
@@ -141,9 +190,22 @@ export function deriveCaseStatusFromApplicants(
     (applicantOutcome) => applicantOutcome === "APPROVED" || applicantOutcome === "REJECTED",
   );
   if (everyApplicantDecided) {
+    if (options.isGroup) {
+      return "DECIDED";
+    }
+    if (applicantOutcomes.every((applicantOutcome) => applicantOutcome === "APPROVED")) {
+      return "VISA_GRANTED";
+    }
+    if (applicantOutcomes.every((applicantOutcome) => applicantOutcome === "REJECTED")) {
+      return "VISA_REFUSED";
+    }
     return "DECIDED";
   }
-  return currentCaseStatus === "DECIDED" ? "SUBMITTED" : currentCaseStatus;
+  const isDecisionStatus =
+    currentCaseStatus === "DECIDED" ||
+    currentCaseStatus === "VISA_GRANTED" ||
+    currentCaseStatus === "VISA_REFUSED";
+  return isDecisionStatus ? "SUBMITTED" : currentCaseStatus;
 }
 
 /**
