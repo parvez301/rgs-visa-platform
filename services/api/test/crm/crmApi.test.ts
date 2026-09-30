@@ -1637,3 +1637,113 @@ describe("applicant routes", () => {
     expect(okResponse.payload).toEqual({ rows: [], missingCaseIds: ["case_nope"] });
   });
 });
+
+function buildEventWithRole(
+  role: string,
+  method: string,
+  path: string,
+  body?: unknown,
+): APIGatewayProxyEventV2 {
+  return {
+    rawPath: path,
+    requestContext: {
+      http: { method },
+      authorizer: {
+        jwt: {
+          claims: {
+            sub: "admin_1",
+            email: "viewer@rgs.test",
+            "cognito:groups": JSON.stringify([role]),
+          },
+        },
+      },
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  } as unknown as APIGatewayProxyEventV2;
+}
+
+async function callWithRole(
+  router: Router,
+  role: string,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ statusCode: number; payload: any }> {
+  const response = (await router.dispatch(buildEventWithRole(role, method, path, body))) as {
+    statusCode: number;
+    body: string;
+  };
+  return { statusCode: response.statusCode, payload: JSON.parse(response.body) };
+}
+
+describe("status email template routes", () => {
+  const templatesBase = "/api/v1/admin/crm/status-email-templates";
+
+  it("lists every status with stored-or-default rows", async () => {
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
+    const router = buildRouter(context);
+    const { statusCode, payload } = await call(router, "GET", templatesBase);
+    expect(statusCode).toBe(200);
+    expect(payload.templates).toHaveLength(crm.CASE_STATUSES.length);
+    const newTemplate = payload.templates.find((row: { caseStatus: string }) => row.caseStatus === "NEW");
+    expect(newTemplate).toMatchObject(crm.defaultStatusEmailTemplate("NEW"));
+    expect(newTemplate.updatedBy).toBe("");
+  });
+
+  it("GET by status returns default without a stored row", async () => {
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
+    const router = buildRouter(context);
+    const { statusCode, payload } = await call(router, "GET", `${templatesBase}/NEW`);
+    expect(statusCode).toBe(200);
+    expect(payload).toMatchObject({
+      caseStatus: "NEW",
+      ...crm.defaultStatusEmailTemplate("NEW"),
+      updatedBy: "",
+    });
+  });
+
+  it("PUT upserts then reset restores the seeded default", async () => {
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
+    const router = buildRouter(context);
+    const putResponse = await call(router, "PUT", `${templatesBase}/NEW`, {
+      subject: "Custom subject",
+      body: "Custom body",
+      enabled: false,
+    });
+    expect(putResponse.statusCode).toBe(200);
+    expect(putResponse.payload.subject).toBe("Custom subject");
+    expect(putResponse.payload.updatedBy).toBe("ops@rgs.test");
+
+    const resetResponse = await call(router, "POST", `${templatesBase}/NEW/reset`);
+    expect(resetResponse.statusCode).toBe(200);
+    expect(resetResponse.payload).toMatchObject(crm.defaultStatusEmailTemplate("NEW"));
+    expect(resetResponse.payload.enabled).toBe(true);
+  });
+
+  it("rejects an unknown case status in the path", async () => {
+    const router = buildRouter(buildTestContext());
+    const { statusCode, payload } = await call(router, "GET", `${templatesBase}/NOT_A_STATUS`);
+    expect(statusCode).toBe(400);
+    expect(payload.message).toMatch(/case status/i);
+  });
+
+  it("rejects an invalid upsert body with 400, not 500", async () => {
+    const router = buildRouter(buildTestContext({ seedStatusEmailTemplates: false }));
+    const { statusCode } = await call(router, "PUT", `${templatesBase}/NEW`, {
+      subject: "s",
+      body: "   ",
+      enabled: true,
+    });
+    expect(statusCode).toBe(400);
+  });
+
+  it("403s Viewer on PUT", async () => {
+    const router = buildRouter(buildTestContext({ seedStatusEmailTemplates: false }));
+    const { statusCode } = await callWithRole(router, "Viewer", "PUT", `${templatesBase}/NEW`, {
+      subject: "s",
+      body: "b",
+      enabled: true,
+    });
+    expect(statusCode).toBe(403);
+  });
+});

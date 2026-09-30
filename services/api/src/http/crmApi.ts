@@ -47,6 +47,13 @@ import {
   findTravellerByPassport,
   upsertTraveller,
 } from "../domain/crm/travellers";
+import {
+  getStatusEmailTemplate,
+  listStatusEmailTemplates,
+  resetStatusEmailTemplate,
+  upsertStatusEmailTemplate,
+  UNSAVED_TEMPLATE_UPDATED_AT,
+} from "../domain/crm/statusEmailTemplates";
 import { resolveCaseTravellers } from "../domain/crm/caseTravellers";
 import { Router, parseBody, parseQueryParam } from "./router";
 import { requireScreen, requireWrite } from "./adminAccess";
@@ -193,6 +200,32 @@ function parseLedgerStatuses(rawStatuses: string | undefined): crm.CaseStatus[] 
     if (!parsedStatuses.includes(matchedStatus)) parsedStatuses.push(matchedStatus);
   }
   return parsedStatuses;
+}
+
+const CaseStatusPathParamSchema = z.enum(crm.CASE_STATUSES);
+
+function parseCaseStatusPathParam(rawCaseStatus: string): crm.CaseStatus {
+  const parsed = CaseStatusPathParamSchema.safeParse(rawCaseStatus);
+  if (!parsed.success) {
+    throw badRequest(`Unknown case status ${rawCaseStatus}`);
+  }
+  return parsed.data;
+}
+
+async function readStatusEmailTemplateOrDefault(
+  context: AppContext,
+  tenantId: string,
+  caseStatus: crm.CaseStatus,
+): Promise<crm.StatusEmailTemplate> {
+  const stored = await getStatusEmailTemplate(context, tenantId, caseStatus);
+  if (stored !== undefined) return stored;
+  return {
+    tenantId,
+    caseStatus,
+    ...crm.defaultStatusEmailTemplate(caseStatus),
+    updatedAt: UNSAVED_TEMPLATE_UPDATED_AT,
+    updatedBy: "",
+  };
 }
 
 const LedgerLimitSchema = z.coerce
@@ -419,6 +452,41 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
         requestContext.callerEmail,
       );
     })
+    .add("GET", "/api/v1/admin/crm/status-email-templates", async (requestContext) => {
+      requireScreen(requestContext, "crm");
+      return { templates: await listStatusEmailTemplates(context, tenantId) };
+    })
+    .add("GET", "/api/v1/admin/crm/status-email-templates/{caseStatus}", async (requestContext) => {
+      requireScreen(requestContext, "crm");
+      const caseStatus = parseCaseStatusPathParam(requestContext.pathParams["caseStatus"]!);
+      return readStatusEmailTemplateOrDefault(context, tenantId, caseStatus);
+    })
+    .add("PUT", "/api/v1/admin/crm/status-email-templates/{caseStatus}", async (requestContext) => {
+      requireWrite(requestContext, "crm");
+      const caseStatus = parseCaseStatusPathParam(requestContext.pathParams["caseStatus"]!);
+      const body = parseBody(crm.UpsertStatusEmailTemplateBodySchema, requestContext.body);
+      return upsertStatusEmailTemplate(
+        context,
+        tenantId,
+        caseStatus,
+        body,
+        requestContext.callerEmail,
+      );
+    })
+    .add(
+      "POST",
+      "/api/v1/admin/crm/status-email-templates/{caseStatus}/reset",
+      async (requestContext) => {
+        requireWrite(requestContext, "crm");
+        const caseStatus = parseCaseStatusPathParam(requestContext.pathParams["caseStatus"]!);
+        return resetStatusEmailTemplate(
+          context,
+          tenantId,
+          caseStatus,
+          requestContext.callerEmail,
+        );
+      },
+    )
     .add(
       "PUT",
       "/api/v1/admin/crm/cases/{caseId}/applicants/{applicantRef}/custody",
