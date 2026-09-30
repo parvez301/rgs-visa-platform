@@ -17,8 +17,9 @@
   --color-mist: #f5f6f8;
   --color-line: #e6e8ec;
 
-  --font-display: "Bricolage Grotesque", sans-serif;
-  --font-body: "Figtree", sans-serif;
+  /* Match ailogistics marketing: Inter for UI, mono only for MRZ-style codes. */
+  --font-display: "Inter", system-ui, -apple-system, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, sans-serif;
   --font-mrz: "Spline Sans Mono", monospace;
 }
 

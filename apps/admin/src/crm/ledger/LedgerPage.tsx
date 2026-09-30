@@ -9,7 +9,6 @@ import { crmClient, type OpenReviewSummaryEntry } from "../api/crmClient";
 import { useLedgerRows, usePartners, useReviewSummary } from "../api/hooks";
 import {
   CARD_CLASS,
-  FIELD_LABEL_CLASS,
   INPUT_CLASS,
   PILL_OFF_CLASS,
   PILL_ON_CLASS,
@@ -265,7 +264,23 @@ export function LedgerPage() {
               )}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-sm font-medium text-ink">
+              <span className="sr-only">Search</span>
+              <input
+                type="search"
+                aria-label="Search"
+                value={clientLedgerFilters.search ?? ""}
+                onChange={(changeEvent) =>
+                  setClientLedgerFilters((currentFilters) => ({
+                    ...currentFilters,
+                    search: changeEvent.target.value || undefined,
+                  }))
+                }
+                placeholder="Search REF, partner, name, or passport"
+                className={`${INPUT_CLASS} w-72 max-w-full font-normal`}
+              />
+            </label>
             {isLedgerPartial && <span className="text-xs text-ink-soft">Export holds only the loaded rows.</span>}
             <button
               type="button"
@@ -387,22 +402,6 @@ export function LedgerPage() {
             </label>
 
             <label className="flex items-center gap-2 text-sm font-medium text-ink">
-              Search
-              <input
-                type="search"
-                value={clientLedgerFilters.search ?? ""}
-                onChange={(changeEvent) =>
-                  setClientLedgerFilters((currentFilters) => ({
-                    ...currentFilters,
-                    search: changeEvent.target.value || undefined,
-                  }))
-                }
-                placeholder="Search REF, partner, name, or passport"
-                className={`${INPUT_CLASS} min-w-64 font-normal`}
-              />
-            </label>
-
-            <label className="flex items-center gap-2 text-sm font-medium text-ink">
               Issue
               <select
                 value={selectedIssueFilter}
@@ -430,8 +429,7 @@ export function LedgerPage() {
           </div>
 
           {signedInUserEmail !== null && (
-            <div className="flex flex-col gap-1 border-t border-line pt-3">
-              <span className={FIELD_LABEL_CLASS}>Views</span>
+            <div className="border-t border-line pt-3">
               <ViewChips
                 userEmail={signedInUserEmail}
                 activeFilters={activeLedgerFilters}

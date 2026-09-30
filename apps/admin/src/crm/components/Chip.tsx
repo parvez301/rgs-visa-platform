@@ -104,12 +104,10 @@ export function AxisChip(props: AnyAxisChipProps) {
   const sizeClasses = CHIP_SIZE_CLASSES[props.size ?? "sm"];
   return (
     <span
-      className={`inline-flex items-center whitespace-nowrap rounded-full font-semibold leading-none ${sizeClasses} ${tint} ${
+      className={`inline-flex max-w-full items-center truncate rounded-full font-semibold leading-none ${sizeClasses} ${tint} ${
         isDataDebt ? DATA_DEBT_BORDER : SOLID_BORDER
       }`}
-      {...(isDataDebt
-        ? { title: "The import could not read a billing state for this case" }
-        : {})}
+      title={isDataDebt ? "The import could not read a billing state for this case" : label}
     >
       {label}
     </span>

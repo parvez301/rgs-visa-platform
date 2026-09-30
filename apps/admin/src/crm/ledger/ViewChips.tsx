@@ -80,7 +80,8 @@ function ViewChipButton({
 
 /**
  * The saved-views chip row (Task 13), grouped into Today / Billing / More so
- * six built-ins do not read as one undifferentiated pill strip.
+ * six built-ins do not read as one undifferentiated pill strip. Collapsed by
+ * default: only the active view name shows until the desk agent opens it.
  */
 export function ViewChips({
   userEmail,
@@ -91,6 +92,7 @@ export function ViewChips({
   onActiveViewIdChange,
 }: ViewChipsProps) {
   const [views, setViews] = useState<LedgerView[]>(() => loadViews(userEmail));
+  const [isExpanded, setIsExpanded] = useState(false);
   const [isNamingNewView, setIsNamingNewView] = useState(false);
   const [newViewName, setNewViewName] = useState("");
   const [saveFailureMessage, setSaveFailureMessage] = useState<string | undefined>(undefined);
@@ -100,6 +102,7 @@ export function ViewChips({
   const moreViews = views.filter(
     (view) => !isTodayLedgerViewId(view.viewId) && !isBillingLedgerViewId(view.viewId),
   );
+  const activeViewName = views.find((view) => view.viewId === activeViewId)?.name;
 
   function selectView(view: LedgerView) {
     onActiveViewIdChange(view.viewId);
@@ -155,48 +158,72 @@ export function ViewChips({
 
   return (
     <div className="flex flex-col gap-2" data-testid="view-chips">
-      {renderGroup("Today", todayViews)}
-      {renderGroup("Billing", billingViews)}
-      {renderGroup("More", moreViews)}
+      <button
+        type="button"
+        aria-expanded={isExpanded}
+        aria-controls="ledger-views-panel"
+        onClick={() => setIsExpanded((currentExpanded) => !currentExpanded)}
+        className="flex w-full items-center justify-between gap-2 rounded-md px-0 py-0.5 text-left text-sm font-medium text-ink hover:text-ink"
+      >
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className={FIELD_LABEL_CLASS}>Views</span>
+          {!isExpanded && (
+            <span className="truncate text-xs font-semibold text-ink">
+              {activeViewName ?? "Custom filters"}
+            </span>
+          )}
+        </span>
+        <span className="shrink-0 text-xs font-medium text-ink-soft">
+          {isExpanded ? "Hide" : "Show"}
+        </span>
+      </button>
 
-      <div className="flex flex-wrap items-center gap-2">
-        {isNamingNewView ? (
-          <span className="inline-flex items-center gap-1">
-            <input
-              autoFocus
-              value={newViewName}
-              onChange={(event) => setNewViewName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") confirmSaveCurrentView();
-                if (event.key === "Escape") {
-                  setIsNamingNewView(false);
-                  setNewViewName("");
-                }
-              }}
-              placeholder="Name this view"
-              aria-label="Name this view"
-              className={`${INPUT_CLASS} py-1 text-xs`}
-            />
-            <button type="button" onClick={confirmSaveCurrentView} className={COMPACT_BUTTON_CLASS}>
-              Save
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setIsNamingNewView(true)}
-            className="rounded-full border border-dashed border-ink-soft/60 bg-paper px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-ink/40 hover:text-ink"
-          >
-            + Save current view
-          </button>
-        )}
+      {isExpanded && (
+        <div id="ledger-views-panel" className="flex flex-col gap-2">
+          {renderGroup("Today", todayViews)}
+          {renderGroup("Billing", billingViews)}
+          {renderGroup("More", moreViews)}
 
-        {saveFailureMessage !== undefined && (
-          <span role="status" className="text-xs text-rgs-red-deep">
-            {saveFailureMessage}
-          </span>
-        )}
-      </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {isNamingNewView ? (
+              <span className="inline-flex items-center gap-1">
+                <input
+                  autoFocus
+                  value={newViewName}
+                  onChange={(event) => setNewViewName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") confirmSaveCurrentView();
+                    if (event.key === "Escape") {
+                      setIsNamingNewView(false);
+                      setNewViewName("");
+                    }
+                  }}
+                  placeholder="Name this view"
+                  aria-label="Name this view"
+                  className={`${INPUT_CLASS} py-1 text-xs`}
+                />
+                <button type="button" onClick={confirmSaveCurrentView} className={COMPACT_BUTTON_CLASS}>
+                  Save
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsNamingNewView(true)}
+                className="rounded-full border border-dashed border-ink-soft/60 bg-paper px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-ink/40 hover:text-ink"
+              >
+                + Save current view
+              </button>
+            )}
+
+            {saveFailureMessage !== undefined && (
+              <span role="status" className="text-xs text-rgs-red-deep">
+                {saveFailureMessage}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

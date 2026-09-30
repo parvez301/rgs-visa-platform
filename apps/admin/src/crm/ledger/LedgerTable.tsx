@@ -368,13 +368,14 @@ export function LedgerTable({
   });
 
   const gridTemplateColumns = LEDGER_COLUMNS.map((column) => `${column.width}px`).join(" ");
+  const gridMinWidthPx = LEDGER_COLUMNS.reduce((widthSum, column) => widthSum + column.width, 0);
 
   return (
-    <div className="crm-root relative flex h-full flex-col overflow-hidden rounded-2xl border border-line bg-paper">
+    <div className="crm-root relative flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper">
       <div
         data-testid="ledger-header"
         className="mrz sticky top-0 z-20 grid border-b border-line bg-mist text-[10px] text-ink-soft"
-        style={{ gridTemplateColumns, height: LEDGER_ROW_HEIGHT }}
+        style={{ gridTemplateColumns, height: LEDGER_ROW_HEIGHT, minWidth: gridMinWidthPx }}
       >
         {LEDGER_COLUMNS.map((column) => (
           <div
@@ -390,7 +391,7 @@ export function LedgerTable({
       <div
         data-testid="ledger-scroll"
         ref={scrollContainerRef}
-        className="flex-1 overflow-auto"
+        className="min-w-0 flex-1 overflow-auto"
         role="grid"
         tabIndex={0}
         onKeyDown={(event) => handleGridKeyDown(event.nativeEvent)}
@@ -398,7 +399,7 @@ export function LedgerTable({
         {rows.length === 0 ? (
           <p className="p-6 text-sm text-ink-soft">No cases match these filters.</p>
         ) : (
-          <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+          <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", minWidth: gridMinWidthPx }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index]!;
               const isRowSelected = gridState.selectedRowIndexes.includes(virtualRow.index);
@@ -438,9 +439,10 @@ export function LedgerTable({
                   key={row.caseId}
                   data-testid="ledger-row"
                   data-case-id={row.caseId}
-                  className={`absolute left-0 w-full border-b border-line ${rowBackgroundClass}`}
+                  className={`absolute left-0 border-b border-line ${rowBackgroundClass}`}
                   style={{
                     height: virtualRow.size,
+                    width: gridMinWidthPx,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                 >

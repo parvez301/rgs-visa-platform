@@ -26,8 +26,8 @@ interface CrmLayoutProps {
  * `role="dialog"`, `aria-modal` or `inert`, and the main column stays fully
  * interactive whatever the panel is doing.
  *
- * Width is `wide` (~1440px), not full-bleed: ultrawide full-width stretched
- * the Ledger into thin cells and a sparse filter bar. The panel starts CLOSED
+ * Width is full-bleed inside the admin shell so the fixed-px Ledger columns
+ * have room before horizontal scroll kicks in. The panel starts CLOSED
  * and is opened from a floating button pinned to the bottom-right corner of
  * the viewport (the owner's placement, 2026-09-16). Open/closed lives in
  * `AgentPanelProvider`, above the routes, so a panel opened on the Ledger is
@@ -59,7 +59,7 @@ export function CrmLayout({ children, agentPanel }: CrmLayoutProps) {
   }
 
   return (
-    <AdminShell contentWidth="wide">
+    <AdminShell contentWidth="full">
       <div
         className="crm-root relative grid h-[calc(100vh-112px)] min-h-[480px]"
         style={{

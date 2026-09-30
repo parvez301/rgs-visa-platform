@@ -91,16 +91,18 @@ export function AdminShell({
   return (
     <div className="flex min-h-screen">
       <aside className="sticky top-0 flex h-screen w-[220px] shrink-0 flex-col bg-ink text-paper">
-        <Link to="/" className="flex items-center gap-3 px-4 py-5">
-          <img
-            src="/brand/rgs-logo.png"
-            alt="Rays Global Services"
-            className="h-6 w-auto brightness-0 invert"
-          />
-          <span className="mrz rounded border border-rgs-red px-1.5 py-0.5 text-[10px] text-rgs-red">
+        <div className="space-y-2 px-4 py-5">
+          <Link to="/" className="block min-w-0">
+            <img
+              src="/brand/rgs-logo.png"
+              alt="Rays Global Services"
+              className="h-6 w-auto max-w-full brightness-0 invert"
+            />
+          </Link>
+          <span className="mrz inline-flex rounded bg-rgs-red px-1.5 py-0.5 text-[10px] font-semibold leading-none text-paper">
             Admin
           </span>
-        </Link>
+        </div>
         <nav className="flex-1 overflow-y-auto px-3 py-2">
           <ul className="space-y-1">
             {ADMIN_NAV_LINKS.filter((navLink) => canAccess(navLink.screen)).map((navLink) => (

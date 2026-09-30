@@ -90,6 +90,7 @@ describe("LedgerTable", () => {
       "billingStatus",
       "receivedDate",
       "appointmentDate",
+      "expectedCollectionDate",
       "totalInr",
     ]);
   });

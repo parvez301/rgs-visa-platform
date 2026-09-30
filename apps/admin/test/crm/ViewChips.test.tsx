@@ -35,8 +35,16 @@ function renderViewChips() {
   return { ...result, onApplyView };
 }
 
+async function expandViews(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  const toggle = screen.getByRole("button", { name: /Views/i });
+  if (toggle.getAttribute("aria-expanded") !== "true") {
+    await user.click(toggle);
+  }
+}
+
 /** Walks the naming flow a desk agent walks: open the box, name it, press Save. */
 async function saveCurrentViewAs(user: ReturnType<typeof userEvent.setup>, viewName: string): Promise<void> {
+  await expandViews(user);
   await user.click(screen.getByRole("button", { name: "+ Save current view" }));
   await user.type(screen.getByLabelText("Name this view"), viewName);
   await user.click(screen.getByRole("button", { name: "Save" }));
@@ -50,8 +58,14 @@ function pressedChipNames(): string[] {
 }
 
 describe("ViewChips", () => {
-  it("ships the built-in views and offers no delete affordance for them", () => {
+  it("starts collapsed and expands to the built-in views", async () => {
+    const user = userEvent.setup();
     renderViewChips();
+
+    expect(screen.queryByTestId("view-chip")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Views/i })).toHaveAttribute("aria-expanded", "false");
+
+    await expandViews(user);
 
     expect(screen.getAllByTestId("view-chip").map((chip) => chip.textContent)).toEqual([
       "Live work",
@@ -107,6 +121,7 @@ describe("ViewChips", () => {
     // screen to read it off.
     const user = userEvent.setup();
     renderViewChips();
+    await expandViews(user);
     await user.click(screen.getByRole("button", { name: "+ Save current view" }));
 
     const saveButton = screen.getByRole("button", { name: "Save" });
