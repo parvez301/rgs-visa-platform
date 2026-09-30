@@ -24,14 +24,14 @@ describe("statusEmailTemplatePartitionKey", () => {
 
 describe("getStatusEmailTemplate", () => {
   it("returns undefined when nothing is stored", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     expect(await getStatusEmailTemplate(context, TENANT_ID, "NEW")).toBeUndefined();
   });
 });
 
 describe("upsertStatusEmailTemplate", () => {
   it("stores the template stamped with actor and time, and reads it back", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     const written = await upsertStatusEmailTemplate(
       context,
       TENANT_ID,
@@ -54,7 +54,7 @@ describe("upsertStatusEmailTemplate", () => {
   });
 
   it("overwrites an earlier template", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     await upsertStatusEmailTemplate(context, TENANT_ID, "NEW", { subject: "a", body: "b", enabled: true }, ACTOR);
     context.advanceClock(1000);
     const second = await upsertStatusEmailTemplate(
@@ -70,7 +70,7 @@ describe("upsertStatusEmailTemplate", () => {
   });
 
   it("rejects an empty body with a 400", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     await expect(
       upsertStatusEmailTemplate(context, TENANT_ID, "NEW", { subject: "a", body: "   ", enabled: true }, ACTOR),
     ).rejects.toMatchObject({ statusCode: 400 });
@@ -79,7 +79,7 @@ describe("upsertStatusEmailTemplate", () => {
 
 describe("listStatusEmailTemplates", () => {
   it("returns one valid entry per case status, defaults with epoch updatedAt and empty updatedBy", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     const listed = await listStatusEmailTemplates(context, TENANT_ID);
     expect(listed.map((template) => template.caseStatus)).toEqual([...crm.CASE_STATUSES]);
     for (const template of listed) {
@@ -91,7 +91,7 @@ describe("listStatusEmailTemplates", () => {
   });
 
   it("returns the stored row in place of the default", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     const stored = await upsertStatusEmailTemplate(
       context,
       TENANT_ID,
@@ -106,7 +106,7 @@ describe("listStatusEmailTemplates", () => {
   });
 
   it("does not persist defaults", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     await listStatusEmailTemplates(context, TENANT_ID);
     expect(await getStatusEmailTemplate(context, TENANT_ID, "NEW")).toBeUndefined();
   });
@@ -114,7 +114,7 @@ describe("listStatusEmailTemplates", () => {
 
 describe("resetStatusEmailTemplate", () => {
   it("overwrites a customised template with the default, stamped with actor and time", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     await upsertStatusEmailTemplate(context, TENANT_ID, "NEW", { subject: "x", body: "y", enabled: false }, ACTOR);
     context.advanceClock(5000);
     const reset = await resetStatusEmailTemplate(context, TENANT_ID, "NEW", "boss@rgs.local");
@@ -131,7 +131,7 @@ describe("resetStatusEmailTemplate", () => {
 
 describe("seedStatusEmailTemplatesIfAbsent", () => {
   it("seed inserts defaults once; second seed inserts zero", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     const first = await seedStatusEmailTemplatesIfAbsent(context, TENANT_ID, ACTOR);
     const second = await seedStatusEmailTemplatesIfAbsent(context, TENANT_ID, ACTOR);
     expect(first).toBe(crm.CASE_STATUSES.length);
@@ -141,7 +141,7 @@ describe("seedStatusEmailTemplatesIfAbsent", () => {
   });
 
   it("does not overwrite a desk edit", async () => {
-    const context = buildTestContext();
+    const context = buildTestContext({ seedStatusEmailTemplates: false });
     await upsertStatusEmailTemplate(context, TENANT_ID, "NEW", { subject: "mine", body: "mine", enabled: true }, ACTOR);
     const inserted = await seedStatusEmailTemplatesIfAbsent(context, TENANT_ID, "seed@rgs.local");
     expect(inserted).toBe(crm.CASE_STATUSES.length - 1);

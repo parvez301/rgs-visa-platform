@@ -119,6 +119,19 @@ describe("Timeline", () => {
     expect(screen.getByText(/Application Received/)).toBeInTheDocument();
     expect(screen.getByText(/Documents Under Review/)).toBeInTheDocument();
   });
+
+  it("reads a CREATE notification as an initial email, not a transition", () => {
+    render(
+      <Timeline
+        events={[
+          { eventId: "e2", eventType: "PARTNER_NOTIFIED", caseId: "case_1", actorEmail: "ops@rgs.test", meta: { channel: "email", toAddress: "desk@skyline.test", toStatus: "NEW", reason: "CREATE" }, createdAt: "2026-03-04T10:00:00.000Z" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Partner notified by ops@rgs.test")).toBeInTheDocument();
+    expect(screen.getByText("Email to desk@skyline.test on create (Application Received)")).toBeInTheDocument();
+  });
 });
 
 describe("describeCrmEvent", () => {

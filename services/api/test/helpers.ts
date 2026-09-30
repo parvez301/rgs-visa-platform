@@ -1,10 +1,11 @@
-import type { Traveller } from "@rgs/shared";
+import { crm, type Traveller } from "@rgs/shared";
 import type { AppContext } from "../src/lib/context";
 import { InMemoryTableClient } from "../src/lib/db";
 import { InMemoryDocumentStore } from "../src/lib/documentStore";
 import { InMemoryEmailSender } from "../src/lib/email";
 import { createDraft, patchDraft } from "../src/domain/applications";
 import { recordDocumentUpload } from "../src/domain/documents";
+import { META_SORT_KEY, statusEmailTemplatePartitionKey } from "../src/domain/crm/keys";
 
 export interface TestContext extends AppContext {
   table: InMemoryTableClient;
@@ -13,10 +14,49 @@ export interface TestContext extends AppContext {
   advanceClock(milliseconds: number): void;
 }
 
-export function buildTestContext(): TestContext {
+/** The tenant every CRM test runs as. */
+const TEST_TENANT_ID = "rgs";
+
+export interface BuildTestContextOptions {
+  /**
+   * Seed the built-in status email templates for the `rgs` tenant (default
+   * true), so create + status-change mail works in every test without each
+   * one seeding first. Pass false to test the seed itself or the
+   * "no template stored" path.
+   */
+  seedStatusEmailTemplates?: boolean;
+}
+
+/**
+ * `buildTestContext` is synchronous, so this cannot await
+ * `seedStatusEmailTemplatesIfAbsent`. `InMemoryTableClient.put` has no `await`
+ * in its body, so it mutates the map during the call itself; firing the puts
+ * un-awaited therefore leaves every row in place before the caller gets the
+ * context.
+ */
+function seedStatusEmailTemplatesNow(table: InMemoryTableClient): void {
+  for (const caseStatus of crm.CASE_STATUSES) {
+    const template: crm.StatusEmailTemplate = {
+      tenantId: TEST_TENANT_ID,
+      caseStatus,
+      ...crm.defaultStatusEmailTemplate(caseStatus),
+      updatedAt: "2026-07-23T10:00:00.000Z",
+      updatedBy: "seed@rgs.local",
+    };
+    void table.put({
+      PK: statusEmailTemplatePartitionKey(TEST_TENANT_ID, caseStatus),
+      SK: META_SORT_KEY,
+      ...template,
+    });
+  }
+}
+
+export function buildTestContext(options: BuildTestContextOptions = {}): TestContext {
   let currentTimeMs = new Date("2026-07-23T10:00:00.000Z").getTime();
+  const table = new InMemoryTableClient();
+  if (options.seedStatusEmailTemplates !== false) seedStatusEmailTemplatesNow(table);
   return {
-    table: new InMemoryTableClient(),
+    table,
     documents: new InMemoryDocumentStore(),
     email: new InMemoryEmailSender(),
     adminNotificationAddress: "info@raysglobalservices.com",

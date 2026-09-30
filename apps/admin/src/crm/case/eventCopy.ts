@@ -48,8 +48,8 @@ export interface CrmEventCopy {
  * | APPLICANT_REMOVED         | applicantRef                                          | crm/cases.ts              |
  * | DOCUMENT_CHECKLIST_CHANGED| documentLabel, fromState, toState OR action=stamped | caseDocumentChecklist.ts |
  * | INVOICE_GENERATED         | fileName, totalInr, lineItemCount                   | caseInvoice.ts           |
- * | PARTNER_NOTIFIED          | channel, toAddress, fromStatus, toStatus            | statusNotify.ts          |
- * | CLIENT_NOTIFIED           | channel, toAddress, fromStatus, toStatus            | statusNotify.ts          |
+ * | PARTNER_NOTIFIED          | channel, toAddress, toStatus, fromStatus OR reason=CREATE | statusNotify.ts    |
+ * | CLIENT_NOTIFIED           | channel, toAddress, toStatus, fromStatus OR reason=CREATE | statusNotify.ts    |
  * | APPOINTMENT_REMINDER_SENT | channel, toAddress, appointmentDate                 | appointmentReminders.ts  |
  * | LINE_ITEM_ADDED           | lineItemCode, quantity, amountInr (UNIT), lineTotalInr | crm/lineItems.ts:79       |
  * | MEMORY_REMEMBERED         | scope, memoryKey, createdBy                           | crm/memory.ts:179         |
@@ -141,6 +141,21 @@ function describeLineItemAdded(meta: EventMeta): string {
     detailParts.push(`${formatInr(lineTotalInr)} added to the case total`);
   }
   return detailParts.join(" · ");
+}
+
+/**
+ * A status email is either the one sent when the case was created (`reason:
+ * "CREATE"`, no `fromStatus` -- there was no transition to describe) or the
+ * one sent on a status move. Reading a create mail as "New → New" would be a
+ * fake transition.
+ */
+function describeStatusEmail(meta: EventMeta): string {
+  const toAddress = readMetaString(meta, "toAddress") ?? "unknown";
+  if (readMetaString(meta, "reason") === "CREATE") {
+    const toStatusLabel = describeEnumValue(readMetaString(meta, "toStatus"), CASE_STATUS_LABELS);
+    return `Email to ${toAddress} on create (${toStatusLabel})`;
+  }
+  return `Email to ${toAddress} · ${describeTransition(meta, "fromStatus", "toStatus", CASE_STATUS_LABELS)}`;
 }
 
 function describeProposalApproved(event: CrmEventView, isAutoApplied: boolean): string {
@@ -291,24 +306,14 @@ export function describeCrmEvent(event: CrmEventView): CrmEventCopy {
     case "PARTNER_NOTIFIED":
       return {
         title: `Partner notified by ${actorEmail}`,
-        detail: `Email to ${readMetaString(meta, "toAddress") ?? "unknown"} · ${describeTransition(
-          meta,
-          "fromStatus",
-          "toStatus",
-          CASE_STATUS_LABELS,
-        )}`,
+        detail: describeStatusEmail(meta),
         isAutoApplied: false,
       };
 
     case "CLIENT_NOTIFIED":
       return {
         title: `Client notified by ${actorEmail}`,
-        detail: `Email to ${readMetaString(meta, "toAddress") ?? "unknown"} · ${describeTransition(
-          meta,
-          "fromStatus",
-          "toStatus",
-          CASE_STATUS_LABELS,
-        )}`,
+        detail: describeStatusEmail(meta),
         isAutoApplied: false,
       };
 
