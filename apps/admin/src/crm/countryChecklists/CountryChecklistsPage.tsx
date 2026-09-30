@@ -148,6 +148,10 @@ function ChecklistEditor({ countryCode, countryName, stored }: ChecklistEditorPr
     setDocuments((current) => (current.includes(label) ? current : [...current, label]));
   }
 
+  function clearDocuments() {
+    setDocuments([]);
+  }
+
   function removeDocument(label: string) {
     setDocuments((current) => current.filter((document) => document !== label));
   }
@@ -170,11 +174,6 @@ function ChecklistEditor({ countryCode, countryName, stored }: ChecklistEditorPr
   });
 
   function save() {
-    if (documents.length === 0) {
-      saveMutation.reset();
-      setFormError("Add at least one document.");
-      return;
-    }
     setFormError(null);
     saveMutation.mutate();
   }
@@ -192,9 +191,16 @@ function ChecklistEditor({ countryCode, countryName, stored }: ChecklistEditorPr
 
       <div className="flex flex-col gap-4 px-6 py-5">
         <div className="flex flex-col gap-2">
-          <span className={FIELD_LABEL_CLASS}>Required documents</span>
+          <div className="flex items-center justify-between gap-2">
+            <span className={FIELD_LABEL_CLASS}>Required documents</span>
+            {canEdit && documents.length > 0 && (
+              <button type="button" onClick={clearDocuments} className="text-xs text-ink-soft underline">
+                Clear all
+              </button>
+            )}
+          </div>
           {documents.length === 0 ? (
-            <p className="text-sm text-ink-soft">No documents yet.</p>
+            <p className="text-sm text-ink-soft">No documents — this country is Not configured.</p>
           ) : (
             <ul className="flex flex-wrap gap-2">
               {documents.map((label) => (

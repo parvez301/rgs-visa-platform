@@ -145,12 +145,37 @@ describe("CountryChecklistsPage", () => {
     expect(chipLabels()).toContain("Bank statement");
   });
 
-  it("refuses to save an empty checklist without calling the API", async () => {
+  it("saves an empty checklist so a country can return to Not configured", async () => {
+    const { putBodies } = renderChecklistsPage();
+    fireEvent.click(await screen.findByRole("button", { name: /United Arab Emirates/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Passport bio page" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Passport-size photo" }));
+    expect(screen.queryByTestId("checklist-doc-chip")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]).toEqual({ requiredDocuments: [], notes: "Original passport required" });
+    expect(screen.queryByText("Add at least one document.")).toBeNull();
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+  });
+
+  it("Clear all empties the chips and persists an empty list on Save", async () => {
+    const { putBodies } = renderChecklistsPage();
+    fireEvent.click(await screen.findByRole("button", { name: /United Arab Emirates/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+    expect(screen.queryByTestId("checklist-doc-chip")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]).toMatchObject({ requiredDocuments: [] });
+  });
+
+  it("saves an empty checklist for a country that has none yet", async () => {
     const { putBodies } = renderChecklistsPage();
     fireEvent.click(await screen.findByRole("button", { name: /Japan/ }));
+    expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("Add at least one document.")).toBeInTheDocument();
-    expect(putBodies).toHaveLength(0);
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]).toEqual({ requiredDocuments: [] });
   });
 
   it("shows chips read-only, without add, remove or Save, for a read-only role", async () => {
