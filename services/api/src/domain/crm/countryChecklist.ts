@@ -5,6 +5,10 @@ import { badRequest, notFound } from "../../lib/errors";
 import { parseStoredRecord, stripStorageKeys } from "../../lib/storedRecords";
 import { META_SORT_KEY, countryChecklistPartitionKey } from "./keys";
 
+// Legacy; not served over HTTP. Kept only so the migration can read old CRM
+// country checklists into CountryProduct.requiredDocuments (and for the agent
+// read tool). Live document lists come from CountryProduct.
+
 /**
  * The documents a destination country requires on every case bound for it.
  * `updatedBy` exists because "who changed the Japan list?" is exactly the

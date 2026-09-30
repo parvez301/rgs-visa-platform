@@ -35,11 +35,6 @@ import {
   type ResolveReviewGroupInput,
 } from "../domain/crm/reviewGroups";
 import { createPartner, listPartners, updatePartnerContact } from "../domain/crm/partners";
-import {
-  getCountryChecklist,
-  listCountryChecklists,
-  putCountryChecklist,
-} from "../domain/crm/countryChecklist";
 import { listDestinationCountries } from "../domain/crm/destinationCountries";
 import {
   getReviewItemOrThrow,
@@ -79,19 +74,6 @@ const UpdatePartnerContactBody = z.object({
   contactPhone: z.string().trim().min(1).nullable().optional(),
   contactWhatsapp: z.string().trim().min(1).nullable().optional(),
 });
-
-const PutCountryChecklistBody = z.object({
-  requiredDocuments: z.array(z.string().min(1)),
-  notes: z.string().optional(),
-});
-
-function parseIso2CountryCode(pathParam: string | undefined): string {
-  const countryCode = (pathParam ?? "").trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(countryCode)) {
-    throw badRequest("countryCode must be a two-letter ISO country code");
-  }
-  return countryCode;
-}
 
 const CreateCaseBody = z.object({
   caseRef: z.string().min(1),
@@ -283,37 +265,6 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
     .add("GET", "/api/v1/admin/crm/destination-countries", async (requestContext) => {
       requireScreen(requestContext, "crm");
       return { countries: await listDestinationCountries(context) };
-    })
-    // Literal list before `{countryCode}` so segment counts never collide.
-    .add("GET", "/api/v1/admin/crm/country-checklists", async (requestContext) => {
-      requireScreen(requestContext, "crm");
-      const destinations = await listDestinationCountries(context);
-      const checklists = await listCountryChecklists(
-        context,
-        tenantId,
-        destinations.map((destination) => destination.countryCode),
-      );
-      return { checklists };
-    })
-    .add("GET", "/api/v1/admin/crm/country-checklists/{countryCode}", async (requestContext) => {
-      requireScreen(requestContext, "crm");
-      const countryCode = parseIso2CountryCode(requestContext.pathParams["countryCode"]);
-      return getCountryChecklist(context, tenantId, countryCode);
-    })
-    .add("PUT", "/api/v1/admin/crm/country-checklists/{countryCode}", async (requestContext) => {
-      requireWrite(requestContext, "crm");
-      const countryCode = parseIso2CountryCode(requestContext.pathParams["countryCode"]);
-      const body = parseBody(PutCountryChecklistBody, requestContext.body);
-      return putCountryChecklist(
-        context,
-        tenantId,
-        {
-          countryCode,
-          requiredDocuments: body.requiredDocuments,
-          ...(body.notes !== undefined ? { notes: body.notes } : {}),
-        },
-        requestContext.callerEmail,
-      );
     })
     .add("POST", "/api/v1/admin/crm/travellers", async (requestContext) => {
       requireWrite(requestContext, "crm");

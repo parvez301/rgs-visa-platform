@@ -1748,7 +1748,7 @@ describe("status email template routes", () => {
   });
 });
 
-describe("CRM destination countries and country checklists", () => {
+describe("CRM destination countries", () => {
   it("lists destinations with full country names for CRM readers", async () => {
     const router = buildRouter(buildTestContext());
     const response = await call(router, "GET", "/api/v1/admin/crm/destination-countries");
@@ -1760,35 +1760,20 @@ describe("CRM destination countries and country checklists", () => {
     expect(firstCountry.countryName).not.toBe(firstCountry.countryCode);
   });
 
-  it("puts and gets a country checklist, and lists it", async () => {
+  it("does not register country-checklists admin routes", async () => {
     const router = buildRouter(buildTestContext());
-    const putResponse = await call(router, "PUT", "/api/v1/admin/crm/country-checklists/AE", {
-      requiredDocuments: ["Passport bio page", "Passport-size photo"],
-      notes: "Tourist default",
-    });
-    expect(putResponse.statusCode).toBe(200);
-    expect(putResponse.payload.countryCode).toBe("AE");
-    expect(putResponse.payload.requiredDocuments).toEqual([
-      "Passport bio page",
-      "Passport-size photo",
-    ]);
-
-    const getResponse = await call(router, "GET", "/api/v1/admin/crm/country-checklists/AE");
-    expect(getResponse.statusCode).toBe(200);
-    expect(getResponse.payload.requiredDocuments).toHaveLength(2);
-
-    const listResponse = await call(router, "GET", "/api/v1/admin/crm/country-checklists");
-    expect(listResponse.statusCode).toBe(200);
-    expect(
-      listResponse.payload.checklists.some(
-        (checklist: { countryCode: string }) => checklist.countryCode === "AE",
-      ),
-    ).toBe(true);
-  });
-
-  it("rejects a bad country code with 400", async () => {
-    const router = buildRouter(buildTestContext());
-    const response = await call(router, "GET", "/api/v1/admin/crm/country-checklists/UAE");
-    expect(response.statusCode).toBe(400);
+    for (const [method, path] of [
+      ["GET", "/api/v1/admin/crm/country-checklists"],
+      ["GET", "/api/v1/admin/crm/country-checklists/AE"],
+      ["PUT", "/api/v1/admin/crm/country-checklists/AE"],
+    ] as const) {
+      const response = await call(
+        router,
+        method,
+        path,
+        method === "PUT" ? { requiredDocuments: ["Passport bio page"] } : undefined,
+      );
+      expect(response.statusCode).toBe(404);
+    }
   });
 });
