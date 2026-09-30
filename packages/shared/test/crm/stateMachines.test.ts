@@ -65,7 +65,17 @@ describe("case status machine", () => {
   it("refuses to move backwards through the new stages", () => {
     expect(canTransitionCaseStatus("UNDER_PROCESS", "READY_FOR_SUBMISSION")).toBe(false);
     expect(canTransitionCaseStatus("PASSPORT_RECEIVED", "UNDER_PROCESS")).toBe(false);
-    expect(canTransitionCaseStatus("VISA_GRANTED", "DECIDED")).toBe(false);
+  });
+
+  it("lets a verdict widen to DECIDED, since DECIDED is the neutral superset of a verdict", () => {
+    expect(canTransitionCaseStatus("VISA_GRANTED", "DECIDED")).toBe(true);
+    expect(canTransitionCaseStatus("VISA_REFUSED", "DECIDED")).toBe(true);
+    // The group derivation that needs it: an individual verdict plus a second applicant.
+    const derivedStatus = deriveCaseStatusFromApplicants("VISA_GRANTED", ["APPROVED", "APPROVED"], {
+      isGroup: true,
+    });
+    expect(derivedStatus).toBe("DECIDED");
+    expect(canTransitionCaseStatus("VISA_GRANTED", derivedStatus)).toBe(true);
   });
 
   it("allows skipping the appointment step, since e-visas have no appointment", () => {

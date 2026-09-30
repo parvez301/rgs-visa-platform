@@ -27,7 +27,8 @@ const CASE_STATUS_HAPPY_PATH: readonly CaseStatus[] = [
 ];
 
 // VISA_GRANTED and VISA_REFUSED are siblings, each a verdict on an individual
-// case that follows DECIDED: neither leads to the other.
+// case that follows DECIDED: neither leads to the other (but each may widen
+// back to DECIDED, see the transition table).
 const CASE_STATUS_VERDICTS: readonly CaseStatus[] = ["VISA_GRANTED", "VISA_REFUSED"];
 
 /** Every status strictly after `fromStatus` on the happy path, plus CLOSED. */
@@ -51,8 +52,10 @@ const CASE_STATUS_FORWARD_TRANSITIONS: Record<CaseStatus, readonly CaseStatus[]>
   UNDER_PROCESS: laterHappyPathStatuses("UNDER_PROCESS"),
   PASSPORT_RECEIVED: laterHappyPathStatuses("PASSPORT_RECEIVED"),
   DECIDED: ["SUBMITTED", "VISA_GRANTED", "VISA_REFUSED", "CLOSED"],
-  VISA_GRANTED: ["SUBMITTED", "CLOSED"],
-  VISA_REFUSED: ["SUBMITTED", "CLOSED"],
+  // A verdict may widen to DECIDED: an individual case that gains a second
+  // applicant becomes a group, and a group is always DECIDED.
+  VISA_GRANTED: ["SUBMITTED", "DECIDED", "CLOSED"],
+  VISA_REFUSED: ["SUBMITTED", "DECIDED", "CLOSED"],
   CLOSED: [],
   NOT_SUBMITTED: [],
   WITHDRAWN: [],

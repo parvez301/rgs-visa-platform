@@ -7,6 +7,7 @@ import {
   caseStatusGsi1Pk,
   travellerPartitionKey,
 } from "../../src/domain/crm/keys";
+import { addApplicant } from "../../src/domain/crm/applicantEdits";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { readRefClaim } from "../../src/domain/crm/refClaims";
@@ -804,6 +805,48 @@ describe("crm cases", () => {
       "ops@rgs.test",
     );
     expect(granted.caseStatus).toBe("VISA_GRANTED");
+  });
+
+  it("widens an individual VISA_GRANTED case to DECIDED once a second applicant is added and approved", async () => {
+    const context = buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    const granted = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      created.applicants[0]!.applicantRef,
+      "APPROVED",
+      "ops@rgs.test",
+    );
+    expect(granted.caseStatus).toBe("VISA_GRANTED");
+
+    const secondTravellerId = await seedTraveller(context, "Second Traveller");
+    const grown = await addApplicant(
+      context,
+      "rgs",
+      created.caseId,
+      { travellerId: secondTravellerId },
+      "ops@rgs.test",
+    );
+    expect(grown.applicants).toHaveLength(2);
+    const secondApplicantRef = grown.applicants[1]!.applicantRef;
+
+    const decided = await changeApplicantOutcome(
+      context,
+      "rgs",
+      created.caseId,
+      secondApplicantRef,
+      "APPROVED",
+      "ops@rgs.test",
+    );
+
+    expect(decided.caseStatus).toBe("DECIDED");
+    expect((await getCase(context, "rgs", created.caseId)).caseStatus).toBe("DECIDED");
+    const events = await listCaseEvents(context, "rgs", created.caseId);
+    const wideningEvent = events.find(
+      (event) => event.eventType === "CASE_STATUS_CHANGED" && event.meta["toStatus"] === "DECIDED",
+    );
+    expect(wideningEvent?.meta["fromStatus"]).toBe("VISA_GRANTED");
   });
 
   it("refuses a no-op outcome change with a 409", async () => {
