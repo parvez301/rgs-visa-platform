@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { getCountryProduct } from "@rgs/shared";
 import { buildTestContext } from "../helpers";
-import { listActiveCountryConfig, listCountryConfig } from "../../src/domain/config";
+import {
+  listActiveCountryConfig,
+  listCountryConfig,
+  upsertCountryProduct,
+} from "../../src/domain/config";
 import { putCountryChecklist } from "../../src/domain/crm/countryChecklist";
 import {
   DEFAULT_TENANT_ID,
@@ -84,5 +88,30 @@ describe("listActiveCountryConfig with a damaged checklist row", () => {
     const aeProduct = listing.countryProducts.find((product) => product.countryCode === "AE");
     expect(aeProduct).toBeDefined();
     expect(aeProduct?.requiredDocumentLabels).toBeUndefined();
+  });
+});
+
+describe("upsertCountryProduct with read-time labels on the input", () => {
+  it("neither persists requiredDocumentLabels nor returns it", async () => {
+    const context = buildTestContext();
+    const seedUae = getCountryProduct("AE");
+
+    const upserted = await upsertCountryProduct(context, "admin_1", "admin@example.com", {
+      ...seedUae,
+      docsRequired: [...seedUae.docsRequired],
+      requiredDocumentLabels: ["Leaked from public catalog"],
+    });
+
+    expect(upserted.requiredDocumentLabels).toBeUndefined();
+    expect("requiredDocumentLabels" in upserted).toBe(false);
+
+    const storedRow = await context.table.get("CONFIG#COUNTRY", `AE#${seedUae.productCode}`);
+    expect(storedRow).toBeDefined();
+    expect(storedRow).not.toHaveProperty("requiredDocumentLabels");
+
+    const storedRows = await context.table.query("CONFIG#COUNTRY");
+    for (const row of storedRows) {
+      expect(row).not.toHaveProperty("requiredDocumentLabels");
+    }
   });
 });
