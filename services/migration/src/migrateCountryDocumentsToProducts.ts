@@ -122,10 +122,14 @@ function requiredDocumentsFromChecklistLabels(checklistLabels: readonly string[]
  * (`docsRequired`) is converted label-for-label. `docsRequired` is dropped on
  * write. Already-converted rows are skipped. Checklist rows are left in place.
  *
- * One bad row never blocks the rest: a merged product that fails
- * `CountryProductSchema`, or whose country checklist is unreadable, is left
- * exactly as stored, counted and named in the report, and picked up by a
- * re-run once the data is fixed.
+ * A merged product that fails `CountryProductSchema`, or whose country
+ * checklist is unreadable, does not block the rest: it is left exactly as
+ * stored, counted and named in the report, and picked up by a re-run once the
+ * data is fixed. A row the migration cannot even identify is different --
+ * a missing `countryCode`/`productCode` or an unreadable `docsRequired`
+ * throws and stops the run, naming the row, because guessing at a
+ * half-written catalog row is worse than making an operator look at it.
+ * Idempotency makes that re-run safe.
  */
 export async function migrateCountryDocumentsToProducts(
   context: AppContext,
