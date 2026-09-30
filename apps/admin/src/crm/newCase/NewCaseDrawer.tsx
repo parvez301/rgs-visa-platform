@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
-import { crm } from "@rgs/shared";
+import { crm, labelsForCountryCode } from "@rgs/shared";
 import { useAuth } from "../../lib/auth";
-import { ApiRequestError } from "../../lib/adminApi";
+import { adminApi } from "../../lib/adminApi";
 import { crmClient, type CreateCaseInput } from "../api/crmClient";
 import { crmQueryKeys, usePartners } from "../api/hooks";
 import { LEDGER_CACHE_KEY_PREFIX } from "../api/mutations";
@@ -81,25 +81,13 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
     },
     enabled: idToken !== null,
   });
-  const countryChecklistQuery = useQuery({
-    queryKey: ["crm", "country-checklist", destinationCountry],
-    queryFn: async () => {
-      try {
-        return await crmClient.getCountryChecklist(idToken!, destinationCountry);
-      } catch (error) {
-        if (error instanceof ApiRequestError && error.statusCode === 404) {
-          return {
-            countryCode: destinationCountry,
-            requiredDocuments: [] as string[],
-            updatedAt: "",
-            updatedBy: "",
-          };
-        }
-        throw error;
-      }
-    },
+  const configCountriesQuery = useQuery({
+    // Same key as Config and the other admin pages, so a Config save refreshes this preview.
+    queryKey: ["admin-countries"],
+    queryFn: () => adminApi.listCountries(idToken!),
     enabled: idToken !== null && destinationCountry !== "",
   });
+  const previewLabels = labelsForCountryCode(configCountriesQuery.data ?? [], destinationCountry);
 
   useEffect(() => {
     function closeOnEscape(keyboardEvent: KeyboardEvent) {
@@ -329,16 +317,16 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
             {destinationCountry !== "" && (
               <div className="sm:col-span-2 rounded-md border border-line bg-mist/50 px-3 py-2 text-sm text-ink">
                 <p className={FIELD_LABEL_CLASS}>Documents stamped on this case</p>
-                {countryChecklistQuery.isLoading ? (
-                  <p className="text-ink-soft">Loading checklist…</p>
-                ) : (countryChecklistQuery.data?.requiredDocuments.length ?? 0) === 0 ? (
+                {configCountriesQuery.isLoading ? (
+                  <p className="text-ink-soft">Loading documents…</p>
+                ) : previewLabels.length === 0 ? (
                   <p className="text-ink-soft">
-                    No document checklist for this country yet. Configure required documents under Doc
-                    checklists before creating cases here.
+                    No required documents for this country yet. Add them under Config before creating
+                    cases here.
                   </p>
                 ) : (
                   <ul className="mt-1 list-disc pl-5">
-                    {countryChecklistQuery.data!.requiredDocuments.map((documentLabel) => (
+                    {previewLabels.map((documentLabel) => (
                       <li key={documentLabel}>{documentLabel}</li>
                     ))}
                   </ul>

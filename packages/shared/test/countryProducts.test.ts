@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   COUNTRY_PRODUCTS,
+  type CountryProduct,
   UnknownCountryProductError,
   getCountryProduct,
   CountryProductSchema,
   documentLabelsFromProduct,
   getDocsChecklist,
+  labelsForCountryCode,
   listActiveProducts,
   portalDocTypesFromProduct,
   requiredDocumentsFromLegacyDocTypes,
@@ -158,5 +160,52 @@ describe("requiredDocuments helpers", () => {
       "Invitation letter",
     ]);
     expect(portalDocTypesFromProduct(countryProduct)).toEqual(["PASSPORT_BIO"]);
+  });
+});
+
+describe("labelsForCountryCode", () => {
+  const product = (overrides: Partial<CountryProduct>): CountryProduct => ({
+    ...baseCountryProduct,
+    countryCode: "AE",
+    requiredDocuments: [],
+    ...overrides,
+  });
+
+  it("returns nothing for a country with no product", () => {
+    expect(labelsForCountryCode([product({})], "ZZ")).toEqual([]);
+  });
+
+  it("prefers active products, FULFILLED first, and dedupes labels by normalized text", () => {
+    const labels = labelsForCountryCode(
+      [
+        product({
+          productCode: "a",
+          tier: "INFO_ONLY",
+          requiredDocuments: [{ label: "Hotel booking" }, { label: " passport bio page " }],
+        }),
+        product({
+          productCode: "b",
+          tier: "FULFILLED",
+          requiredDocuments: [{ label: "Passport bio page" }],
+        }),
+        product({
+          productCode: "c",
+          tier: "FULFILLED",
+          active: false,
+          requiredDocuments: [{ label: "Inactive only" }],
+        }),
+      ],
+      "AE",
+    );
+    expect(labels).toEqual(["Passport bio page", "Hotel booking"]);
+  });
+
+  it("falls back to inactive products when none is active", () => {
+    expect(
+      labelsForCountryCode(
+        [product({ active: false, requiredDocuments: [{ label: "Inactive only" }] })],
+        "AE",
+      ),
+    ).toEqual(["Inactive only"]);
   });
 });

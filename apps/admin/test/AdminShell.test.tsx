@@ -55,14 +55,11 @@ describe("AdminShell navigation", () => {
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
   });
 
-  it("shows Doc checklists as a top-level link and nests Status emails under Cases", () => {
+  it("nests Status emails under Cases and has no Doc checklists link", () => {
     renderShell("Owner");
 
     expect(screen.getByRole("link", { name: "Cases" })).toHaveAttribute("href", "/crm");
-    expect(screen.getByRole("link", { name: "Doc checklists" })).toHaveAttribute(
-      "href",
-      "/crm/country-checklists",
-    );
+    expect(screen.queryByRole("link", { name: "Doc checklists" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Status emails" })).toHaveAttribute(
       "href",
       "/crm/status-emails",
@@ -72,12 +69,12 @@ describe("AdminShell navigation", () => {
   });
 
   it("hides a Cases child the role cannot reach while keeping Cases itself", () => {
-    // Viewer has crm read (so Cases and Doc checklists stay) but crmReview
+    // Viewer has crm read (so Cases stays) but crmReview
     // "none", which is the only thing that hides the Review child.
     renderShell("Viewer");
 
     expect(screen.getByRole("link", { name: "Cases" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Doc checklists" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Doc checklists" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Review" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Config" })).not.toBeInTheDocument();
   });

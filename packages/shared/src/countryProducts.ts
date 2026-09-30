@@ -104,6 +104,45 @@ export function documentLabelsFromProduct(countryProduct: CountryProduct): strin
   return countryProduct.requiredDocuments.map((requiredDocument) => requiredDocument.label);
 }
 
+/**
+ * Labels to stamp on a case for one destination country, from that country's
+ * products (the caller passes every product and the country code).
+ *
+ * Several products can share one country code (one per visa type). Active
+ * products win (all of them, when none is active); FULFILLED sorts before
+ * INFO_ONLY; labels append in that order, skipping duplicates by normalized
+ * (trimmed, lower-cased) text. Empty when the country has no product.
+ */
+export function labelsForCountryCode(
+  countryProducts: readonly CountryProduct[],
+  countryCode: string,
+): string[] {
+  const forCountry = countryProducts.filter(
+    (countryProduct) => countryProduct.countryCode === countryCode,
+  );
+  if (forCountry.length === 0) return [];
+
+  const activeProducts = forCountry.filter((countryProduct) => countryProduct.active);
+  const chosenProducts = activeProducts.length > 0 ? activeProducts : forCountry;
+  const tierRank = (tier: string): number => (tier === "FULFILLED" ? 0 : 1);
+  // Array#sort is stable, so equal-tier products keep catalog order.
+  const orderedProducts = [...chosenProducts].sort(
+    (left, right) => tierRank(left.tier) - tierRank(right.tier),
+  );
+
+  const seenLabels = new Set<string>();
+  const labels: string[] = [];
+  for (const countryProduct of orderedProducts) {
+    for (const label of documentLabelsFromProduct(countryProduct)) {
+      const normalizedLabel = label.trim().toLowerCase();
+      if (seenLabels.has(normalizedLabel)) continue;
+      seenLabels.add(normalizedLabel);
+      labels.push(label);
+    }
+  }
+  return labels;
+}
+
 export function portalDocTypesFromProduct(countryProduct: CountryProduct): DocType[] {
   const portalDocTypes: DocType[] = [];
   for (const requiredDocument of countryProduct.requiredDocuments) {

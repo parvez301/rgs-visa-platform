@@ -35,7 +35,7 @@ function jsonResponse(status: number, payload: unknown) {
  * the case itself with the ids those calls returned.
  */
 function renderDrawer(
-  options: { passportIsKnown?: boolean; caseWriteFails?: boolean; checklistEmpty?: boolean } = {},
+  options: { passportIsKnown?: boolean; caseWriteFails?: boolean; configHasNoDocuments?: boolean } = {},
 ) {
   const requestLog: LoggedRequest[] = [];
   const fetchMock = vi.fn((url: string, init: RequestInit = {}) => {
@@ -53,17 +53,20 @@ function renderDrawer(
     }
     if (requestUrl.endsWith("/config/countries")) {
       return jsonResponse(200, {
-        countryProducts: [{ countryCode: "AE", countryName: "United Arab Emirates" }],
+        countryProducts: [
+          {
+            countryCode: "AE",
+            productCode: "AE-TOURIST",
+            countryName: "United Arab Emirates",
+            tier: "FULFILLED",
+            active: true,
+            requiredDocuments:
+              options.configHasNoDocuments === true
+                ? []
+                : [{ label: "Passport bio page" }, { label: "Passport-size photo" }],
+          },
+        ],
         unreadableCountryProductIds: [],
-      });
-    }
-    if (requestUrl.includes("/crm/country-checklists/")) {
-      return jsonResponse(200, {
-        countryCode: "AE",
-        requiredDocuments:
-          options.checklistEmpty === true ? [] : ["Passport bio page", "Passport-size photo"],
-        updatedAt: "2026-09-30T00:00:00.000Z",
-        updatedBy: "seed",
       });
     }
     if (requestMethod === "GET" && requestUrl.endsWith("/crm/partners")) {
@@ -125,10 +128,19 @@ afterEach(() => {
 });
 
 describe("NewCaseDrawer", () => {
-  it("points an empty country checklist preview at Doc checklists", async () => {
-    renderDrawer({ checklistEmpty: true });
+  it("previews the destination's required documents from Config and never calls the old checklist endpoint", async () => {
+    const { requestLog } = renderDrawer();
     await fillTheCommonFields();
-    expect(await screen.findByText(/doc checklists/i)).toBeInTheDocument();
+    expect(await screen.findByText("Passport bio page")).toBeInTheDocument();
+    expect(screen.getByText("Passport-size photo")).toBeInTheDocument();
+    expect(requestLog.some((request) => request.url.includes("country-checklists"))).toBe(false);
+  });
+
+  it("points an empty documents preview at Config", async () => {
+    renderDrawer({ configHasNoDocuments: true });
+    await fillTheCommonFields();
+    expect(await screen.findByText(/under config/i)).toBeInTheDocument();
+    expect(screen.queryByText(/doc checklists/i)).not.toBeInTheDocument();
   });
 
   it("refuses to submit until every required field is filled, naming the first gap", async () => {

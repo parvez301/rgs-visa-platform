@@ -31,7 +31,6 @@ export const ADMIN_NAV_LINKS: readonly AdminNavLink[] = [
       { label: "Status emails", to: "/crm/status-emails", screen: "crm" },
     ],
   },
-  { label: "Doc checklists", to: "/crm/country-checklists", screen: "crm" },
   { label: "Notices", to: "/notices", screen: "notices" },
   { label: "Config", to: "/config", screen: "config" },
   { label: "Users", to: "/admin/users", screen: "adminUsers" },

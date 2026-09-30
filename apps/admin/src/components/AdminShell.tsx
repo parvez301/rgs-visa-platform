@@ -6,7 +6,7 @@ import { ADMIN_NAV_LINKS, type AdminNavLink } from "../lib/navLinks";
 
 /**
  * Cases owns `/crm` and `/crm/cases/:id`, but not its sibling destinations
- * (Review, Status emails, Doc checklists) that also live under `/crm/...`.
+ * (Review, Status emails) that also live under `/crm/...`.
  */
 function isCasesParentActive(pathname: string): boolean {
   return pathname === "/crm" || pathname.startsWith("/crm/cases/");
