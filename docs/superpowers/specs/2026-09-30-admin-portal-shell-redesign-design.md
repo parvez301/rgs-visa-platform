@@ -1,7 +1,7 @@
 # Admin portal shell redesign + Cases dual-pane + shared country checklists
 
 Date: 2026-09-30  
-Status: draft — awaiting owner review before implementation plan  
+Status: approved — implemented in progress on branch `feat/admin-portal-shell-redesign` (not shipped to prod)  
 Origin: brainstorm 2026-09-30 (sidebar shell, Cases table/detail/drawer, dual-pane
 case layout, Doc checklists as top-level nav, marketing catalog merge).  
 Interactive prototype (staging seed):
