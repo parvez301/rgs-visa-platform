@@ -43,7 +43,7 @@ export interface CountryProduct {
    * at read time by `GET /api/v1/config/countries`. Never stored in Config;
    * absent/empty means "fall back to `docsRequired` labels".
    */
-  requiredDocumentLabels?: string[];
+  requiredDocumentLabels?: readonly string[];
   active: boolean;
   /** Official government source for the facts — shown for trust, used at review time. */
   officialUrl?: string;
