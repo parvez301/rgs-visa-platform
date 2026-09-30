@@ -14,6 +14,7 @@ import { LeadsPage } from "./pages/LeadsPage";
 import { CasePage } from "./crm/case/CasePage";
 import { LedgerPage } from "./crm/ledger/LedgerPage";
 import { ReviewPage } from "./crm/review/ReviewPage";
+import { StatusEmailsPage } from "./crm/statusEmails/StatusEmailsPage";
 import { NoticesPage } from "./pages/NoticesPage";
 import { NoAccessPage } from "./pages/NoAccessPage";
 import { QueuePage } from "./pages/QueuePage";
@@ -136,6 +137,16 @@ createRoot(document.getElementById("root")!).render(
               <RequireAuth>
                 <RequireScreen screen="crmReview">
                   <ReviewPage />
+                </RequireScreen>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/crm/status-emails"
+            element={
+              <RequireAuth>
+                <RequireScreen screen="crm">
+                  <StatusEmailsPage />
                 </RequireScreen>
               </RequireAuth>
             }

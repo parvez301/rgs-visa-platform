@@ -586,6 +586,28 @@ export const crmClient = {
     });
   },
 
+  listStatusEmailTemplates(idToken: string): Promise<{ templates: crm.StatusEmailTemplate[] }> {
+    return apiFetch<{ templates: crm.StatusEmailTemplate[] }>(`${CRM_BASE}/status-email-templates`, { idToken });
+  },
+
+  putStatusEmailTemplate(
+    idToken: string,
+    caseStatus: crm.CaseStatus,
+    body: crm.UpsertStatusEmailTemplateBody,
+  ): Promise<crm.StatusEmailTemplate> {
+    return apiFetch<crm.StatusEmailTemplate>(
+      `${CRM_BASE}/status-email-templates/${encodeURIComponent(caseStatus)}`,
+      { method: "PUT", body, idToken },
+    );
+  },
+
+  resetStatusEmailTemplate(idToken: string, caseStatus: crm.CaseStatus): Promise<crm.StatusEmailTemplate> {
+    return apiFetch<crm.StatusEmailTemplate>(
+      `${CRM_BASE}/status-email-templates/${encodeURIComponent(caseStatus)}/reset`,
+      { method: "POST", idToken },
+    );
+  },
+
   runAgentTurn(
     idToken: string,
     body: { userMessage: string; conversation: AgentMessageWire[] },
