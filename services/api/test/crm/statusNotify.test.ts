@@ -35,14 +35,14 @@ describe("status-change email", () => {
       ACTOR,
     );
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
     expect(context.email.sentEmails).toHaveLength(1);
     expect(context.email.sentEmails[0]).toMatchObject({
       toAddress: "desk@skyline.test",
       subject: expect.stringContaining("RGS-MAIL-1"),
     });
-    expect(context.email.sentEmails[0]!.bodyText).toContain("In progress");
+    expect(context.email.sentEmails[0]!.bodyText).toContain("Documents Under Review");
     expect(context.email.sentEmails[0]!.bodyText).toContain("New");
 
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
@@ -73,7 +73,7 @@ describe("status-change email", () => {
       ACTOR,
     );
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
     expect(context.email.sentEmails).toHaveLength(0);
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
@@ -104,9 +104,9 @@ describe("status-change email", () => {
       ACTOR,
     );
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
-    expect(context.email.sentEmails[0]!.subject).toBe("RGS-MAIL-3 – In progress – Asha Rao – United Arab Emirates");
+    expect(context.email.sentEmails[0]!.subject).toBe("RGS-MAIL-3 – Documents Under Review – Asha Rao – United Arab Emirates");
   });
 
   it("names the first applicant and counts the rest when a case carries several", async () => {
@@ -139,9 +139,9 @@ describe("status-change email", () => {
       ACTOR,
     );
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
-    expect(context.email.sentEmails[0]!.subject).toBe("RGS-MAIL-4 – In progress – Asha Rao +2 – United Arab Emirates");
+    expect(context.email.sentEmails[0]!.subject).toBe("RGS-MAIL-4 – Documents Under Review – Asha Rao +2 – United Arab Emirates");
   });
 
   it("emails the client too when the case carries a clientEmail, and records CLIENT_NOTIFIED", async () => {
@@ -164,7 +164,7 @@ describe("status-change email", () => {
       ACTOR,
     );
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
     expect(context.email.sentEmails.map((email) => email.toAddress)).toEqual(["desk@skyline.test", "asha@example.com"]);
     expect(context.email.sentEmails[0]!.subject).toBe(context.email.sentEmails[1]!.subject);
@@ -172,7 +172,7 @@ describe("status-change email", () => {
 
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
     const clientEvent = events.find((event) => event.eventType === "CLIENT_NOTIFIED");
-    expect(clientEvent?.meta).toEqual({ channel: "email", toAddress: "asha@example.com", fromStatus: "NEW", toStatus: "IN_PROGRESS" });
+    expect(clientEvent?.meta).toEqual({ channel: "email", toAddress: "asha@example.com", fromStatus: "NEW", toStatus: "DOCS_UNDER_REVIEW" });
     expect(events.some((event) => event.eventType === "PARTNER_NOTIFIED")).toBe(true);
   });
 
@@ -195,7 +195,7 @@ describe("status-change email", () => {
       },
       ACTOR,
     );
-    await changeCaseStatus(context, TENANT_ID, clientOnly.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, clientOnly.caseId, "DOCS_UNDER_REVIEW", ACTOR);
     expect(context.email.sentEmails.map((email) => email.toAddress)).toEqual(["asha@example.com"]);
     const clientOnlyEvents = await listCaseEvents(context, TENANT_ID, clientOnly.caseId);
     expect(clientOnlyEvents.some((event) => event.eventType === "PARTNER_NOTIFIED")).toBe(false);
@@ -216,7 +216,7 @@ describe("status-change email", () => {
       },
       ACTOR,
     );
-    await changeCaseStatus(context, TENANT_ID, partnerOnly.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, partnerOnly.caseId, "DOCS_UNDER_REVIEW", ACTOR);
     expect(context.email.sentEmails.map((email) => email.toAddress)).toEqual(["asha@example.com", "desk@skyline.test"]);
     const partnerOnlyEvents = await listCaseEvents(context, TENANT_ID, partnerOnly.caseId);
     expect(partnerOnlyEvents.some((event) => event.eventType === "CLIENT_NOTIFIED")).toBe(false);
@@ -246,9 +246,9 @@ describe("status-change email", () => {
       ACTOR,
     );
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
-    expect(context.email.sentEmails[0]!.subject).toBe("RGS-2026-0912 – In progress – Sharma Family – France (Schengen)");
+    expect(context.email.sentEmails[0]!.subject).toBe("RGS-2026-0912 – Documents Under Review – Sharma Family – France (Schengen)");
   });
 
   it("lists every applicant with their REF NO, name and outcome, and the appointment date, for a group", async () => {
@@ -304,12 +304,12 @@ describe("status-change email", () => {
       ACTOR,
     );
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
     const bodyText = context.email.sentEmails[0]!.bodyText;
     expect(bodyText).not.toContain("Applicants:");
     expect(bodyText).not.toContain("Appointment date");
-    expect(bodyText).toContain("Case 31377 (destination United Arab Emirates) is now In progress (was New).");
+    expect(bodyText).toContain("Case 31377 (destination United Arab Emirates) is now Documents Under Review (was New).");
   });
 
   it("writes Unnamed applicant for a traveller that cannot be read, without failing the send", async () => {
@@ -337,7 +337,7 @@ describe("status-change email", () => {
     );
     await context.table.delete(travellerPartitionKey(TENANT_ID, ghost.travellerId), META_SORT_KEY);
 
-    await changeCaseStatus(context, TENANT_ID, created.caseId, "IN_PROGRESS", ACTOR);
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
     expect(context.email.sentEmails).toHaveLength(1);
     expect(context.email.sentEmails[0]!.bodyText).toContain("  A2 – Unnamed applicant – Pending");
@@ -411,8 +411,8 @@ describe("status-change email", () => {
       ACTOR,
     );
 
-    const subject = await buildStatusEmailSubject(context, TENANT_ID, created, "IN_PROGRESS");
+    const subject = await buildStatusEmailSubject(context, TENANT_ID, created, "DOCS_UNDER_REVIEW");
 
-    expect(subject).toBe("RGS-MAIL-8 – In progress – Asha Rao – United Arab Emirates");
+    expect(subject).toBe("RGS-MAIL-8 – Documents Under Review – Asha Rao – United Arab Emirates");
   });
 });

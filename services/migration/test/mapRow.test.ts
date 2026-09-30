@@ -190,10 +190,10 @@ describe("mapRow — pass 1", () => {
   });
 
   it("wires a note from the Status column into caseDraft", () => {
-    // "REC: BIO LETTER" maps to caseStatus IN_PROGRESS + a fixed note.
+    // "REC: BIO LETTER" maps to caseStatus DOCS_UNDER_REVIEW + a fixed note.
     const mapped = mapRow(buildRawRow({ status: "REC: BIO LETTER" }));
     expect(mapped.caseDraft.note).toBe("Biometrics letter received");
-    expect(mapped.caseDraft.caseStatus).toBe("IN_PROGRESS");
+    expect(mapped.caseDraft.caseStatus).toBe("DOCS_UNDER_REVIEW");
   });
 
   // --- Review round 1, Major 3: receivedDate's happy path and all of

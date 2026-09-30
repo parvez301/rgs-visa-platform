@@ -60,7 +60,7 @@ describe("buildLedgerWorkbookBytes", () => {
     expect(worksheet.rowCount).toBe(3);
     const headerTexts = EXPORT_COLUMNS.map((column) => column.header);
     const statusColumnNumber = headerTexts.indexOf("Status") + 1;
-    expect(worksheet.getRow(2).getCell(statusColumnNumber).value).toBe("New");
+    expect(worksheet.getRow(2).getCell(statusColumnNumber).value).toBe("Application Received");
     const nameColumnNumber = headerTexts.indexOf("Applicant") + 1;
     expect(worksheet.getRow(3).getCell(nameColumnNumber).value).toBe("RAVI RAO");
   });

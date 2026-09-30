@@ -57,7 +57,7 @@ function buildCase(applicants: crm.CaseApplicant[]): crm.CrmCase {
     caseType: "VISA",
     partnerId: "partner_1",
     destinationCountry: "AE",
-    caseStatus: "IN_PROGRESS",
+    caseStatus: "DOCS_UNDER_REVIEW",
     billingStatus: "UNBILLED",
     receivedDate: "2026-03-04",
     lineItems: [],

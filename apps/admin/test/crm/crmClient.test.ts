@@ -239,13 +239,13 @@ describe("crmClient write methods", () => {
 
     await crmClient.resolveReviewItem("token-1", "rev_1", {
       reviewStatus: "APPLIED",
-      resolvedValue: "IN_PROGRESS",
+      resolvedValue: "DOCS_UNDER_REVIEW",
     });
 
     expect(recorded[0]).toMatchObject({
       url: expect.stringContaining("/api/v1/admin/crm/review/rev_1/resolve"),
       method: "PUT",
-      body: { reviewStatus: "APPLIED", resolvedValue: "IN_PROGRESS" },
+      body: { reviewStatus: "APPLIED", resolvedValue: "DOCS_UNDER_REVIEW" },
     });
   });
 

@@ -27,7 +27,7 @@ const CASE_VIEW: CaseView = {
   partnerId: "ptn_1",
   destinationCountry: "JP",
   visaType: "TOURIST",
-  caseStatus: "IN_PROGRESS",
+  caseStatus: "DOCS_UNDER_REVIEW",
   billingStatus: "UNBILLED",
   receivedDate: "2026-09-01",
   expectedCollectionDate: "2026-09-20",

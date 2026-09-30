@@ -64,7 +64,7 @@ async function moveCaseToAnotherStatusPartition(
 ): Promise<void> {
   const storedCase = await tableClient.get(`TENANT#rgs#CASE#${caseId}`, "META");
   if (storedCase === undefined) throw new Error(`no META item seeded for ${caseId}`);
-  await tableClient.put({ ...storedCase, GSI1PK: "TENANT#rgs#CASE_STATUS#IN_PROGRESS" });
+  await tableClient.put({ ...storedCase, GSI1PK: "TENANT#rgs#CASE_STATUS#DOCS_UNDER_REVIEW" });
 }
 
 describe("DynamoTableClient query paging", () => {

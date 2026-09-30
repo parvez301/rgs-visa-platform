@@ -85,7 +85,7 @@ function buildRow(caseId: string, caseRef: string): crm.LedgerRow {
     destinationCountry: "AE",
     caseType: "VISA",
     visaType: "TOURIST",
-    caseStatus: "IN_PROGRESS",
+    caseStatus: "DOCS_UNDER_REVIEW",
     billingStatus: "UNKNOWN",
     receivedDate: "2026-03-04",
     totalInr: 12_000,

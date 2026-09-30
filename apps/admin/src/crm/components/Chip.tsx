@@ -26,13 +26,19 @@ const NEUTRAL = "bg-zinc-100 text-zinc-700";
 /** Import debt: not a value anyone chose. Amber says "look at this", the dashed rule says "unresolved". */
 const ATTENTION = "bg-amber-50 text-amber-900";
 
-/** fresh → sky; being worked → amber; scheduled → violet; filed → blue; decided → emerald; abandoned → rose; inert → neutral. */
+/** fresh → sky; being worked → amber; blocked on the client → orange; scheduled → violet; filed / at the embassy → blue; passport back → orange; decided or granted → emerald; refused or abandoned → rose; inert → neutral. */
 export const CASE_STATUS_TINTS: Record<crm.CaseStatus, string> = {
   NEW: SKY,
-  IN_PROGRESS: AMBER,
+  DOCS_UNDER_REVIEW: AMBER,
+  ADDITIONAL_DOCS_REQUIRED: ORANGE,
+  READY_FOR_SUBMISSION: VIOLET,
   APPOINTMENT_SET: VIOLET,
   SUBMITTED: BLUE,
+  UNDER_PROCESS: BLUE,
+  PASSPORT_RECEIVED: ORANGE,
   DECIDED: EMERALD,
+  VISA_GRANTED: EMERALD,
+  VISA_REFUSED: ROSE,
   NOT_SUBMITTED: ROSE,
   WITHDRAWN: ROSE,
   DUPLICATE: NEUTRAL,

@@ -215,7 +215,7 @@ function renderLedgerEditWithLiveQueries() {
       }
       // The case GET and the axis PUT both answer with the case record; only
       // the request COUNTS matter here, never the payloads.
-      return { ok: true, status: 200, json: async () => ({ caseId: "case_1", caseStatus: "IN_PROGRESS" }) };
+      return { ok: true, status: 200, json: async () => ({ caseId: "case_1", caseStatus: "DOCS_UNDER_REVIEW" }) };
     }),
   );
 
@@ -262,22 +262,22 @@ describe("useLedgerEdit", () => {
     // The whole point of optimistic: the cell must not wait for a round trip.
     const { queryClient, commitEdit, resolveRequest } = renderLedgerWithDeferredApi();
 
-    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "DOCS_UNDER_REVIEW" });
 
-    expect(cachedRow(queryClient, "case_1").caseStatus).toBe("IN_PROGRESS");
+    expect(cachedRow(queryClient, "case_1").caseStatus).toBe("DOCS_UNDER_REVIEW");
     // R78: settled inside `act` purely so the success path's `showUndo` --
     // a `setToasts` in `UndoToastProvider` -- does not land outside one and
     // warn on stderr. The assertion above is unchanged and still made BEFORE
     // the request resolves, which is the whole claim of this test.
     await act(async () => {
-      resolveRequest({ caseStatus: "IN_PROGRESS" });
+      resolveRequest({ caseStatus: "DOCS_UNDER_REVIEW" });
     });
   });
 
   it("puts the old value back when the request fails", async () => {
     const { queryClient, commitEdit, rejectRequest } = renderLedgerWithDeferredApi();
 
-    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "DOCS_UNDER_REVIEW" });
     await act(async () => {
       rejectRequest(new ApiRequestError(500, "INTERNAL", "Something went wrong"));
     });
@@ -288,7 +288,7 @@ describe("useLedgerEdit", () => {
   it("restores the whole row list, not one row, so a rollback cannot resurrect a case", async () => {
     const { queryClient, commitEdit, rejectRequest } = renderLedgerWithDeferredApi({ rowCount: 3 });
 
-    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "DOCS_UNDER_REVIEW" });
     await act(async () => {
       rejectRequest(new ApiRequestError(500, "INTERNAL", "boom"));
     });
@@ -306,13 +306,13 @@ describe("useLedgerEdit", () => {
     const secondFilterQueryKey = crmQueryKeys.ledger(["NEW"], undefined);
     queryClient.setQueryData(secondFilterQueryKey, buildLedgerLoad([buildLedgerRow()]));
 
-    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "DOCS_UNDER_REVIEW" });
 
-    expect(cachedRow(queryClient, "case_1", secondFilterQueryKey).caseStatus).toBe("IN_PROGRESS");
+    expect(cachedRow(queryClient, "case_1", secondFilterQueryKey).caseStatus).toBe("DOCS_UNDER_REVIEW");
     // R78, same reason as the test above: the assertion is already made, and
     // this only keeps the success path's toast from updating outside `act`.
     await act(async () => {
-      resolveRequest({ caseStatus: "IN_PROGRESS" });
+      resolveRequest({ caseStatus: "DOCS_UNDER_REVIEW" });
     });
   });
 
@@ -340,9 +340,9 @@ describe("useLedgerEdit", () => {
     const secondFilterQueryKey = crmQueryKeys.ledger(["NEW"], undefined);
     queryClient.setQueryData(secondFilterQueryKey, buildLedgerLoad([buildLedgerRow()]));
 
-    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "DOCS_UNDER_REVIEW" });
 
-    expect(cachedRow(queryClient, "case_1", secondFilterQueryKey).caseStatus).toBe("IN_PROGRESS");
+    expect(cachedRow(queryClient, "case_1", secondFilterQueryKey).caseStatus).toBe("DOCS_UNDER_REVIEW");
 
     await act(async () => {
       rejectRequest(new ApiRequestError(500, "INTERNAL", "boom"));
@@ -403,9 +403,9 @@ describe("useLedgerEdit", () => {
   });
 
   it("offers undo, and the undo is a real inverse write", async () => {
-    // NOT the brief's own literal NEW -> IN_PROGRESS example: nothing in
+    // NOT the brief's own literal NEW -> DOCS_UNDER_REVIEW example: nothing in
     // CASE_STATUS_FORWARD_TRANSITIONS ever transitions TO "NEW" (it is only
-    // ever a starting state), so IN_PROGRESS -> NEW is illegal and that pair
+    // ever a starting state), so DOCS_UNDER_REVIEW -> NEW is illegal and that pair
     // would always land on "cannot be undone" once the guard is wired up --
     // see the report for this finding in full. SUBMITTED <-> DECIDED is the
     // brief's own cited example of a legal round trip (spec §9: "an outcome
@@ -491,7 +491,7 @@ describe("useLedgerEdit", () => {
     // `appointmentDate` produces exactly this (finding #3).
     const { commitEdit, rejectRequest, queryClient } = renderLedgerWithDeferredApi();
 
-    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "DOCS_UNDER_REVIEW" });
     await act(async () => {
       rejectRequest(new ApiRequestError(400, "BAD_REQUEST", "appointmentDate must look like 2026-03-09"));
     });
@@ -511,7 +511,7 @@ describe("useLedgerEdit", () => {
     // could not be produced at all until `failRequestAtTheNetwork` existed.
     const { commitEdit, failRequestAtTheNetwork } = renderLedgerWithDeferredApi();
 
-    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "DOCS_UNDER_REVIEW" });
     await act(async () => {
       failRequestAtTheNetwork(new TypeError("Failed to fetch"));
     });
@@ -586,7 +586,7 @@ describe("useLedgerEdit", () => {
       expect(countGetsMatching("/crm/cases/case_1")).toBe(1);
     });
 
-    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "IN_PROGRESS" });
+    await commitEdit({ caseId: "case_1", column: "caseStatus", previousValue: "NEW", nextValue: "DOCS_UNDER_REVIEW" });
 
     // The case query IS refetched, which is what proves `onSettled` ran at all.
     await waitFor(() => expect(countGetsMatching("/crm/cases/case_1")).toBe(2));

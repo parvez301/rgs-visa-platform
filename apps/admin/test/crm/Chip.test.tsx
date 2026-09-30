@@ -17,8 +17,8 @@ describe("AxisChip", () => {
   });
 
   it("renders a taller, larger-type chip when asked for the md size", () => {
-    const { container: defaultChip } = render(<AxisChip axis="caseStatus" value="IN_PROGRESS" />);
-    const { container: largerChip } = render(<AxisChip axis="caseStatus" value="IN_PROGRESS" size="md" />);
+    const { container: defaultChip } = render(<AxisChip axis="caseStatus" value="DOCS_UNDER_REVIEW" />);
+    const { container: largerChip } = render(<AxisChip axis="caseStatus" value="DOCS_UNDER_REVIEW" size="md" />);
     const defaultClasses = defaultChip.firstElementChild!.className;
     const largerClasses = largerChip.firstElementChild!.className;
     expect(defaultClasses).toContain("h-6");
@@ -28,7 +28,7 @@ describe("AxisChip", () => {
   });
 
   it("tints a live case status differently from a decided one", () => {
-    const { container: liveChip } = render(<AxisChip axis="caseStatus" value="IN_PROGRESS" />);
+    const { container: liveChip } = render(<AxisChip axis="caseStatus" value="DOCS_UNDER_REVIEW" />);
     const { container: decidedChip } = render(<AxisChip axis="caseStatus" value="DECIDED" />);
     expect(liveChip.firstElementChild?.className).not.toBe(decidedChip.firstElementChild?.className);
   });

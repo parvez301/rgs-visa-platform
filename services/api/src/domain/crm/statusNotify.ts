@@ -7,10 +7,16 @@ import { getPartnerOrThrow } from "./partners";
 /** Desk-facing words for status emails — keep in sync with admin CASE_STATUS_LABELS. */
 const CASE_STATUS_EMAIL_LABELS: Record<crm.CaseStatus, string> = {
   NEW: "New",
-  IN_PROGRESS: "In progress",
+  DOCS_UNDER_REVIEW: "Documents Under Review",
+  ADDITIONAL_DOCS_REQUIRED: "Additional Documents Required",
+  READY_FOR_SUBMISSION: "Ready for Submission",
   APPOINTMENT_SET: "Appointment set",
   SUBMITTED: "Submitted",
+  UNDER_PROCESS: "Under Embassy Processing",
+  PASSPORT_RECEIVED: "Passport Received",
   DECIDED: "Decided",
+  VISA_GRANTED: "Visa Granted",
+  VISA_REFUSED: "Visa Refused",
   CLOSED: "Closed",
   NOT_SUBMITTED: "Not submitted",
   WITHDRAWN: "Withdrawn",

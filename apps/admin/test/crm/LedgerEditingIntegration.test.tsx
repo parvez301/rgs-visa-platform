@@ -53,7 +53,7 @@ function buildRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
     destinationCountry: "AE",
     caseType: "VISA",
     visaType: "TOURIST",
-    caseStatus: "IN_PROGRESS",
+    caseStatus: "DOCS_UNDER_REVIEW",
     billingStatus: "UNBILLED",
     receivedDate: "2026-01-01",
     totalInr: 10_000,
@@ -195,7 +195,7 @@ describe("LedgerTable: visaType editing on the Type column (fix round 1, F1)", (
 describe("LedgerTable: an unrelated re-render must not steal focus from an open editor (fix round 1, F2)", () => {
   it("does not commit and does not close the editor when something else forces LedgerTable to re-render", async () => {
     const user = userEvent.setup();
-    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    const row = buildRow({ caseStatus: "DOCS_UNDER_REVIEW" });
     const { container, requestLog, rerenderWithSameRows } = renderLedgerForEditing([row]);
 
     await user.click(mountedCell(container, "case_0000", "caseStatus"));
@@ -224,7 +224,7 @@ describe("LedgerTable: an unrelated re-render must not steal focus from an open 
 describe("LedgerTable: clicking a non-REF cell focuses it for editing (fix round 1, F3)", () => {
   it("opens the clicked cell's own editor on Enter, not the REF column's", async () => {
     const user = userEvent.setup();
-    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    const row = buildRow({ caseStatus: "DOCS_UNDER_REVIEW" });
     const { container } = renderLedgerForEditing([row]);
 
     // Before the fix, a click anywhere in the row only ever moved row focus;
@@ -237,10 +237,10 @@ describe("LedgerTable: clicking a non-REF cell focuses it for editing (fix round
     const select = screen.getByRole("combobox");
     expect(select).toBeInTheDocument();
     // Confirms it is genuinely *this* cell's editor: caseStatus's options are
-    // state-machine-filtered from "IN_PROGRESS", never the full enum.
+    // state-machine-filtered from "DOCS_UNDER_REVIEW", never the full enum.
     const optionLabels = screen.getAllByRole("option").map((option) => option.textContent);
     expect(optionLabels.length).toBeGreaterThan(0);
-    expect(optionLabels).not.toContain("New");
+    expect(optionLabels).not.toContain("Application Received");
   });
 
   it("still reaches the real conflict dialog when driven the intended way -- click REF, then arrow across", async () => {

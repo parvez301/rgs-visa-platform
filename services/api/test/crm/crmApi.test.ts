@@ -239,10 +239,10 @@ describe("crm admin routes", () => {
       router,
       "PUT",
       `/api/v1/admin/crm/cases/${created.payload.caseId}/status`,
-      { toStatus: "IN_PROGRESS" },
+      { toStatus: "DOCS_UNDER_REVIEW" },
     );
     expect(moved.statusCode).toBe(200);
-    expect(moved.payload.caseStatus).toBe("IN_PROGRESS");
+    expect(moved.payload.caseStatus).toBe("DOCS_UNDER_REVIEW");
   });
 
   it("returns 409 for an illegal transition", async () => {
@@ -266,7 +266,7 @@ describe("crm admin routes", () => {
       toStatus: "WITHDRAWN",
     });
     const illegal = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
-      toStatus: "IN_PROGRESS",
+      toStatus: "DOCS_UNDER_REVIEW",
     });
     expect(illegal.statusCode).toBe(409);
   });
@@ -333,7 +333,7 @@ describe("crm admin routes", () => {
     const approved = await call(router, "PUT", `${applicantPath}/outcome`, {
       toOutcome: "APPROVED",
     });
-    expect(approved.payload.caseStatus).toBe("DECIDED");
+    expect(approved.payload.caseStatus).toBe("VISA_GRANTED");
 
     // Passport back with its owner and the bill settled: the case closes itself.
     await call(router, "PUT", `${applicantPath}/custody`, { toCustody: "WITH_RGS" });
@@ -543,9 +543,10 @@ describe("crm admin routes", () => {
     );
     expect(moved.statusCode).toBe(200);
     expect(moved.payload.applicants[0].outcome).toBe("APPROVED");
-    // Single applicant, now decided — the derived-status rule (spec §5) fires
-    // automatically, same as custody/billing driving CLOSED.
-    expect(moved.payload.caseStatus).toBe("DECIDED");
+    // Single applicant, now approved — the derived-status rule (spec §5) fires
+    // automatically (an individual reads as VISA_GRANTED, a group as DECIDED),
+    // same as custody/billing driving CLOSED.
+    expect(moved.payload.caseStatus).toBe("VISA_GRANTED");
   });
 
   it("returns 404 changing the outcome of an applicant that does not exist", async () => {
@@ -846,13 +847,13 @@ describe("crm admin routes", () => {
       router,
       "PUT",
       `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`,
-      { reviewStatus: "APPLIED", resolvedValue: "IN_PROGRESS" },
+      { reviewStatus: "APPLIED", resolvedValue: "DOCS_UNDER_REVIEW" },
     );
     expect(resolved.statusCode).toBe(200);
     expect(resolved.payload.reviewStatus).toBe("APPLIED");
     // The chosen value and the reviewer who chose it both have to survive the
     // round trip — this is the audit record of a human decision.
-    expect(resolved.payload.resolvedValue).toBe("IN_PROGRESS");
+    expect(resolved.payload.resolvedValue).toBe("DOCS_UNDER_REVIEW");
     expect(resolved.payload.resolvedBy).toBe("ops@rgs.test");
 
     const afterResolve = await call(router, "GET", "/api/v1/admin/crm/review");

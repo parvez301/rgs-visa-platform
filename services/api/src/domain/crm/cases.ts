@@ -418,6 +418,12 @@ export async function changeApplicantOutcome(
   const derivedCaseStatus = crm.deriveCaseStatusFromApplicants(
     updatedCase.caseStatus,
     updatedApplicants.map((applicant) => applicant.outcome),
+    {
+      isGroup: crm.isCaseGroup({
+        groupName: updatedCase.groupName,
+        applicantCount: updatedApplicants.length,
+      }),
+    },
   );
   return applyDerivedCaseStatusIfLegal(context, tenantId, updatedCase, derivedCaseStatus, actorEmail);
 }

@@ -12,7 +12,7 @@ function buildRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
     destinationCountry: "AE",
     caseType: "VISA",
     visaType: "TOURIST",
-    caseStatus: "IN_PROGRESS",
+    caseStatus: "DOCS_UNDER_REVIEW",
     billingStatus: "UNBILLED",
     receivedDate: "2026-01-01",
     appointmentDate: "2026-02-01",
@@ -25,13 +25,13 @@ function buildRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
 describe("EditableCell", () => {
   it("opens on Enter and closes on Escape with the old value intact", () => {
     const onCommit = vi.fn();
-    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    const row = buildRow({ caseStatus: "DOCS_UNDER_REVIEW" });
     const { container } = render(
       <EditableCell column="caseStatus" row={row} onCommit={onCommit} isEditing={false} />,
     );
 
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-    expect(container.textContent).toContain("In progress");
+    expect(container.textContent).toContain("Documents Under Review");
 
     const staticWrapper = container.firstElementChild as HTMLElement;
     fireEvent.keyDown(staticWrapper, { key: "Enter" });
@@ -44,14 +44,14 @@ describe("EditableCell", () => {
     // Closed, and nothing was ever committed -- the old value is what is
     // still on screen because `row` itself was never touched.
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-    expect(container.textContent).toContain("In progress");
+    expect(container.textContent).toContain("Documents Under Review");
     expect(onCommit).not.toHaveBeenCalled();
   });
 
   it("commits on blur", async () => {
     const user = userEvent.setup();
     const onCommit = vi.fn();
-    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    const row = buildRow({ caseStatus: "DOCS_UNDER_REVIEW" });
     render(<EditableCell column="caseStatus" row={row} onCommit={onCommit} isEditing />);
 
     const select = screen.getByRole("combobox");
@@ -66,7 +66,7 @@ describe("EditableCell", () => {
   it("commits and stays open on Cmd+Enter", async () => {
     const user = userEvent.setup();
     const onCommit = vi.fn();
-    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    const row = buildRow({ caseStatus: "DOCS_UNDER_REVIEW" });
     render(<EditableCell column="caseStatus" row={row} onCommit={onCommit} isEditing />);
 
     const select = screen.getByRole("combobox");
@@ -83,7 +83,7 @@ describe("EditableCell", () => {
   it("closes without committing a no-op blur (the value never actually changed)", async () => {
     const user = userEvent.setup();
     const onCommit = vi.fn();
-    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    const row = buildRow({ caseStatus: "DOCS_UNDER_REVIEW" });
     render(<EditableCell column="caseStatus" row={row} onCommit={onCommit} isEditing />);
 
     await user.tab();
@@ -99,8 +99,8 @@ describe("EditableCell", () => {
     render(<EditableCell column="caseStatus" row={row} onCommit={vi.fn()} isEditing />);
 
     const optionLabels = screen.getAllByRole("option").map((option) => option.textContent);
-    expect(optionLabels).toContain("Closed");
-    expect(optionLabels).not.toContain("New");
+    expect(optionLabels).toContain("Application Closed");
+    expect(optionLabels).not.toContain("Application Received");
   });
 
   it("offers only the billing transitions the state machine allows from here", () => {
@@ -190,7 +190,7 @@ describe("EditableCell", () => {
   it("tells the grid to close its own editing state after a commit-and-close", async () => {
     const user = userEvent.setup();
     const onCloseEditor = vi.fn();
-    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    const row = buildRow({ caseStatus: "DOCS_UNDER_REVIEW" });
     render(
       <EditableCell column="caseStatus" row={row} onCommit={vi.fn()} isEditing onCloseEditor={onCloseEditor} />,
     );
@@ -203,7 +203,7 @@ describe("EditableCell", () => {
 
   it("does not tell the grid to close on a commit-and-stay", () => {
     const onCloseEditor = vi.fn();
-    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    const row = buildRow({ caseStatus: "DOCS_UNDER_REVIEW" });
     render(
       <EditableCell column="caseStatus" row={row} onCommit={vi.fn()} isEditing onCloseEditor={onCloseEditor} />,
     );
@@ -214,10 +214,10 @@ describe("EditableCell", () => {
   });
 
   it("opens the status editor on a plain click of the chip", () => {
-    const row = buildRow({ caseStatus: "IN_PROGRESS" });
+    const row = buildRow({ caseStatus: "DOCS_UNDER_REVIEW" });
     render(<EditableCell column="caseStatus" row={row} onCommit={vi.fn()} isEditing={false} />);
 
-    fireEvent.click(screen.getByText("In progress"));
+    fireEvent.click(screen.getByText("Documents Under Review"));
 
     expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
