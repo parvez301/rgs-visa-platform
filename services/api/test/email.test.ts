@@ -21,7 +21,7 @@ function buildRecordingSesClient(): { client: SESClient; sentCommands: SendEmail
 describe("SesEmailSender", () => {
   it("stamps every send with the configuration set when one is configured, so SES routes its events", async () => {
     const { client, sentCommands } = buildRecordingSesClient();
-    const sender = new SesEmailSender("no-reply@hireloop.xyz", client, { configurationSetName: "rgs-crm" });
+    const sender = new SesEmailSender("no-reply@raysglobalservices.com", client, { configurationSetName: "rgs-crm" });
 
     await sender.send({ toAddress: "desk@example.test", subject: "s", bodyText: "b" });
 
@@ -31,7 +31,7 @@ describe("SesEmailSender", () => {
 
   it("sends without a configuration set when none is configured", async () => {
     const { client, sentCommands } = buildRecordingSesClient();
-    const sender = new SesEmailSender("no-reply@hireloop.xyz", client);
+    const sender = new SesEmailSender("no-reply@raysglobalservices.com", client);
 
     await sender.send({ toAddress: "desk@example.test", subject: "s", bodyText: "b" });
 
