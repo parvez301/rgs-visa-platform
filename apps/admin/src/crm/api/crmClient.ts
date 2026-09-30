@@ -552,6 +552,37 @@ export const crmClient = {
 
   listPartners,
 
+  listDestinationCountries(
+    idToken: string,
+  ): Promise<{ countries: { countryCode: string; countryName: string }[] }> {
+    return apiFetch(`${CRM_BASE}/destination-countries`, { idToken });
+  },
+
+  listCountryChecklists(
+    idToken: string,
+  ): Promise<{ checklists: { countryCode: string; requiredDocuments: string[]; notes?: string; updatedAt: string; updatedBy: string }[] }> {
+    return apiFetch(`${CRM_BASE}/country-checklists`, { idToken });
+  },
+
+  getCountryChecklist(
+    idToken: string,
+    countryCode: string,
+  ): Promise<{ countryCode: string; requiredDocuments: string[]; notes?: string; updatedAt: string; updatedBy: string }> {
+    return apiFetch(`${CRM_BASE}/country-checklists/${encodeURIComponent(countryCode)}`, { idToken });
+  },
+
+  putCountryChecklist(
+    idToken: string,
+    countryCode: string,
+    body: { requiredDocuments: string[]; notes?: string },
+  ): Promise<{ countryCode: string; requiredDocuments: string[]; notes?: string; updatedAt: string; updatedBy: string }> {
+    return apiFetch(`${CRM_BASE}/country-checklists/${encodeURIComponent(countryCode)}`, {
+      method: "PUT",
+      body,
+      idToken,
+    });
+  },
+
   fetchReviewSummary(
     idToken: string,
   ): Promise<{ entries: OpenReviewSummaryEntry[]; unreadableReviewItemIds: string[] }> {

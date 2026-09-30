@@ -94,3 +94,33 @@ export async function findCountryChecklist(
     stripStorageKeys(storedItem),
   );
 }
+
+/**
+ * One checklist per destination we know about (from the CRM destination list).
+ * Countries with no stored row are omitted — admin UI shows them as empty.
+ */
+export async function listCountryChecklists(
+  context: AppContext,
+  tenantId: string,
+  countryCodes: readonly string[],
+): Promise<CountryChecklist[]> {
+  const checklists: CountryChecklist[] = [];
+  for (const countryCode of countryCodes) {
+    const checklist = await findCountryChecklist(context, tenantId, countryCode);
+    if (checklist !== undefined) checklists.push(checklist);
+  }
+  return checklists.sort((left, right) => left.countryCode.localeCompare(right.countryCode));
+}
+
+/** Insert-if-absent for Config → CRM migration; never overwrites desk edits. */
+export async function putCountryChecklistIfAbsent(
+  context: AppContext,
+  tenantId: string,
+  input: PutCountryChecklistInput,
+  actorEmail: string,
+): Promise<"inserted" | "skipped"> {
+  const existing = await findCountryChecklist(context, tenantId, input.countryCode);
+  if (existing !== undefined) return "skipped";
+  await putCountryChecklist(context, tenantId, input, actorEmail);
+  return "inserted";
+}

@@ -11,7 +11,8 @@
     "backfill:search-text": "tsx src/backfillSearchTextCli.ts",
     "backfill:ref-claims": "tsx src/backfillRefClaimsCli.ts",
     "backfill:case-status-rename": "tsx src/backfillCaseStatusRenameCli.ts",
-    "seed:status-email-templates": "tsx src/seedStatusEmailTemplatesCli.ts"
+    "seed:status-email-templates": "tsx src/seedStatusEmailTemplatesCli.ts",
+    "seed:country-checklists-from-config": "tsx src/seedCountryChecklistsFromConfigCli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",

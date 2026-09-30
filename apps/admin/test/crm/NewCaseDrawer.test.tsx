@@ -44,6 +44,19 @@ function renderDrawer(options: { passportIsKnown?: boolean; caseWriteFails?: boo
       url: requestUrl,
       body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
     });
+    if (requestUrl.endsWith("/crm/destination-countries")) {
+      return jsonResponse(200, {
+        countries: [{ countryCode: "AE", countryName: "United Arab Emirates" }],
+      });
+    }
+    if (requestUrl.includes("/crm/country-checklists/AE")) {
+      return jsonResponse(200, {
+        countryCode: "AE",
+        requiredDocuments: ["Passport bio page", "Passport-size photo"],
+        updatedAt: "2026-09-30T00:00:00.000Z",
+        updatedBy: "seed",
+      });
+    }
     if (requestUrl.endsWith("/config/countries")) {
       return jsonResponse(200, {
         countryProducts: [{ countryCode: "AE", countryName: "United Arab Emirates" }],
