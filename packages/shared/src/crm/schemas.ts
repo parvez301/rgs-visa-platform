@@ -219,3 +219,21 @@ export const CrmUserPrefsSchema = z.object({
   confirmedWithoutEditCount: z.number().int().nonnegative().default(0),
 });
 export type CrmUserPrefs = z.infer<typeof CrmUserPrefsSchema>;
+
+export const StatusEmailTemplateSchema = z.object({
+  tenantId,
+  caseStatus: z.enum(CASE_STATUSES),
+  subject: z.string().trim().min(1).max(200),
+  body: z.string().trim().min(1).max(8000),
+  enabled: z.boolean(),
+  updatedAt: isoDateTime,
+  updatedBy: z.string().email().or(z.literal("")),
+});
+export type StatusEmailTemplate = z.infer<typeof StatusEmailTemplateSchema>;
+
+export const UpsertStatusEmailTemplateBodySchema = z.object({
+  subject: z.string().trim().min(1).max(200),
+  body: z.string().trim().min(1).max(8000),
+  enabled: z.boolean(),
+});
+export type UpsertStatusEmailTemplateBody = z.infer<typeof UpsertStatusEmailTemplateBodySchema>;

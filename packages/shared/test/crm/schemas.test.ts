@@ -5,8 +5,11 @@ import {
   CrmMemorySchema,
   LineItemSchema,
   PartnerSchema,
+  StatusEmailTemplateSchema,
+  UpsertStatusEmailTemplateBodySchema,
   WatchdogConfigSchema,
 } from "../../src/crm/schemas";
+import { defaultStatusEmailTemplate } from "../../src/crm/statusEmailDefaults";
 import { getLineItemDefinition } from "../../src/crm/lineItems";
 
 const validApplicant = {
@@ -327,6 +330,48 @@ describe("family group fields", () => {
     expect(parsed).not.toHaveProperty("groupName");
     expect(parsed).not.toHaveProperty("clientEmail");
     expect(parsed.applicants[0]).not.toHaveProperty("refNo");
+  });
+});
+
+describe("StatusEmailTemplateSchema", () => {
+  it("accepts a stored template row", () => {
+    const seed = defaultStatusEmailTemplate("NEW");
+    expect(() =>
+      StatusEmailTemplateSchema.parse({
+        tenantId: "rgs",
+        caseStatus: "NEW",
+        subject: seed.subject,
+        body: seed.body,
+        enabled: true,
+        updatedAt: "2026-09-30T10:00:00.000Z",
+        updatedBy: "desk@rgs.example",
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts an empty updatedBy when the actor had no email claim", () => {
+    const seed = defaultStatusEmailTemplate("SUBMITTED");
+    expect(() =>
+      StatusEmailTemplateSchema.parse({
+        tenantId: "rgs",
+        caseStatus: "SUBMITTED",
+        subject: seed.subject,
+        body: seed.body,
+        enabled: false,
+        updatedAt: "2026-09-30T10:00:00.000Z",
+        updatedBy: "",
+      }),
+    ).not.toThrow();
+  });
+
+  it("validates upsert bodies", () => {
+    const seed = defaultStatusEmailTemplate("DECIDED");
+    const parsed = UpsertStatusEmailTemplateBodySchema.parse({
+      subject: seed.subject,
+      body: seed.body,
+      enabled: true,
+    });
+    expect(parsed.enabled).toBe(true);
   });
 });
 
