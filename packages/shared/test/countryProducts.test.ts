@@ -3,9 +3,14 @@ import {
   COUNTRY_PRODUCTS,
   UnknownCountryProductError,
   getCountryProduct,
+  CountryProductSchema,
+  documentLabelsFromProduct,
   getDocsChecklist,
   listActiveProducts,
+  portalDocTypesFromProduct,
+  requiredDocumentsFromLegacyDocTypes,
 } from "../src/countryProducts";
+import { DOC_TYPE_LABELS, docTypeForLabel } from "../src/docTypeLabels";
 
 const V1_COUNTRY_CODES = ["AE", "AU", "CA", "NZ", "TZ", "UG", "NG", "ZM"] as const;
 
@@ -34,8 +39,10 @@ describe("country product catalog", () => {
       expect(countryProduct.governmentFeeInr, countryProduct.countryCode).toBeGreaterThan(0);
       expect(countryProduct.serviceFeeInr, countryProduct.countryCode).toBeGreaterThan(0);
       expect(countryProduct.processingDays, countryProduct.countryCode).toBeGreaterThan(0);
-      expect(countryProduct.docsRequired.length, countryProduct.countryCode).toBeGreaterThan(0);
-      expect(countryProduct.docsRequired, countryProduct.countryCode).toContain("PASSPORT_BIO");
+      expect(countryProduct.requiredDocuments.length, countryProduct.countryCode).toBeGreaterThan(0);
+      expect(portalDocTypesFromProduct(countryProduct), countryProduct.countryCode).toContain(
+        "PASSPORT_BIO",
+      );
     }
   });
 
@@ -61,5 +68,95 @@ describe("country product catalog", () => {
   it("docs checklist matches the country product", () => {
     expect(getDocsChecklist("AE")).toEqual(["PASSPORT_BIO", "PHOTO"]);
     expect(getDocsChecklist("AU")).toContain("BANK_STATEMENT");
+  });
+});
+
+const baseCountryProduct = {
+  countryCode: "AE",
+  productCode: "AE_TOURIST",
+  countryName: "UAE",
+  visaType: "E_VISA",
+  region: "MIDDLE_EAST",
+  tier: "FULFILLED",
+  validityDays: 30,
+  stayDays: 30,
+  entry: "SINGLE",
+  governmentFeeInr: 0,
+  serviceFeeInr: 0,
+  processingDays: 3,
+  active: true,
+} as const;
+
+describe("requiredDocuments schema", () => {
+  it("accepts requiredDocuments and rejects duplicate portalDocType", () => {
+    expect(
+      CountryProductSchema.safeParse({
+        ...baseCountryProduct,
+        requiredDocuments: [
+          { label: "Passport bio page", portalDocType: "PASSPORT_BIO" },
+          { label: "Photo", portalDocType: "PASSPORT_BIO" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      CountryProductSchema.safeParse({
+        ...baseCountryProduct,
+        requiredDocuments: [
+          { label: "Passport bio page", portalDocType: "PASSPORT_BIO" },
+          { label: "Invitation letter" },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects duplicate labels ignoring case and whitespace", () => {
+    expect(
+      CountryProductSchema.safeParse({
+        ...baseCountryProduct,
+        requiredDocuments: [{ label: "Invitation letter" }, { label: " invitation LETTER " }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a non-empty checklist for fulfilled countries only", () => {
+    expect(
+      CountryProductSchema.safeParse({ ...baseCountryProduct, requiredDocuments: [] }).success,
+    ).toBe(false);
+    expect(
+      CountryProductSchema.safeParse({
+        ...baseCountryProduct,
+        tier: "INFO_ONLY",
+        requiredDocuments: [],
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("requiredDocuments helpers", () => {
+  it("maps DOC_TYPE_LABELS back to DocType case-insensitively", () => {
+    expect(docTypeForLabel("passport bio page")).toBe("PASSPORT_BIO");
+    expect(docTypeForLabel("not a type")).toBeUndefined();
+  });
+
+  it("builds requiredDocuments from legacy DocTypes", () => {
+    expect(requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO"])).toEqual([
+      { label: DOC_TYPE_LABELS.PASSPORT_BIO, portalDocType: "PASSPORT_BIO" },
+      { label: DOC_TYPE_LABELS.PHOTO, portalDocType: "PHOTO" },
+    ]);
+  });
+
+  it("derives labels and portal DocTypes, skipping free-text rows for the latter", () => {
+    const countryProduct = {
+      ...baseCountryProduct,
+      requiredDocuments: [
+        { label: "Passport bio page", portalDocType: "PASSPORT_BIO" },
+        { label: "Invitation letter" },
+      ],
+    } as const;
+    expect(documentLabelsFromProduct(countryProduct)).toEqual([
+      "Passport bio page",
+      "Invitation letter",
+    ]);
+    expect(portalDocTypesFromProduct(countryProduct)).toEqual(["PASSPORT_BIO"]);
   });
 });

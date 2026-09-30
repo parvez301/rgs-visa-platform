@@ -3,9 +3,8 @@ import { DOC_TYPES, type DocType } from "./statuses";
 /**
  * The one public-facing label per DocType. Client-visible everywhere: the
  * marketing country page, the portal docs step, and — via
- * `seedCountryChecklistsFromConfig` → `CountryChecklist.requiredDocuments` →
- * the merged `requiredDocumentLabels` on the public catalog — the copy a
- * fulfilled country's page shows once the seed has run. Terse variants of
+ * `requiredDocumentsFromLegacyDocTypes` → `CountryProduct.requiredDocuments` —
+ * the copy a fulfilled country's page shows once seeded. Terse variants of
  * these strings must not exist on that path: shortening one here changes what
  * a client is told they need to bring.
  */
@@ -23,6 +22,15 @@ export const DOC_TYPE_LABELS: Record<DocType, string> = {
 
 export function labelForDocType(docType: DocType): string {
   return DOC_TYPE_LABELS[docType];
+}
+
+/** Reverse lookup of `DOC_TYPE_LABELS`; case-insensitive, undefined for free-text labels. */
+export function docTypeForLabel(label: string): DocType | undefined {
+  const normalized = label.trim().toLowerCase();
+  for (const docType of DOC_TYPES) {
+    if (DOC_TYPE_LABELS[docType].toLowerCase() === normalized) return docType;
+  }
+  return undefined;
 }
 
 export function labelsForDocTypes(docTypes: readonly DocType[]): string[] {

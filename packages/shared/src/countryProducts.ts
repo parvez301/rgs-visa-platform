@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DOC_TYPES, type DocType } from "./statuses";
+import { labelForDocType } from "./docTypeLabels";
 
 export const VISA_TYPES = [
   "E_VISA",
@@ -24,6 +25,21 @@ export type Region = (typeof REGIONS)[number];
 export const COUNTRY_TIERS = ["FULFILLED", "INFO_ONLY"] as const;
 export type CountryTier = (typeof COUNTRY_TIERS)[number];
 
+/**
+ * One line of a country's document checklist. `label` is the client-visible
+ * copy; `portalDocType` is set only when the portal can collect that document
+ * as an upload slot.
+ */
+export interface RequiredDocument {
+  label: string;
+  portalDocType?: DocType;
+}
+
+export const RequiredDocumentSchema = z.object({
+  label: z.string().trim().min(1),
+  portalDocType: z.enum(DOC_TYPES).optional(),
+});
+
 export interface CountryProduct {
   countryCode: string;
   productCode: string;
@@ -37,13 +53,7 @@ export interface CountryProduct {
   governmentFeeInr: number;
   serviceFeeInr: number;
   processingDays: number;
-  docsRequired: readonly DocType[];
-  /**
-   * Public-catalog only: the CRM country checklist's document strings, merged in
-   * at read time by `GET /api/v1/config/countries`. Never stored in Config;
-   * absent/empty means "fall back to `docsRequired` labels".
-   */
-  requiredDocumentLabels?: readonly string[];
+  requiredDocuments: readonly RequiredDocument[];
   active: boolean;
   /** Official government source for the facts — shown for trust, used at review time. */
   officialUrl?: string;
@@ -64,16 +74,55 @@ export const CountryProductSchema = z
     governmentFeeInr: z.number().int().nonnegative(),
     serviceFeeInr: z.number().int().nonnegative(),
     processingDays: z.number().int().positive(),
-    docsRequired: z.array(z.enum(DOC_TYPES)),
-    requiredDocumentLabels: z.array(z.string().min(1)).optional(),
+    requiredDocuments: z.array(RequiredDocumentSchema),
     active: z.boolean(),
     officialUrl: z.string().url().optional(),
   })
   .refine(
     (countryProduct) =>
-      countryProduct.tier !== "FULFILLED" || countryProduct.docsRequired.length > 0,
-    { message: "Fulfilled countries need a documents checklist", path: ["docsRequired"] },
+      countryProduct.tier !== "FULFILLED" || countryProduct.requiredDocuments.length > 0,
+    { message: "Fulfilled countries need a documents checklist", path: ["requiredDocuments"] },
+  )
+  .refine(
+    (countryProduct) => {
+      const normalizedLabels = countryProduct.requiredDocuments.map((requiredDocument) =>
+        requiredDocument.label.trim().toLowerCase(),
+      );
+      return new Set(normalizedLabels).size === normalizedLabels.length;
+    },
+    { message: "Document labels must be unique", path: ["requiredDocuments"] },
+  )
+  .refine(
+    (countryProduct) => {
+      const portalDocTypes = portalDocTypesFromProduct(countryProduct);
+      return new Set(portalDocTypes).size === portalDocTypes.length;
+    },
+    { message: "Each portal document type can be used only once", path: ["requiredDocuments"] },
   ) satisfies z.ZodType<CountryProduct>;
+
+export function documentLabelsFromProduct(countryProduct: CountryProduct): string[] {
+  return countryProduct.requiredDocuments.map((requiredDocument) => requiredDocument.label);
+}
+
+export function portalDocTypesFromProduct(countryProduct: CountryProduct): DocType[] {
+  const portalDocTypes: DocType[] = [];
+  for (const requiredDocument of countryProduct.requiredDocuments) {
+    if (requiredDocument.portalDocType !== undefined) {
+      portalDocTypes.push(requiredDocument.portalDocType);
+    }
+  }
+  return portalDocTypes;
+}
+
+/** Seed/migration bridge: one checklist row per portal DocType, labelled with its public copy. */
+export function requiredDocumentsFromLegacyDocTypes(
+  docTypes: readonly DocType[],
+): RequiredDocument[] {
+  return docTypes.map((docType) => ({
+    label: labelForDocType(docType),
+    portalDocType: docType,
+  }));
+}
 
 interface ResearchSeed {
   code: string;
@@ -108,7 +157,7 @@ function researchSeed(seed: ResearchSeed): CountryProduct {
     governmentFeeInr: seed.governmentFeeInr,
     serviceFeeInr: 0,
     processingDays: seed.processingDays,
-    docsRequired: [],
+    requiredDocuments: [],
     active: false,
     officialUrl: seed.officialUrl,
   };
@@ -162,7 +211,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 6500,
     serviceFeeInr: 1500,
     processingDays: 4,
-    docsRequired: ["PASSPORT_BIO", "PHOTO"],
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO"]),
     active: true,
   },
   {
@@ -179,7 +228,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     serviceFeeInr: 3500,
     processingDays: 30,
     // Home Affairs discourages booking flights before grant — no itinerary here
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF"],
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF"]),
     active: true,
   },
   {
@@ -195,7 +244,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 7500,
     serviceFeeInr: 3500,
     processingDays: 45,
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF"],
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "ITR", "EMPLOYMENT_PROOF"]),
     active: true,
   },
   {
@@ -211,7 +260,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 17500,
     serviceFeeInr: 3500,
     processingDays: 30,
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "EMPLOYMENT_PROOF"],
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "BANK_STATEMENT", "EMPLOYMENT_PROOF"]),
     active: true,
   },
   {
@@ -227,7 +276,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 4300,
     serviceFeeInr: 1500,
     processingDays: 7,
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING"],
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING"]),
     active: true,
   },
   {
@@ -244,7 +293,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     serviceFeeInr: 1500,
     processingDays: 3,
     // Yellow fever certificate mandatory for all arrivals into Uganda
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "YELLOW_FEVER_CERT", "FLIGHT_ITINERARY"],
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "YELLOW_FEVER_CERT", "FLIGHT_ITINERARY"]),
     active: true,
   },
   {
@@ -260,7 +309,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     governmentFeeInr: 21500,
     serviceFeeInr: 2500,
     processingDays: 5,
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "BANK_STATEMENT"],
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "BANK_STATEMENT"]),
     active: true,
   },
   {
@@ -277,7 +326,7 @@ export const COUNTRY_PRODUCTS: readonly CountryProduct[] = [
     serviceFeeInr: 1500,
     processingDays: 7,
     // Cover letter addressed to the Director General of Immigration
-    docsRequired: ["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "COVER_LETTER"],
+    requiredDocuments: requiredDocumentsFromLegacyDocTypes(["PASSPORT_BIO", "PHOTO", "FLIGHT_ITINERARY", "HOTEL_BOOKING", "COVER_LETTER"]),
     active: true,
   },
 ];
@@ -318,5 +367,5 @@ export function getCountryProduct(countryCode: string, productCode?: string): Co
 }
 
 export function getDocsChecklist(countryCode: string): readonly DocType[] {
-  return getCountryProduct(countryCode).docsRequired;
+  return portalDocTypesFromProduct(getCountryProduct(countryCode));
 }
