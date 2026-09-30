@@ -1,4 +1,4 @@
-import { crm } from "@rgs/shared";
+import { crm, getCountryProduct } from "@rgs/shared";
 import { describe, expect, it } from "vitest";
 import { READ_TOOLS } from "../../src/agent/tools/readTools";
 import { ToolRegistry } from "../../src/agent/tools/registry";
@@ -7,8 +7,13 @@ import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { CASE_COUNT_GROUP_BY_FIELDS, createCase } from "../../src/domain/crm/cases";
 import { writeCase } from "../../src/domain/crm/caseStore";
-import { putCountryChecklist } from "../../src/domain/crm/countryChecklist";
-import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "../../src/domain/crm/keys";
+import { upsertCountryProduct } from "../../src/domain/config";
+import {
+  META_SORT_KEY,
+  countryChecklistPartitionKey,
+  partnerListGsi1Pk,
+  partnerPartitionKey,
+} from "../../src/domain/crm/keys";
 import type { AppContext } from "../../src/lib/context";
 
 const TENANT_ID = "rgs";
@@ -105,9 +110,8 @@ interface ToolInputCase {
  * Keyed by tool name so a read tool added later with no entry here fails
  * loudly at COLLECTION time instead of silently skipping the property it
  * exists to prove. Only resolving branches belong here: `search_cases` with
- * neither filter, `find_traveller` with neither input and
- * `get_country_checklist` for a country with no checklist all throw on
- * purpose, and are pinned by their own tests below.
+ * neither filter and `find_traveller` with neither input throw on purpose,
+ * and are pinned by their own tests below.
  */
 function inputCasesForReadTool(toolName: string): ToolInputCase[] {
   switch (toolName) {
@@ -143,7 +147,7 @@ function inputCasesForReadTool(toolName: string): ToolInputCase[] {
         build: () => ({ groupBy: groupByField }),
       }));
     case "get_country_checklist":
-      return [{ label: "a country with a checklist on file", build: () => ({ countryCode: "JP" }) }];
+      return [{ label: "a configured country", build: () => ({ countryCode: "AE" }) }];
     case "recall":
       return [
         { label: "ORG scope", build: () => ({ scopes: ["ORG"] }) },
@@ -232,8 +236,6 @@ describe("every READ_TOOLS tool resolves without ever reaching the table's write
         },
         ACTOR,
       );
-      await putCountryChecklist(context, TENANT_ID, { countryCode: "JP", requiredDocuments: ["PASSPORT"] }, ACTOR);
-
       const input = build({
         caseId: seededCase.caseId,
         partnerId: partner.partnerId,
@@ -280,6 +282,52 @@ describe("find_traveller", () => {
 
     const byName = await tool!.execute(context, TENANT_ID, { fullName: "RAVI KUMAR" }, ACTOR);
     expect((byName as { travellers: unknown[] }).travellers).toHaveLength(1);
+  });
+});
+
+// This tool used to read the CRM CountryChecklist rows. Nothing writes those
+// after the Config cutover, so it would have reported a frozen list as the
+// live answer -- on a tool whose whole job is telling the desk whether a file
+// is complete.
+describe("get_country_checklist", () => {
+  const tool = () => new ToolRegistry(READ_TOOLS).get("get_country_checklist")!;
+
+  it("answers from the Config checklist the desk edits, free-text rows included", async () => {
+    const context = buildTestContext();
+    await upsertCountryProduct(context, "admin_1", ACTOR, {
+      ...getCountryProduct("AE"),
+      requiredDocuments: [
+        { label: "Passport bio page", portalDocType: "PASSPORT_BIO" },
+        { label: "Emirates ID copy" },
+      ],
+    });
+
+    await expect(tool().execute(context, TENANT_ID, { countryCode: "AE" }, ACTOR)).resolves.toEqual(
+      { countryCode: "AE", requiredDocuments: ["Passport bio page", "Emirates ID copy"] },
+    );
+  });
+
+  it("ignores a leftover CRM checklist row for the same country", async () => {
+    const context = buildTestContext();
+    await context.table.put({
+      PK: countryChecklistPartitionKey(TENANT_ID, "AE"),
+      SK: META_SORT_KEY,
+      countryCode: "AE",
+      requiredDocuments: ["Should never surface"],
+      updatedAt: context.now().toISOString(),
+      updatedBy: ACTOR,
+    });
+
+    const result = await tool().execute(context, TENANT_ID, { countryCode: "AE" }, ACTOR);
+    expect((result as { requiredDocuments: string[] }).requiredDocuments).not.toContain(
+      "Should never surface",
+    );
+  });
+
+  it("returns an empty list for a country with nothing configured", async () => {
+    await expect(
+      tool().execute(buildTestContext(), TENANT_ID, { countryCode: "ZZ" }, ACTOR),
+    ).resolves.toEqual({ countryCode: "ZZ", requiredDocuments: [] });
   });
 });
 

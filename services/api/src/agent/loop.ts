@@ -362,8 +362,7 @@ export async function runAgentTurn(
       } catch (error) {
         // A tool that throws -- a missing case, or one of the tools that
         // refuses an underspecified call outright (search_cases with
-        // neither filter, find_traveller with neither input,
-        // get_country_checklist for a country with no checklist on file) --
+        // neither filter, find_traveller with neither input) --
         // must never escape the turn (task-10-controller-notes.md §5). The
         // model sees the failure as an ordinary tool_result and can recover
         // on its next turn, exactly like an unknown tool or a validation

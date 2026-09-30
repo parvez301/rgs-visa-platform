@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import { badRequest, notFound } from "../../lib/errors";
+import { badRequest } from "../../lib/errors";
 import { parseStoredRecord, stripStorageKeys } from "../../lib/storedRecords";
 import { META_SORT_KEY, countryChecklistPartitionKey } from "./keys";
 
-// Legacy; not served over HTTP. Kept only so the migration can read old CRM
-// country checklists into CountryProduct.requiredDocuments (and for the agent
-// read tool). Live document lists come from CountryProduct.
+// Legacy; not served over HTTP and read by nothing live. Kept only so the
+// migration can fold old CRM country checklists into
+// CountryProduct.requiredDocuments, which is where every live document list
+// -- the case stamp, the portal, marketing, the agent -- now comes from.
 
 /**
  * The documents a destination country requires on every case bound for it.
@@ -65,19 +66,7 @@ export async function putCountryChecklist(
   return checklist;
 }
 
-export async function getCountryChecklist(
-  context: AppContext,
-  tenantId: string,
-  countryCode: string,
-): Promise<CountryChecklist> {
-  const checklist = await findCountryChecklist(context, tenantId, countryCode);
-  if (checklist === undefined) {
-    throw notFound(`No document checklist is on file for ${countryCode}`);
-  }
-  return checklist;
-}
-
-/** Soft read used when stamping a case -- missing country list is not an error. */
+/** Soft read: a country with no stored checklist is not an error. */
 export async function findCountryChecklist(
   context: AppContext,
   tenantId: string,
@@ -88,43 +77,14 @@ export async function findCountryChecklist(
     META_SORT_KEY,
   );
   if (storedItem === undefined) return undefined;
-  // Raw, a ZodError escapes router.ts's ApiError-only mapping as a 500 the
-  // moment a checklist row is hand-repaired or half-written -- the same
-  // failure readCase and parseStoredPartner both guard against.
+  // A typed CorruptRecordError, not a raw ZodError: the migration branches on
+  // it to leave that country's products alone rather than convert them without
+  // the desk's edits -- and converted rows are skipped on re-run, so that loss
+  // would be permanent.
   return parseStoredRecord(
     CountryChecklistSchema,
     "CountryChecklist",
     countryCode,
     stripStorageKeys(storedItem),
   );
-}
-
-/**
- * One checklist per destination we know about (from the CRM destination list).
- * Countries with no stored row are omitted — admin UI shows them as empty.
- */
-export async function listCountryChecklists(
-  context: AppContext,
-  tenantId: string,
-  countryCodes: readonly string[],
-): Promise<CountryChecklist[]> {
-  const lookups = await Promise.all(
-    countryCodes.map((countryCode) => findCountryChecklist(context, tenantId, countryCode)),
-  );
-  return lookups
-    .filter((checklist): checklist is CountryChecklist => checklist !== undefined)
-    .sort((left, right) => left.countryCode.localeCompare(right.countryCode));
-}
-
-/** Insert-if-absent for Config → CRM migration; never overwrites desk edits. */
-export async function putCountryChecklistIfAbsent(
-  context: AppContext,
-  tenantId: string,
-  input: PutCountryChecklistInput,
-  actorEmail: string,
-): Promise<"inserted" | "skipped"> {
-  const existing = await findCountryChecklist(context, tenantId, input.countryCode);
-  if (existing !== undefined) return "skipped";
-  await putCountryChecklist(context, tenantId, input, actorEmail);
-  return "inserted";
 }

@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { buildTestContext } from "../helpers";
-import { getCountryChecklist, putCountryChecklist } from "../../src/domain/crm/countryChecklist";
+import { findCountryChecklist, putCountryChecklist } from "../../src/domain/crm/countryChecklist";
 import { META_SORT_KEY, countryChecklistPartitionKey } from "../../src/domain/crm/keys";
 
 const TENANT_ID = "rgs";
 const DESK_ACTOR = "desk@rgs.local";
 const SUPERVISOR_ACTOR = "supervisor@rgs.local";
 
-describe("putCountryChecklist / getCountryChecklist", () => {
+// These rows are legacy: nothing live reads them, and the only remaining
+// caller is the migration that folds them into CountryProduct. The reads are
+// pinned anyway, because a checklist the migration cannot reassemble decides
+// whether a country's products are converted or left alone.
+describe("putCountryChecklist / findCountryChecklist", () => {
   it("writes a checklist and reads it back with the writing actor and timestamp stamped on it", async () => {
     const context = buildTestContext();
     const writtenChecklist = await putCountryChecklist(
@@ -23,7 +27,7 @@ describe("putCountryChecklist / getCountryChecklist", () => {
       updatedBy: DESK_ACTOR,
     });
 
-    const readBackChecklist = await getCountryChecklist(context, TENANT_ID, "JP");
+    const readBackChecklist = await findCountryChecklist(context, TENANT_ID, "JP");
     expect(readBackChecklist).toEqual(writtenChecklist);
   });
 
@@ -35,8 +39,8 @@ describe("putCountryChecklist / getCountryChecklist", () => {
       { countryCode: "AE", requiredDocuments: ["Passport"], notes: "Embassy closed Fridays" },
       DESK_ACTOR,
     );
-    const withNotes = await getCountryChecklist(context, TENANT_ID, "AE");
-    expect(withNotes.notes).toBe("Embassy closed Fridays");
+    const withNotes = await findCountryChecklist(context, TENANT_ID, "AE");
+    expect(withNotes?.notes).toBe("Embassy closed Fridays");
 
     await putCountryChecklist(
       context,
@@ -44,17 +48,14 @@ describe("putCountryChecklist / getCountryChecklist", () => {
       { countryCode: "SG", requiredDocuments: ["Passport"] },
       DESK_ACTOR,
     );
-    const withoutNotes = await getCountryChecklist(context, TENANT_ID, "SG");
-    expect(withoutNotes.notes).toBeUndefined();
-    expect(Object.hasOwn(withoutNotes, "notes")).toBe(false);
+    const withoutNotes = await findCountryChecklist(context, TENANT_ID, "SG");
+    expect(withoutNotes?.notes).toBeUndefined();
+    expect(Object.hasOwn(withoutNotes!, "notes")).toBe(false);
   });
 
-  it("throws a 404 when no checklist is on file for a country", async () => {
+  it("answers undefined, not an error, when no checklist is on file for a country", async () => {
     const context = buildTestContext();
-    await expect(getCountryChecklist(context, TENANT_ID, "ZZ")).rejects.toMatchObject({
-      statusCode: 404,
-      code: "NOT_FOUND",
-    });
+    await expect(findCountryChecklist(context, TENANT_ID, "ZZ")).resolves.toBeUndefined();
   });
 
   // Ruling: a country checklist is not a case, so it records no CrmEventType.
@@ -79,17 +80,17 @@ describe("putCountryChecklist / getCountryChecklist", () => {
     expect(secondWrite.updatedBy).toBe(SUPERVISOR_ACTOR);
     expect(secondWrite.updatedAt).not.toBe(firstWrite.updatedAt);
 
-    const readBackChecklist = await getCountryChecklist(context, TENANT_ID, "JP");
-    expect(readBackChecklist.updatedBy).toBe(SUPERVISOR_ACTOR);
-    expect(readBackChecklist.updatedAt).toBe(secondWrite.updatedAt);
+    const readBackChecklist = await findCountryChecklist(context, TENANT_ID, "JP");
+    expect(readBackChecklist?.updatedBy).toBe(SUPERVISOR_ACTOR);
+    expect(readBackChecklist?.updatedAt).toBe(secondWrite.updatedAt);
   });
 
-  it("answers 409 CORRUPT_RECORD rather than a raw ZodError for a checklist row that will not parse", async () => {
+  it("throws CORRUPT_RECORD rather than a raw ZodError for a checklist row that will not parse", async () => {
     const context = buildTestContext();
     // A hand-repaired row missing requiredDocuments entirely -- the shape a
     // half-written import would leave. A bare `.parse()` would throw a
-    // ZodError here, which router.ts's ApiError-only mapping does not catch,
-    // which would answer 500 the moment a route sits in front of this.
+    // ZodError, which the migration's CorruptRecordError branch would not
+    // catch, so it would abort the run instead of skipping the country.
     await context.table.put({
       PK: countryChecklistPartitionKey(TENANT_ID, "FR"),
       SK: META_SORT_KEY,
@@ -98,7 +99,7 @@ describe("putCountryChecklist / getCountryChecklist", () => {
       updatedBy: DESK_ACTOR,
     });
 
-    await expect(getCountryChecklist(context, TENANT_ID, "FR")).rejects.toMatchObject({
+    await expect(findCountryChecklist(context, TENANT_ID, "FR")).rejects.toMatchObject({
       statusCode: 409,
       code: "CORRUPT_RECORD",
     });
@@ -121,10 +122,6 @@ describe("putCountryChecklist / getCountryChecklist", () => {
         code: "BAD_REQUEST",
       });
 
-    // Verify nothing was written: a subsequent read must not find a row.
-    await expect(getCountryChecklist(context, TENANT_ID, "XYZ")).rejects.toMatchObject({
-      statusCode: 404,
-      code: "NOT_FOUND",
-    });
+    await expect(findCountryChecklist(context, TENANT_ID, "XYZ")).resolves.toBeUndefined();
   });
 });
