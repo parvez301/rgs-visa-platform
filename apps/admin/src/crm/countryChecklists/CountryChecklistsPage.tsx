@@ -35,9 +35,12 @@ export function CountryChecklistsPage() {
   });
 
   const checklistByCode = useMemo(() => {
-    const map = new Map<string, string[]>();
+    const map = new Map<string, { requiredDocuments: string[]; notes?: string }>();
     for (const checklist of checklistsQuery.data ?? []) {
-      map.set(checklist.countryCode, checklist.requiredDocuments);
+      map.set(checklist.countryCode, {
+        requiredDocuments: checklist.requiredDocuments,
+        ...(checklist.notes !== undefined ? { notes: checklist.notes } : {}),
+      });
     }
     return map;
   }, [checklistsQuery.data]);
@@ -52,9 +55,10 @@ export function CountryChecklistsPage() {
     selectedCountryCode;
 
   function openEditor(countryCode: string) {
+    const stored = checklistByCode.get(countryCode);
     setSelectedCountryCode(countryCode);
-    setDocumentsText((checklistByCode.get(countryCode) ?? []).join("\n"));
-    setNotesText("");
+    setDocumentsText((stored?.requiredDocuments ?? []).join("\n"));
+    setNotesText(stored?.notes ?? "");
     setFormError(null);
   }
 
@@ -115,7 +119,7 @@ export function CountryChecklistsPage() {
           </thead>
           <tbody>
             {(destinationsQuery.data ?? []).map((country) => {
-              const documents = checklistByCode.get(country.countryCode) ?? [];
+              const documents = checklistByCode.get(country.countryCode)?.requiredDocuments ?? [];
               return (
                 <tr key={country.countryCode} className="border-b border-line last:border-0">
                   <td className="px-3 py-2 font-medium text-ink">{country.countryName}</td>
