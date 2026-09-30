@@ -1636,3 +1636,48 @@ describe("applicant routes", () => {
     expect(okResponse.payload).toEqual({ rows: [], missingCaseIds: ["case_nope"] });
   });
 });
+
+describe("CRM destination countries and country checklists", () => {
+  it("lists destinations with full country names for CRM readers", async () => {
+    const router = buildRouter(buildTestContext());
+    const response = await call(router, "GET", "/api/v1/admin/crm/destination-countries");
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.countries.length).toBeGreaterThan(0);
+    const firstCountry = response.payload.countries[0];
+    expect(firstCountry.countryCode).toMatch(/^[A-Z]{2}$/);
+    expect(firstCountry.countryName.length).toBeGreaterThan(2);
+    expect(firstCountry.countryName).not.toBe(firstCountry.countryCode);
+  });
+
+  it("puts and gets a country checklist, and lists it", async () => {
+    const router = buildRouter(buildTestContext());
+    const putResponse = await call(router, "PUT", "/api/v1/admin/crm/country-checklists/AE", {
+      requiredDocuments: ["Passport bio page", "Passport-size photo"],
+      notes: "Tourist default",
+    });
+    expect(putResponse.statusCode).toBe(200);
+    expect(putResponse.payload.countryCode).toBe("AE");
+    expect(putResponse.payload.requiredDocuments).toEqual([
+      "Passport bio page",
+      "Passport-size photo",
+    ]);
+
+    const getResponse = await call(router, "GET", "/api/v1/admin/crm/country-checklists/AE");
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.payload.requiredDocuments).toHaveLength(2);
+
+    const listResponse = await call(router, "GET", "/api/v1/admin/crm/country-checklists");
+    expect(listResponse.statusCode).toBe(200);
+    expect(
+      listResponse.payload.checklists.some(
+        (checklist: { countryCode: string }) => checklist.countryCode === "AE",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a bad country code with 400", async () => {
+    const router = buildRouter(buildTestContext());
+    const response = await call(router, "GET", "/api/v1/admin/crm/country-checklists/UAE");
+    expect(response.statusCode).toBe(400);
+  });
+});
