@@ -96,8 +96,11 @@ Stop dual-writing once reads and writes both trust PG for CRM.
 **Implementation split:** Phase **B.1** plan
 (`docs/superpowers/plans/2026-10-01-supabase-postgres-phase-b.md`) covers
 case SoR + applicants + events + partners/travellers/ref claims +
-`CRM_STORE` cutover. Review queue, proposals, agent memory, and
-status-email **writes** are **Phase B.2** (separate plan).
+`CRM_STORE` cutover. Remaining CRM (lists/counts, caseRef reservation,
+review queue, proposals, agent memory/prefs, status-email R/W) is
+**Phase B.2** —
+`docs/superpowers/specs/2026-10-01-supabase-postgres-phase-b2-design.md`
+(+ plan after that spec is approved).
 
 ### Phase C — Visa platform / shared admin data
 
