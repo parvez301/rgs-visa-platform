@@ -4,6 +4,12 @@ import type { AppContext } from "../../lib/context";
 import { badRequest } from "../../lib/errors";
 import { parseStoredRecord, stripStorageKeys } from "../../lib/storedRecords";
 import { META_SORT_KEY, statusEmailTemplatePartitionKey } from "./keys";
+import { crmPostgresOf } from "./postgresClient";
+import {
+  getStatusEmailTemplatePostgres,
+  insertStatusEmailTemplateIfAbsentPostgres,
+  upsertStatusEmailTemplatePostgres,
+} from "./statusEmailTemplatesPostgres";
 
 /**
  * What an unpersisted default reports as its `updatedAt`. StatusEmailTemplate
@@ -17,6 +23,8 @@ export async function getStatusEmailTemplate(
   tenantId: string,
   caseStatus: crm.CaseStatus,
 ): Promise<crm.StatusEmailTemplate | undefined> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return getStatusEmailTemplatePostgres(sql, tenantId, caseStatus);
   const storedItem = await context.table.get(statusEmailTemplatePartitionKey(tenantId, caseStatus), META_SORT_KEY);
   if (storedItem === undefined) return undefined;
   return parseStoredRecord(
@@ -72,6 +80,12 @@ async function writeTemplate(
       );
     }
     throw error;
+  }
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    if (onlyIfAbsent) return { template, written: await insertStatusEmailTemplateIfAbsentPostgres(sql, template) };
+    await upsertStatusEmailTemplatePostgres(sql, template);
+    return { template, written: true };
   }
   const item = { PK: statusEmailTemplatePartitionKey(tenantId, caseStatus), SK: META_SORT_KEY, ...template };
   if (onlyIfAbsent) {
