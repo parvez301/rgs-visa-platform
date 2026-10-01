@@ -8,7 +8,7 @@ import {
   orNull,
   type DbRow,
 } from "../../lib/sqlColumns";
-import { badRequest } from "../../lib/errors";
+import { badRequest, CorruptRecordError } from "../../lib/errors";
 import { isRealIsoDate } from "../../lib/isoDate";
 import { parseStoredRecord } from "../../lib/storedRecords";
 
@@ -337,4 +337,77 @@ export async function readCasePostgres(
       candidateFromColumns(applicantRow, APPLICANT_COLUMNS),
     ),
   });
+}
+
+/** Largest id list one batched statement carries (the export cap is 500). */
+const READ_CASES_BATCH_SIZE = 500;
+
+const SELECT_CASES_BATCH_SQL = SELECT_CASE_SQL.replace(
+  "where tenant_id = $1 and case_id = $2",
+  "where tenant_id = $1 and case_id = any($2::text[])",
+);
+
+const SELECT_APPLICANTS_BATCH_SQL = `
+select
+  case_id, applicant_ref, ref_no, traveller_id, passport_number, custody,
+  ${isoTimestampSql("custody_since")} as custody_since,
+  outcome, courier_mode, tracking_number, visa_result_key
+from crm_applicants
+where tenant_id = $1 and case_id = any($2::text[])
+order by case_id, applicant_index`;
+
+export interface ReadCasesPostgresResult {
+  /** Readable cases by id. An id that is absent here is either missing or in `unreadableCaseIds`. */
+  cases: Map<string, crm.CrmCase>;
+  /** Rows that exist but fail `CrmCaseSchema` (or have no applicants), like `CorruptRecordError` on the single read. */
+  unreadableCaseIds: string[];
+}
+
+/**
+ * Many cases in a constant number of round-trips: one `crm_cases` query and one
+ * `crm_applicants` query per batch of up to 500 ids, assembled in memory.
+ * `readCasePostgres` costs two queries per case, which on the one-connection
+ * pool makes a 500-case export ~1,000 sequential round-trips.
+ *
+ * Same contract as `readCasePostgres` per case; unlike it, a corrupt row does
+ * not throw -- it is named in `unreadableCaseIds` so one bad row cannot sink a
+ * batch.
+ */
+export async function readCasesPostgres(
+  sql: SqlClient,
+  tenantId: string,
+  caseIds: readonly string[],
+): Promise<ReadCasesPostgresResult> {
+  const cases = new Map<string, crm.CrmCase>();
+  const unreadableCaseIds: string[] = [];
+  const distinctCaseIds = [...new Set(caseIds)];
+  for (let batchStart = 0; batchStart < distinctCaseIds.length; batchStart += READ_CASES_BATCH_SIZE) {
+    const batchIds = distinctCaseIds.slice(batchStart, batchStart + READ_CASES_BATCH_SIZE);
+    const caseResult = await sql.query<DbRow>(SELECT_CASES_BATCH_SQL, [tenantId, batchIds]);
+    if (caseResult.rows.length === 0) continue;
+    const applicantResult = await sql.query<DbRow>(SELECT_APPLICANTS_BATCH_SQL, [tenantId, batchIds]);
+    const applicantsByCaseId = new Map<string, Record<string, unknown>[]>();
+    for (const applicantRow of applicantResult.rows) {
+      const caseId = String(applicantRow["case_id"]);
+      const caseApplicants = applicantsByCaseId.get(caseId) ?? [];
+      caseApplicants.push(candidateFromColumns(applicantRow, APPLICANT_COLUMNS));
+      applicantsByCaseId.set(caseId, caseApplicants);
+    }
+    for (const caseRow of caseResult.rows) {
+      const caseId = String(caseRow["case_id"]);
+      try {
+        cases.set(
+          caseId,
+          parseStoredRecord(crm.CrmCaseSchema, "Case", caseId, {
+            ...candidateFromColumns(caseRow, CASE_COLUMNS),
+            applicants: applicantsByCaseId.get(caseId) ?? [],
+          }),
+        );
+      } catch (error) {
+        if (!(error instanceof CorruptRecordError)) throw error;
+        unreadableCaseIds.push(caseId);
+      }
+    }
+  }
+  return { cases, unreadableCaseIds };
 }

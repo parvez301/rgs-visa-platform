@@ -2,23 +2,13 @@ import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
 import { CorruptRecordError } from "../../lib/errors";
 import { readCase } from "./caseStore";
+import { readCasesPostgres } from "./caseStorePostgres";
+import { crmPostgresOf } from "./postgresClient";
 import { resolveCaseTravellers } from "./caseTravellers";
 import { listPartners } from "./partners";
 
 /** Parallel reads per batch: fast enough for 500 cases in a few seconds, gentle on on-demand capacity. */
 const EXPORT_READ_CONCURRENCY = 20;
-
-/**
- * Under CRM_STORE=postgres every read shares `createPgSqlClient`'s one-connection
- * pool, so a 20-way fan-out buys no parallelism: it only queues 20 waiters on
- * the pool, and a waiter that sits past `connectionTimeoutMillis` fails. Read
- * serially there; the per-case cost is two queries plus one traveller batch.
- */
-export const POSTGRES_EXPORT_READ_CONCURRENCY = 1;
-
-export function exportReadConcurrency(context: AppContext): number {
-  return context.crmStore === "postgres" ? POSTGRES_EXPORT_READ_CONCURRENCY : EXPORT_READ_CONCURRENCY;
-}
 
 async function mapWithConcurrency<InputType, OutputType>(
   inputs: readonly InputType[],
@@ -36,6 +26,46 @@ async function mapWithConcurrency<InputType, OutputType>(
   }
   await Promise.all(Array.from({ length: Math.min(concurrencyLimit, inputs.length) }, drainQueue));
   return outputs;
+}
+
+type LoadedExportCase = {
+  caseId: string;
+  storedCase: crm.CrmCase | undefined;
+  travellers: crm.CaseTravellerMap;
+};
+
+/**
+ * Under CRM_STORE=postgres every statement queues on `createPgSqlClient`'s
+ * one-connection pool, so fan-out buys nothing and per-case reads cost ~3
+ * round-trips each (1,500 for 500 cases). Load the whole set instead: one
+ * `crm_cases` query, one `crm_applicants` query and one `crm_travellers` query
+ * for the batch -- a constant ~3 round-trips however many ids are exported.
+ * Dynamo keeps the bounded per-case fan-out.
+ */
+async function loadExportCases(
+  context: AppContext,
+  tenantId: string,
+  caseIds: readonly string[],
+): Promise<LoadedExportCase[]> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    const { cases } = await readCasesPostgres(sql, tenantId, caseIds);
+    const allApplicants = [...cases.values()].flatMap((storedCase) => storedCase.applicants);
+    // One map for the whole export: the row builder looks travellers up by id.
+    const travellers = await resolveCaseTravellers(context, tenantId, allApplicants);
+    return caseIds.map((caseId) => ({ caseId, storedCase: cases.get(caseId), travellers }));
+  }
+  return mapWithConcurrency(caseIds, EXPORT_READ_CONCURRENCY, async (caseId) => {
+    try {
+      const storedCase = await readCase(context, tenantId, caseId);
+      if (storedCase === undefined) return { caseId, storedCase: undefined, travellers: {} };
+      const travellers = await resolveCaseTravellers(context, tenantId, storedCase.applicants);
+      return { caseId, storedCase, travellers };
+    } catch (error) {
+      if (!(error instanceof CorruptRecordError)) throw error;
+      return { caseId, storedCase: undefined, travellers: {} };
+    }
+  });
 }
 
 /**
@@ -56,17 +86,7 @@ export async function buildCaseExportRows(
     partnerListing.partners.map((partner) => [partner.partnerId, partner.canonicalName]),
   );
 
-  const loadedCases = await mapWithConcurrency(caseIds, exportReadConcurrency(context), async (caseId) => {
-    try {
-      const storedCase = await readCase(context, tenantId, caseId);
-      if (storedCase === undefined) return { caseId, storedCase: undefined, travellers: {} };
-      const travellers = await resolveCaseTravellers(context, tenantId, storedCase.applicants);
-      return { caseId, storedCase, travellers };
-    } catch (error) {
-      if (!(error instanceof CorruptRecordError)) throw error;
-      return { caseId, storedCase: undefined, travellers: {} };
-    }
-  });
+  const loadedCases = await loadExportCases(context, tenantId, caseIds);
 
   const rows: crm.CaseExportRow[] = [];
   const missingCaseIds: string[] = [];

@@ -114,7 +114,7 @@ These checks validate **live Postgres SoR**, not backfill freshness.
 
 - [ ] **Create case** on the desk → case opens on PG path; row appears on **Ledger Live** **without** re-running any backfill.
 - [ ] **Status walk** (or custody/outcome change) → ledger status chips / queue update without backfill.
-- [ ] **Export** from ledger. Under `CRM_STORE=postgres` the export reads cases **serially** (one pooled connection, one batched traveller query per case). A 500-case export is ~1,000 sequential round-trips against a 15 s Lambda timeout, so **time a large export** (start with the full Ledger Live set) and note the duration; if it nears 10 s, cap the export selection until B.2 batches case loads.
+- [ ] **Export** from ledger. Under `CRM_STORE=postgres` the export loads the whole selection in **4 queries total** (partner list, `crm_cases`, `crm_applicants`, `crm_travellers`, each `= any(...)`), however many cases are selected, so the 500-case cap (`MAX_EXPORT_CASE_IDS`, a compile-time constant) is safe against the 15 s Lambda timeout. Still **export the full Ledger Live set once** and note the duration; it should be well under 2 s. (Dynamo mode keeps the per-case reads, ~2–3 per case, 20 in parallel.)
 - [ ] **Appointment reminder** (optional): set a staging case's appointment to tomorrow, invoke the reminders Lambda, confirm one partner email, an `APPOINTMENT_REMINDER_SENT` event, and `appointment_reminder_sent_for` set on the `crm_cases` row.
 - [ ] Status notification emails — optional if SES/templates unchanged.
 
