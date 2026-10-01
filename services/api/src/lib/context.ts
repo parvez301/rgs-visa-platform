@@ -4,7 +4,7 @@ import type { TableClient } from "./db";
 import type { CognitoAdminsClient } from "./cognitoAdmins";
 import type { DocumentStore } from "./documentStore";
 import type { EmailSender } from "./email";
-import type { LedgerStore, SqlClient } from "./sql";
+import type { CrmStore, LedgerStore, SqlClient } from "./sql";
 import { newId } from "./ids";
 
 /** Everything a domain function needs, injected once at handler startup. */
@@ -26,6 +26,8 @@ export interface AppContext {
   sql?: SqlClient;
   /** Where the CRM ledger is read from. Absent means "dynamo". */
   ledgerStore?: LedgerStore;
+  /** Where CRM case data is read/written. Absent means "dynamo". */
+  crmStore?: CrmStore;
 }
 
 export async function logActivity(

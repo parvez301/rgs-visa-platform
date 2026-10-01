@@ -29,6 +29,15 @@ describe("buildProductionContext sql wiring", () => {
     expect(() => buildProductionContext()).toThrow(/DATABASE_URL/);
   });
 
+  it("throws when CRM_STORE=postgres but DATABASE_URL is missing", async () => {
+    Object.assign(process.env, requiredEnv);
+    process.env["CRM_STORE"] = "postgres";
+    delete process.env["DATABASE_URL"];
+
+    const { buildProductionContext } = await import("../src/http/handler");
+    expect(() => buildProductionContext()).toThrow(/CRM_STORE is postgres but DATABASE_URL/);
+  });
+
   it("attaches sql when DATABASE_URL is set", async () => {
     Object.assign(process.env, requiredEnv);
     process.env["DATABASE_URL"] = "postgresql://user:pass@localhost:6543/postgres";

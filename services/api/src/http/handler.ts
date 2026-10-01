@@ -13,6 +13,7 @@ import { runAppointmentReminders } from "../domain/crm/appointmentReminders";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
 import {
   createPgSqlClient,
+  crmStoreFromEnvironment,
   databaseUrlFromEnvironment,
   ledgerStoreFromEnvironment,
 } from "../lib/sql";
@@ -75,10 +76,16 @@ export function buildProductionContext(): AppContext {
   const llmProvider = tryBuildLlmProvider();
   const adminsUserPoolId = process.env["ADMINS_USER_POOL_ID"];
   const ledgerStore = ledgerStoreFromEnvironment(process.env);
+  const crmStore = crmStoreFromEnvironment(process.env);
   const databaseUrl = databaseUrlFromEnvironment(process.env);
   if (ledgerStore === "postgres" && databaseUrl === undefined) {
     throw new Error(
       "LEDGER_STORE is postgres but DATABASE_URL is not configured",
+    );
+  }
+  if (crmStore === "postgres" && databaseUrl === undefined) {
+    throw new Error(
+      "CRM_STORE is postgres but DATABASE_URL is not configured",
     );
   }
   const sqlClient = databaseUrl !== undefined ? createPgSqlClient(databaseUrl) : undefined;
@@ -114,6 +121,7 @@ export function buildProductionContext(): AppContext {
       : {}),
     ...(sqlClient !== undefined ? { sql: sqlClient } : {}),
     ledgerStore,
+    crmStore,
   };
 }
 

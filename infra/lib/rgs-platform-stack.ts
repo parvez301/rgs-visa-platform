@@ -162,6 +162,7 @@ export class RgsPlatformStack extends cdk.Stack {
     // Set RGS_DATABASE_URL to the Supabase transaction pooler URI (:6543).
     adminApiFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL ?? "");
     adminApiFunction.addEnvironment("LEDGER_STORE", process.env.RGS_LEDGER_STORE ?? "dynamo");
+    adminApiFunction.addEnvironment("CRM_STORE", process.env.RGS_CRM_STORE ?? "dynamo");
     adminApiFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [

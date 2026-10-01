@@ -22,6 +22,15 @@ export function ledgerStoreFromEnvironment(environment: NodeJS.ProcessEnv): Ledg
   throw new Error(`LEDGER_STORE must be dynamo or postgres, got ${rawStore}`);
 }
 
+export type CrmStore = "dynamo" | "postgres";
+
+export function crmStoreFromEnvironment(environment: NodeJS.ProcessEnv): CrmStore {
+  const rawStore = environment["CRM_STORE"]?.trim();
+  if (rawStore === undefined || rawStore === "") return "dynamo";
+  if (rawStore === "dynamo" || rawStore === "postgres") return rawStore;
+  throw new Error(`CRM_STORE must be dynamo or postgres, got ${rawStore}`);
+}
+
 export function databaseUrlFromEnvironment(
   environment: NodeJS.ProcessEnv,
 ): string | undefined {
