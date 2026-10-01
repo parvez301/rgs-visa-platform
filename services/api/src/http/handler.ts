@@ -113,6 +113,7 @@ export function buildProductionContext(): AppContext {
         }
       : {}),
     ...(sqlClient !== undefined ? { sql: sqlClient } : {}),
+    ledgerStore,
   };
 }
 

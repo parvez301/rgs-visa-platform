@@ -1,5 +1,8 @@
 import { crm } from "@rgs/shared";
-import { describe, expect, it } from "vitest";
+import { PGlite } from "@electric-sql/pglite";
+import { beforeEach, describe, expect, it } from "vitest";
+import { applyMigrations } from "../../src/db/migrate";
+import type { SqlClient } from "../../src/lib/sql";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { buildTestContext } from "../helpers";
 import { Router } from "../../src/http/router";
@@ -1346,6 +1349,159 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
     );
 
     expect(statusCode).toBe(403);
+  });
+});
+
+function pgliteAsSqlClient(database: PGlite): SqlClient {
+  return {
+    async query<T extends Record<string, unknown> = Record<string, unknown>>(
+      text: string,
+      values: readonly unknown[] = [],
+    ) {
+      const result = await database.query(text, [...values]);
+      return { rows: result.rows as T[], rowCount: result.affectedRows ?? 0 };
+    },
+    async end() {
+      await database.close();
+    },
+  };
+}
+
+async function seedPostgresLedgerCase(
+  sql: SqlClient,
+  caseId: string,
+  overrides: { caseStatus?: string; partnerId?: string; destinationCountry?: string; searchText?: string } = {},
+): Promise<void> {
+  await sql.query(
+    `insert into crm_cases (
+       tenant_id, case_id, case_ref, partner_id, destination_country, case_type,
+       visa_type, group_name, case_status, billing_status, received_date,
+       appointment_date, expected_collection_date, total_inr, updated_at,
+       applicant_summary, search_text
+     ) values ('rgs',$1,$2,$3,$4,'VISA',null,null,$5,'UNBILLED','2026-03-04',
+       null,null,1500,'2026-03-04T10:00:00.000Z',$6,$7)`,
+    [
+      caseId,
+      `PG-${caseId}`,
+      overrides.partnerId ?? "p1",
+      overrides.destinationCountry ?? "AE",
+      overrides.caseStatus ?? "NEW",
+      JSON.stringify({ count: 1, custody: { WITH_RGS: 1 }, outcome: { PENDING: 1 } }),
+      overrides.searchText ?? null,
+    ],
+  );
+}
+
+describe("GET /api/v1/admin/crm/cases/ledger store dispatch", () => {
+  const LEDGER_PATH = "/api/v1/admin/crm/cases/ledger";
+  let sql: SqlClient;
+
+  beforeEach(async () => {
+    sql = pgliteAsSqlClient(new PGlite());
+    await applyMigrations(sql);
+  });
+
+  it("serves combined status, partner, country and search filters from Postgres", async () => {
+    // Dynamo is left empty: a row can only come back through the SQL path.
+    const context = { ...buildTestContext(), sql, ledgerStore: "postgres" as const };
+    await seedPostgresLedgerCase(sql, "match", { searchText: "asha rao" });
+    await seedPostgresLedgerCase(sql, "wrong_status", { caseStatus: "CLOSED", searchText: "asha rao" });
+    await seedPostgresLedgerCase(sql, "wrong_partner", { partnerId: "p2", searchText: "asha rao" });
+    await seedPostgresLedgerCase(sql, "wrong_country", { destinationCountry: "GB", searchText: "asha rao" });
+    await seedPostgresLedgerCase(sql, "wrong_search", { searchText: "bilal" });
+    const router = buildRouter(context);
+
+    const { statusCode, payload } = await call(router, "GET", LEDGER_PATH, undefined, {
+      status: "NEW",
+      partnerId: "p1",
+      destinationCountry: "ae",
+      search: "asha",
+    });
+
+    expect(statusCode).toBe(200);
+    expect(payload.rows.map((row: { caseId: string }) => row.caseId)).toEqual(["match"]);
+    expect(payload.appliedQuery).toEqual({
+      statuses: ["NEW"],
+      partnerId: "p1",
+      destinationCountry: "AE",
+      search: "asha",
+      limit: 500,
+    });
+  });
+
+  it("applies caseType, billingStatus and date filters, and reports them", async () => {
+    const context = { ...buildTestContext(), sql, ledgerStore: "postgres" as const };
+    await seedPostgresLedgerCase(sql, "case_1");
+    await sql.query(
+      `update crm_cases set appointment_date = '2026-04-01', billing_status = 'PAID'
+       where case_id = 'case_1'`,
+    );
+    await seedPostgresLedgerCase(sql, "case_2");
+    const router = buildRouter(context);
+
+    const { payload } = await call(router, "GET", LEDGER_PATH, undefined, {
+      caseType: "VISA",
+      billingStatus: "PAID,UNBILLED",
+      appointmentDateOn: "2026-04-01",
+    });
+
+    expect(payload.rows.map((row: { caseId: string }) => row.caseId)).toEqual(["case_1"]);
+    expect(payload.appliedQuery.caseType).toBe("VISA");
+    expect(payload.appliedQuery.billingStatuses).toEqual(["PAID", "UNBILLED"]);
+    expect(payload.appliedQuery.appointmentDateOn).toBe("2026-04-01");
+  });
+
+  it("400s an unknown caseType, billingStatus, or impossible date on the Postgres path", async () => {
+    const context = { ...buildTestContext(), sql, ledgerStore: "postgres" as const };
+    const router = buildRouter(context);
+
+    const badQueries: Record<string, string>[] = [
+      { caseType: "NOPE" },
+      { billingStatus: "PAID,NOPE" },
+      { destinationCountry: "UAE" },
+      { appointmentDateOn: "2026-13-45" },
+    ];
+    for (const badQuery of badQueries) {
+      expect((await call(router, "GET", LEDGER_PATH, undefined, badQuery)).statusCode).toBe(400);
+    }
+  });
+
+  it("answers 503 naming DATABASE_URL when postgres is selected without a client", async () => {
+    const context = { ...buildTestContext(), ledgerStore: "postgres" as const };
+    const router = buildRouter(context);
+
+    const { statusCode, payload } = await call(router, "GET", LEDGER_PATH);
+
+    expect(statusCode).toBe(503);
+    expect(payload.message).toContain("DATABASE_URL");
+  });
+
+  it("ignores the Postgres data and keeps partner-XOR-status when LEDGER_STORE=dynamo", async () => {
+    const context = { ...buildTestContext(), sql, ledgerStore: "dynamo" as const };
+    await seedPostgresLedgerCase(sql, "pg_only");
+    await seedLedgerCase(context, "dynamo_closed", "CLOSED", "partner_a");
+    const router = buildRouter(context);
+
+    const { payload } = await call(router, "GET", LEDGER_PATH, undefined, {
+      partnerId: "partner_a",
+      status: "NEW",
+      destinationCountry: "GB",
+    });
+
+    expect(payload.rows.map((row: { caseId: string }) => row.caseId)).toEqual(["dynamo_closed"]);
+    expect("statuses" in payload.appliedQuery).toBe(false);
+    expect("destinationCountry" in payload.appliedQuery).toBe(false);
+  });
+
+  it("defaults to the Dynamo path when no ledgerStore is set", async () => {
+    const context = { ...buildTestContext(), sql };
+    await seedPostgresLedgerCase(sql, "pg_only");
+    await seedLedgerCase(context, "dynamo_row", "NEW");
+    const router = buildRouter(context);
+
+    const { payload } = await call(router, "GET", LEDGER_PATH);
+
+    expect(payload.rows.map((row: { caseId: string }) => row.caseId)).toEqual(["dynamo_row"]);
   });
 });
 

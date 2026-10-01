@@ -4,7 +4,7 @@ import type { TableClient } from "./db";
 import type { CognitoAdminsClient } from "./cognitoAdmins";
 import type { DocumentStore } from "./documentStore";
 import type { EmailSender } from "./email";
-import type { SqlClient } from "./sql";
+import type { LedgerStore, SqlClient } from "./sql";
 import { newId } from "./ids";
 
 /** Everything a domain function needs, injected once at handler startup. */
@@ -24,6 +24,8 @@ export interface AppContext {
   cognitoAdmins?: CognitoAdminsClient;
   /** Postgres pool when DATABASE_URL is configured (Supabase transaction pooler). */
   sql?: SqlClient;
+  /** Where the CRM ledger is read from. Absent means "dynamo". */
+  ledgerStore?: LedgerStore;
 }
 
 export async function logActivity(

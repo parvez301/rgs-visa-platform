@@ -1,7 +1,7 @@
 import { crm } from "@rgs/shared";
 import { z } from "zod";
 import type { AppContext } from "../lib/context";
-import { badRequest, notFound } from "../lib/errors";
+import { badRequest, notFound, serviceUnavailable } from "../lib/errors";
 import {
   changeApplicantCustody,
   changeApplicantOutcome,
@@ -29,6 +29,7 @@ import {
   MAX_LEDGER_PAGE_LIMIT,
   listLedgerRows,
 } from "../domain/crm/ledger";
+import { listLedgerRowsFromPostgres } from "../domain/crm/ledgerPostgres";
 import {
   listOpenReviewGroups,
   resolveReviewGroup,
@@ -203,6 +204,63 @@ function parseLedgerStatuses(rawStatuses: string | undefined): crm.CaseStatus[] 
   return parsedStatuses;
 }
 
+/** A blank query value is "not supplied", not a filter on the empty string. */
+function nonBlankQueryParam(rawValue: string | undefined): string | undefined {
+  const trimmedValue = rawValue?.trim();
+  return trimmedValue === undefined || trimmedValue === "" ? undefined : trimmedValue;
+}
+
+/**
+ * The filters only the Postgres ledger offers. Parsed only when
+ * LEDGER_STORE=postgres: the Dynamo path has no way to apply them, so reading
+ * them there would be accepting a filter nothing enforces. As with status, an
+ * unrecognised enum value is a 400 naming it. Dates are validated by the
+ * domain function (real calendar day, 400 otherwise).
+ */
+function parsePostgresLedgerFilters(queryParams: Record<string, string>): {
+  destinationCountry?: string;
+  caseType?: crm.CaseType;
+  billingStatuses?: crm.BillingStatus[];
+  appointmentDateOn?: string;
+  expectedCollectionDateOn?: string;
+  search?: string;
+} {
+  const destinationCountry = nonBlankQueryParam(queryParams["destinationCountry"]);
+  if (destinationCountry !== undefined && !/^[A-Za-z]{2}$/.test(destinationCountry)) {
+    throw badRequest(`destinationCountry must be a 2-letter country code, got ${destinationCountry}`);
+  }
+  const rawCaseType = nonBlankQueryParam(queryParams["caseType"]);
+  const caseType = rawCaseType === undefined ? undefined : crm.CASE_TYPES.find((value) => value === rawCaseType);
+  if (rawCaseType !== undefined && caseType === undefined) {
+    throw badRequest(`Unknown case type ${rawCaseType}`);
+  }
+  const rawBillingStatuses = nonBlankQueryParam(queryParams["billingStatus"]);
+  const billingStatuses: crm.BillingStatus[] = [];
+  for (const requestedBillingStatus of rawBillingStatuses?.split(",") ?? []) {
+    const trimmedBillingStatus = requestedBillingStatus.trim();
+    const matchedBillingStatus = crm.BILLING_STATUSES.find(
+      (billingStatus) => billingStatus === trimmedBillingStatus,
+    );
+    if (matchedBillingStatus === undefined) {
+      throw badRequest(
+        `Unknown billing status ${trimmedBillingStatus === "" ? "(blank)" : trimmedBillingStatus}`,
+      );
+    }
+    if (!billingStatuses.includes(matchedBillingStatus)) billingStatuses.push(matchedBillingStatus);
+  }
+  const appointmentDateOn = nonBlankQueryParam(queryParams["appointmentDateOn"]);
+  const expectedCollectionDateOn = nonBlankQueryParam(queryParams["expectedCollectionDateOn"]);
+  const search = nonBlankQueryParam(queryParams["search"]);
+  return {
+    ...(destinationCountry !== undefined ? { destinationCountry: destinationCountry.toUpperCase() } : {}),
+    ...(caseType !== undefined ? { caseType } : {}),
+    ...(billingStatuses.length > 0 ? { billingStatuses } : {}),
+    ...(appointmentDateOn !== undefined ? { appointmentDateOn } : {}),
+    ...(expectedCollectionDateOn !== undefined ? { expectedCollectionDateOn } : {}),
+    ...(search !== undefined ? { search } : {}),
+  };
+}
+
 const CaseStatusPathParamSchema = z.enum(crm.CASE_STATUSES);
 
 function parseCaseStatusPathParam(rawCaseStatus: string): crm.CaseStatus {
@@ -333,6 +391,33 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
         requestContext.queryParams["limit"],
       );
       const cursor = requestContext.queryParams["cursor"];
+
+      if ((context.ledgerStore ?? "dynamo") === "postgres") {
+        if (context.sql === undefined) {
+          throw serviceUnavailable(
+            "Ledger Postgres is enabled but DATABASE_URL is not configured",
+          );
+        }
+        const postgresFilters = parsePostgresLedgerFilters(requestContext.queryParams);
+        const postgresPage = await listLedgerRowsFromPostgres(context.sql, tenantId, {
+          statuses,
+          ...(partnerId !== undefined && partnerId !== "" ? { partnerId } : {}),
+          ...postgresFilters,
+          limit,
+          ...(cursor !== undefined ? { cursor } : {}),
+        });
+        return {
+          ...postgresPage,
+          // Every filter here is a WHERE clause, so status and partner apply
+          // together and appliedQuery names each one that ran.
+          appliedQuery: {
+            statuses,
+            ...(partnerId !== undefined && partnerId !== "" ? { partnerId } : {}),
+            ...postgresFilters,
+            limit,
+          },
+        };
+      }
 
       const ledgerPage = await listLedgerRows(context, tenantId, {
         statuses,

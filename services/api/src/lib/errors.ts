@@ -21,6 +21,11 @@ export function badRequest(message: string): ApiError {
   return new ApiError(400, "BAD_REQUEST", message);
 }
 
+/** A dependency this deployment is configured to need is not available. */
+export function serviceUnavailable(message: string): ApiError {
+  return new ApiError(503, "SERVICE_UNAVAILABLE", message);
+}
+
 export function conflict(message: string): ApiError {
   return new ApiError(409, "CONFLICT", message);
 }
