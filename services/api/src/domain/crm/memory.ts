@@ -18,6 +18,14 @@ import {
   MEMORY_USER_SCOPE_PREFIX,
   memoryPartitionKey,
 } from "./keys";
+import {
+  deleteMemoryPostgres,
+  getMemoryPostgres,
+  listMemoriesByScopePostgres,
+  memoryRowExistsPostgres,
+  upsertMemoryPostgres,
+} from "./memoryPostgres";
+import { crmPostgresOf } from "./postgresClient";
 
 /**
  * What the desk has taught the agent, at three scopes (spec "Memory"
@@ -198,7 +206,12 @@ export async function forgetMemory(
   assertActorOwnsUserScope(scope, actorEmail);
   // Idempotent, like DynamoDB's own delete: forgetting a memoryKey nobody
   // ever remembered is not an error, it is simply a no-op.
-  await context.table.delete(memoryPartitionKey(tenantId, scope), memoryKey);
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    await deleteMemoryPostgres(sql, tenantId, scope, memoryKey);
+  } else {
+    await context.table.delete(memoryPartitionKey(tenantId, scope), memoryKey);
+  }
   // No recordCrmEvent here, on purpose, not by oversight: unlike remember,
   // forget's own signature carries no case reference at all (only scope +
   // memoryKey) -- a forgotten memory may never have cited one, and even when
@@ -240,7 +253,14 @@ export async function recallMemories(
 ): Promise<MemoryListing> {
   const memories: crm.CrmMemory[] = [];
   const unreadableMemoryKeys: string[] = [];
+  const sql = crmPostgresOf(context);
   for (const scope of new Set(scopes)) {
+    if (sql !== undefined) {
+      const scopeListing = await listMemoriesByScopePostgres(sql, tenantId, scope, limit);
+      memories.push(...scopeListing.memories);
+      unreadableMemoryKeys.push(...scopeListing.unreadableMemoryKeys);
+      continue;
+    }
     const storedItems = await context.table.query(memoryPartitionKey(tenantId, scope), { limit });
     const { records, unreadableRecordIds } = await collectReadableRecords(storedItems, parseStoredMemory, {
       entityDescription: "CRM memory",
@@ -266,6 +286,8 @@ export async function getMemoryOrUndefined(
   scope: string,
   memoryKey: string,
 ): Promise<crm.CrmMemory | undefined> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return getMemoryPostgres(sql, tenantId, scope, memoryKey);
   // Strongly consistent, the same opt-in caseStore.readCase takes (db.ts's
   // GetOptions). A write tool's `execute` builds its approval card's "from"
   // value from this read: an eventually consistent get inside the
@@ -301,6 +323,8 @@ export async function memoryRowExists(
   scope: string,
   memoryKey: string,
 ): Promise<boolean> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return memoryRowExistsPostgres(sql, tenantId, scope, memoryKey);
   // Strongly consistent for the same reason as getMemoryOrUndefined above,
   // with a sharper consequence: this is the DELETE route's read-before-delete
   // (agentApi.ts), so a stale miss makes the route report `forgotten: false`
@@ -313,6 +337,11 @@ export async function memoryRowExists(
 }
 
 async function writeMemory(context: AppContext, tenantId: string, memory: crm.CrmMemory): Promise<void> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    await upsertMemoryPostgres(sql, memory);
+    return;
+  }
   await context.table.put({
     PK: memoryPartitionKey(tenantId, memory.scope),
     SK: memory.memoryKey,
