@@ -13,7 +13,8 @@
     "backfill:case-status-rename": "tsx src/backfillCaseStatusRenameCli.ts",
     "seed:status-email-templates": "tsx src/seedStatusEmailTemplatesCli.ts",
     "migrate:country-documents-to-products": "tsx src/migrateCountryDocumentsToProductsCli.ts",
-    "backfill:crm-ledger-postgres": "tsx src/backfillCrmLedgerToPostgresCli.ts"
+    "backfill:crm-ledger-postgres": "tsx src/backfillCrmLedgerToPostgresCli.ts",
+    "backfill:crm-case-sor-postgres": "tsx src/backfillCrmCaseSorToPostgresCli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",

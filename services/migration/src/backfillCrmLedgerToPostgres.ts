@@ -74,6 +74,28 @@ on conflict (tenant_id, case_id) do update set
   search_text = excluded.search_text
 `;
 
+/**
+ * Writes one full partner record (every column migration 003 added), keyed on
+ * the primary key. Shared with the SoR backfill so the two cannot disagree on
+ * what "a backfilled partner" is.
+ */
+export async function upsertPartnerRecord(sql: SqlClient, partner: crm.Partner): Promise<void> {
+  await sql.query(UPSERT_PARTNER_SQL, [
+    partner.tenantId,
+    partner.partnerId,
+    partner.canonicalName,
+    crm.normalizePartnerName(partner.canonicalName).canonicalKey,
+    partner.partnerType,
+    JSON.stringify(partner.aliases),
+    partner.contactPhone ?? null,
+    partner.contactEmail ?? null,
+    partner.contactWhatsapp ?? null,
+    partner.notes ?? null,
+    partner.createdAt,
+    partner.createdByEmail ?? null,
+  ]);
+}
+
 /** Postgres `integer` ceiling; `crm_cases.total_inr` is `integer`. */
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
 
@@ -137,20 +159,7 @@ export async function backfillCrmLedgerToPostgres(
   );
   result.unreadablePartnerIds.push(...partnerCollection.unreadableRecordIds);
   for (const partner of partnerCollection.records) {
-    await sql.query(UPSERT_PARTNER_SQL, [
-      tenantId,
-      partner.partnerId,
-      partner.canonicalName,
-      crm.normalizePartnerName(partner.canonicalName).canonicalKey,
-      partner.partnerType,
-      JSON.stringify(partner.aliases),
-      partner.contactPhone ?? null,
-      partner.contactEmail ?? null,
-      partner.contactWhatsapp ?? null,
-      partner.notes ?? null,
-      partner.createdAt,
-      partner.createdByEmail ?? null,
-    ]);
+    await upsertPartnerRecord(sql, { ...partner, tenantId });
     result.partnersUpserted += 1;
   }
 
