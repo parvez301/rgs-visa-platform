@@ -10,7 +10,16 @@ import {
   caseStatusGsi1Pk,
   partnerCasesGsi2Pk,
 } from "./keys";
+import { readCasePostgres, writeCasePostgres } from "./caseStorePostgres";
 import { resolveLedgerSearchText } from "./ledgerSearchText";
+
+/** `CRM_STORE=postgres` is only valid with a SQL client; fail loudly, never fall back to Dynamo. */
+function postgresClientFor(context: AppContext) {
+  if (context.sql === undefined) {
+    throw new Error("CRM_STORE=postgres requires context.sql");
+  }
+  return context.sql;
+}
 
 /**
  * The domain shape (CrmCase, with applicants[] embedded) and the storage shape
@@ -19,6 +28,16 @@ import { resolveLedgerSearchText } from "./ledgerSearchText";
  */
 
 export async function writeCase(context: AppContext, crmCase: crm.CrmCase): Promise<void> {
+  if (context.crmStore === "postgres") {
+    // B.1: travellers still live in Dynamo, so names for searchText come from
+    // there (same resolver as the Dynamo path). Once travellers move to
+    // crm_travellers, drop the resolver and the Postgres default takes over.
+    await writeCasePostgres(postgresClientFor(context), crmCase, {
+      searchTextResolver: (applicants, extraTerms) =>
+        resolveLedgerSearchText(context, crmCase.tenantId, applicants, extraTerms),
+    });
+    return;
+  }
   const partitionKey = casePartitionKey(crmCase.tenantId, crmCase.caseId);
   const { applicants, ...caseBody } = crmCase;
   const searchText = await resolveLedgerSearchText(
@@ -80,6 +99,9 @@ export async function readCase(
   tenantId: string,
   caseId: string,
 ): Promise<crm.CrmCase | undefined> {
+  if (context.crmStore === "postgres") {
+    return readCasePostgres(postgresClientFor(context), tenantId, caseId);
+  }
   const partitionKey = casePartitionKey(tenantId, caseId);
   // Strongly consistent, for the same reason the applicant read below is: an
   // eventually consistent get can miss a META item that was written moments
