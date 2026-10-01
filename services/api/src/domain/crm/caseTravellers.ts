@@ -2,6 +2,8 @@ import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
 import { stripStorageKeys } from "../../lib/storedRecords";
 import { META_SORT_KEY, travellerPartitionKey } from "./keys";
+import { crmPostgresOf } from "./postgresClient";
+import { getTravellerPostgres } from "./travellersPostgres";
 
 /**
  * The names behind a case's applicants, keyed by `travellerId` (spec
@@ -18,10 +20,16 @@ export async function resolveCaseTravellers(
 ): Promise<crm.CaseTravellerMap> {
   const travellers: crm.CaseTravellerMap = {};
   const distinctTravellerIds = [...new Set(applicants.map((applicant) => applicant.travellerId))];
+  const sql = crmPostgresOf(context);
   for (const travellerId of distinctTravellerIds) {
-    const travellerItem = await context.table.get(travellerPartitionKey(tenantId, travellerId), META_SORT_KEY);
-    if (travellerItem === undefined) continue;
-    const parsedTraveller = crm.CrmTravellerSchema.safeParse(stripStorageKeys(travellerItem));
+    const storedTraveller =
+      sql !== undefined
+        ? await getTravellerPostgres(sql, tenantId, travellerId)
+        : await context.table
+            .get(travellerPartitionKey(tenantId, travellerId), META_SORT_KEY)
+            .then((travellerItem) => travellerItem && stripStorageKeys(travellerItem));
+    if (storedTraveller === undefined) continue;
+    const parsedTraveller = crm.CrmTravellerSchema.safeParse(storedTraveller);
     if (!parsedTraveller.success) continue;
     travellers[travellerId] = {
       fullName: parsedTraveller.data.fullName,

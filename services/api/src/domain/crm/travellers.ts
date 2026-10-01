@@ -1,7 +1,6 @@
 import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import type { TableItem } from "../../lib/db";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import {
@@ -15,6 +14,15 @@ import {
   travellerNameGsi2Pk,
   travellerPartitionKey,
 } from "./keys";
+import { crmPostgresOf } from "./postgresClient";
+import {
+  findTravellerByNamePostgres,
+  findTravellerByPassportPostgres,
+  getTravellerPostgres,
+  insertTravellerPostgres,
+  updateTravellerDetailsPostgres,
+} from "./travellersPostgres";
+import { isUniqueViolation } from "../../lib/sqlColumns";
 
 export interface UpsertTravellerInput {
   fullName: string;
@@ -68,6 +76,20 @@ export async function upsertTraveller(
     throw error;
   }
 
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    const wasInserted = await insertTravellerPostgres(sql, traveller);
+    if (wasInserted) return traveller;
+    // The passport unique index refused us: another request registered the
+    // same passport between our lookup and our insert. Return its traveller --
+    // recognising a repeat traveller is the whole point of the upsert.
+    const winner = traveller.passportNumber === undefined
+      ? undefined
+      : await findTravellerByPassport(context, tenantId, traveller.passportNumber);
+    if (winner === undefined) throw conflict("Traveller could not be created; please retry.");
+    return winner;
+  }
+
   await context.table.put({
     PK: travellerPartitionKey(tenantId, traveller.travellerId),
     SK: META_SORT_KEY,
@@ -89,6 +111,11 @@ export async function findTravellerByPassport(
   tenantId: string,
   passportNumber: string,
 ): Promise<crm.CrmTraveller | undefined> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    const stored = await findTravellerByPassportPostgres(sql, tenantId, passportNumber);
+    return stored ? parseStoredTraveller(stored) : undefined;
+  }
   const matches = await context.table.queryGsi(
     "GSI3",
     passportGsi3Pk(tenantId, passportNumber),
@@ -110,6 +137,11 @@ export async function findTravellerByName(
   tenantId: string,
   fullName: string,
 ): Promise<crm.CrmTraveller | undefined> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    const stored = await findTravellerByNamePostgres(sql, tenantId, normalizeTravellerName(fullName));
+    return stored ? parseStoredTraveller(stored) : undefined;
+  }
   const matches = await context.table.queryGsi(
     "GSI2",
     travellerNameGsi2Pk(tenantId, normalizeTravellerName(fullName)),
@@ -124,6 +156,12 @@ export async function getTravellerOrThrow(
   tenantId: string,
   travellerId: string,
 ): Promise<crm.CrmTraveller> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    const stored = await getTravellerPostgres(sql, tenantId, travellerId);
+    if (!stored) throw notFound("Traveller");
+    return parseStoredTraveller(stored);
+  }
   const travellerItem = await context.table.get(
     travellerPartitionKey(tenantId, travellerId),
     META_SORT_KEY,
@@ -190,6 +228,19 @@ export async function updateTravellerDetails(
     }
     throw error;
   }
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    try {
+      await updateTravellerDetailsPostgres(sql, updatedTraveller);
+    } catch (error) {
+      if (!isUniqueViolation(error) || updatedTraveller.passportNumber === undefined) throw error;
+      // Lost a race with another writer of the same passport (the pre-check
+      // above passed). Report it the way the pre-check would have.
+      await assertPassportFreeForTraveller(context, tenantId, travellerId, updatedTraveller.passportNumber);
+      throw conflict(`Passport ${updatedTraveller.passportNumber} is already on file for another traveller.`);
+    }
+    return updatedTraveller;
+  }
   await context.table.put({
     PK: travellerPartitionKey(tenantId, travellerId),
     SK: META_SORT_KEY,
@@ -211,7 +262,7 @@ export async function updateTravellerDetails(
  * 500. Typed as CorruptRecordError it answers 409, exactly as readCase already
  * does for a case partition that will not reassemble.
  */
-function parseStoredTraveller(travellerItem: TableItem): crm.CrmTraveller {
+function parseStoredTraveller(travellerItem: Record<string, unknown>): crm.CrmTraveller {
   return parseStoredRecord(
     crm.CrmTravellerSchema,
     "Traveller",

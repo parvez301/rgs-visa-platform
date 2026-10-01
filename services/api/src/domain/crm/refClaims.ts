@@ -3,6 +3,8 @@ import type { AppContext } from "../../lib/context";
 import { badRequest, conflict } from "../../lib/errors";
 import { stripStorageKeys } from "../../lib/storedRecords";
 import { META_SORT_KEY, refClaimPartitionKey } from "./keys";
+import { crmPostgresOf } from "./postgresClient";
+import { deleteRefClaimPostgres, insertRefClaimIfAbsentPostgres, readRefClaimPostgres } from "./refClaimsPostgres";
 
 /**
  * "REF must be unique" (owner, 2026-09-29), enforced by one claim item per
@@ -59,6 +61,8 @@ export async function readRefClaim(
   tenantId: string,
   refKey: string,
 ): Promise<RefClaim | undefined> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return readRefClaimPostgres(sql, tenantId, refKey);
   // Consistent: a claim written a moment ago by the losing side of a race
   // must be visible to the reader deciding whether it is ours.
   const storedItem = await context.table.get(refClaimPartitionKey(tenantId, refKey), META_SORT_KEY, {
@@ -86,11 +90,15 @@ async function claimRefKey(
 ): Promise<ClaimOutcome> {
   for (let attempt = 1; attempt <= MAX_CLAIM_ATTEMPTS; attempt += 1) {
     const refClaim: RefClaim = { tenantId, refKey, refValue, caseId, claimedAt: context.now().toISOString() };
-    const wasWritten = await context.table.putIfAbsent({
-      PK: refClaimPartitionKey(tenantId, refKey),
-      SK: META_SORT_KEY,
-      ...refClaim,
-    });
+    const sql = crmPostgresOf(context);
+    const wasWritten =
+      sql !== undefined
+        ? await insertRefClaimIfAbsentPostgres(sql, refClaim)
+        : await context.table.putIfAbsent({
+            PK: refClaimPartitionKey(tenantId, refKey),
+            SK: META_SORT_KEY,
+            ...refClaim,
+          });
     if (wasWritten) return "written";
     const existingClaim = await readRefClaim(context, tenantId, refKey);
     if (existingClaim === undefined) continue;
@@ -135,6 +143,13 @@ export async function releaseRefKeys(
   for (const refKey of refKeys) {
     const existingClaim = await readRefClaim(context, tenantId, refKey);
     if (existingClaim?.caseId !== caseId) continue;
+    const sql = crmPostgresOf(context);
+    if (sql !== undefined) {
+      // Guarded on the owner again: between the read and the delete the claim
+      // could have been released and re-taken by another case.
+      await deleteRefClaimPostgres(sql, tenantId, refKey, caseId);
+      continue;
+    }
     await context.table.delete(refClaimPartitionKey(tenantId, refKey), META_SORT_KEY);
   }
 }

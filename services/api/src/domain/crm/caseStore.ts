@@ -11,15 +11,8 @@ import {
   partnerCasesGsi2Pk,
 } from "./keys";
 import { readCasePostgres, writeCasePostgres } from "./caseStorePostgres";
+import { postgresClientFor } from "./postgresClient";
 import { resolveLedgerSearchText } from "./ledgerSearchText";
-
-/** `CRM_STORE=postgres` is only valid with a SQL client; fail loudly, never fall back to Dynamo. */
-function postgresClientFor(context: AppContext) {
-  if (context.sql === undefined) {
-    throw new Error("CRM_STORE=postgres requires context.sql");
-  }
-  return context.sql;
-}
 
 /**
  * The domain shape (CrmCase, with applicants[] embedded) and the storage shape
@@ -29,13 +22,10 @@ function postgresClientFor(context: AppContext) {
 
 export async function writeCase(context: AppContext, crmCase: crm.CrmCase): Promise<void> {
   if (context.crmStore === "postgres") {
-    // B.1: travellers still live in Dynamo, so names for searchText come from
-    // there (same resolver as the Dynamo path). Once travellers move to
-    // crm_travellers, drop the resolver and the Postgres default takes over.
-    await writeCasePostgres(postgresClientFor(context), crmCase, {
-      searchTextResolver: (applicants, extraTerms) =>
-        resolveLedgerSearchText(context, crmCase.tenantId, applicants, extraTerms),
-    });
+    // Travellers live in crm_travellers under CRM_STORE=postgres, so the
+    // searchText names come from there (writeCasePostgres' default resolver);
+    // Dynamo is never consulted on this path.
+    await writeCasePostgres(postgresClientFor(context), crmCase);
     return;
   }
   const partitionKey = casePartitionKey(crmCase.tenantId, crmCase.caseId);

@@ -158,6 +158,21 @@ describe("backfillCrmLedgerToPostgres", () => {
       canonical_name: "Acme Travel",
       contact_email: "ops@acme.example",
     });
+
+    // The full Partner record lands too, so CRM_STORE=postgres can read it.
+    const fullPartnerRows = await sql.query<Record<string, unknown>>(
+      `select canonical_key, partner_type, aliases, contact_phone, notes, created_at from crm_partners`,
+    );
+    expect(fullPartnerRows.rows[0]).toMatchObject({
+      canonical_key: "ACME TRAVEL",
+      partner_type: "AGENCY",
+      aliases: [],
+      contact_phone: null,
+      notes: null,
+    });
+    expect(new Date(String(fullPartnerRows.rows[0]?.["created_at"])).toISOString()).toBe(
+      "2026-03-01T08:00:00.000Z",
+    );
   });
 
   it("overwrites a stale row on re-run", async () => {

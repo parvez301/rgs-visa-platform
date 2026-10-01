@@ -80,8 +80,8 @@ describe("CRM case mutators with CRM_STORE=postgres", () => {
     context = { ...baseContext, table: tracking.table, crmStore: "postgres", sql };
   });
 
-  // Hybrid by design for B.1: partners, travellers and REF claims still live in
-  // Dynamo until their own tasks move them. Cases and events must not.
+  // Partners, travellers and REF claims live in Postgres too (Task 6): nothing
+  // a case mutator does may reach Dynamo for any of them.
   async function seedPartnerId(): Promise<string> {
     const partner = await createPartner(context, TENANT_ID, { canonicalName: "Ozzy Travels" }, ACTOR);
     return partner.partnerId;
@@ -124,12 +124,22 @@ describe("CRM case mutators with CRM_STORE=postgres", () => {
     return created;
   }
 
-  /** Every Dynamo key a case or event could live under for this case. */
+  /** Every Dynamo key family a CRM mutator could still reach: case, partner, traveller, REF claim. */
+  const CRM_DYNAMO_KEY_MARKERS = [
+    "#CASE#",
+    "#CASE_STATUS#",
+    "#PARTNER#",
+    "#PARTNERS",
+    "#TRAVELLER#",
+    "#TRAVELLER_NAME#",
+    "#PASSPORT#",
+    "#REF_CLAIM#",
+  ];
+
   function expectNoDynamoCaseAccess(caseId: string): void {
     const casePartition = casePartitionKey(TENANT_ID, caseId);
-    expect(touchedKeys.filter((key) => key === casePartition || key.includes("#CASE#"))).toEqual([]);
-    // Case status / partner indexes are written by the Dynamo writeCase only.
-    expect(touchedKeys.filter((key) => key.includes("#CASE_STATUS#") || key.includes("#PARTNER_CASES#"))).toEqual([]);
+    expect(touchedKeys.filter((key) => key === casePartition)).toEqual([]);
+    expect(touchedKeys.filter((key) => CRM_DYNAMO_KEY_MARKERS.some((marker) => key.includes(marker)))).toEqual([]);
   }
 
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
@@ -154,12 +164,12 @@ describe("CRM case mutators with CRM_STORE=postgres", () => {
     expect(events.map((event) => event.eventType)).toEqual(["CASE_CREATED"]);
     expect(await scalar<number>("select count(*)::int as value from crm_events")).toBe(1);
 
-    // Hybrid seams still work: the REF claim (Dynamo until Task 6) is held.
+    // The REF claim is held in crm_ref_claims.
     expect(await readRefClaim(context, TENANT_ID, "31377")).toBeDefined();
     expectNoDynamoCaseAccess(created.caseId);
   });
 
-  it("createCase stamps the Ledger search haystack from Dynamo travellers into the Postgres row", async () => {
+  it("createCase stamps the Ledger search haystack from crm_travellers into the Postgres row", async () => {
     const partnerId = await seedPartnerId();
     const created = await seedCase(partnerId, "40001");
     const searchText = await scalar<string | null>("select search_text as value from crm_cases where case_id = $1", [
@@ -269,7 +279,7 @@ describe("CRM case mutators with CRM_STORE=postgres", () => {
       await scalar<string | null>("select search_text as value from crm_cases where case_id = $1", [created.caseId]),
     ).toContain("smith family");
 
-    // The REF moved: new one claimed, old one released (still Dynamo until Task 6).
+    // The REF moved: new one claimed, old one released (in crm_ref_claims).
     expect(await readRefClaim(context, TENANT_ID, "31377B")).toBeDefined();
     expect(await readRefClaim(context, TENANT_ID, "31377")).toBeUndefined();
 
@@ -429,7 +439,7 @@ describe("CRM case mutators with CRM_STORE=postgres", () => {
       )
     ).rows[0];
     expect(row).toEqual({ passport_number: "N1234567", ref_no: "R-1" });
-    // The second writeCase picked up the renamed traveller (Dynamo) after the edit.
+    // The second writeCase picked up the renamed traveller (crm_travellers) after the edit.
     const searchText = await scalar<string | null>("select search_text as value from crm_cases where case_id = $1", [
       created.caseId,
     ]);

@@ -1,6 +1,5 @@
 import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
-import type { TableItem } from "../../lib/db";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import {
@@ -10,6 +9,13 @@ import {
   stripStorageKeys,
 } from "../../lib/storedRecords";
 import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "./keys";
+import {
+  getPartnerRowPostgres,
+  insertPartnerPostgres,
+  listPartnerRowsPostgres,
+  updatePartnerContactPostgres,
+} from "./partnersPostgres";
+import { crmPostgresOf } from "./postgresClient";
 
 export interface CreatePartnerInput {
   canonicalName: string;
@@ -60,6 +66,12 @@ export async function createPartner(
     ...(actorEmail !== "" ? { createdByEmail: actorEmail } : {}),
   });
 
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    await insertPartnerPostgres(sql, partner, normalized.canonicalKey);
+    return partner;
+  }
+
   await context.table.put({
     PK: partnerPartitionKey(tenantId, partner.partnerId),
     SK: META_SORT_KEY,
@@ -97,7 +109,11 @@ export async function listPartners(
   context: AppContext,
   tenantId: string,
 ): Promise<PartnerListing> {
-  const partnerItems = await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
+  const sql = crmPostgresOf(context);
+  const partnerItems =
+    sql !== undefined
+      ? (await listPartnerRowsPostgres(sql, tenantId)).map((row) => row.candidate)
+      : await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
   const { records, unreadableRecordIds } = await collectReadableRecords(
     partnerItems,
     parseStoredPartner,
@@ -111,6 +127,12 @@ export async function getPartnerOrThrow(
   tenantId: string,
   partnerId: string,
 ): Promise<crm.Partner> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    const partnerRow = await getPartnerRowPostgres(sql, tenantId, partnerId);
+    if (!partnerRow) throw notFound("Partner");
+    return parseStoredPartner(partnerRow.candidate);
+  }
   const partnerItem = await context.table.get(partnerPartitionKey(tenantId, partnerId), META_SORT_KEY);
   if (!partnerItem) throw notFound("Partner");
   return parseStoredPartner(partnerItem);
@@ -141,18 +163,39 @@ export async function findPartnerByName(
   const normalized = crm.normalizePartnerName(rawName);
   const soughtCanonicalKey = normalized.canonicalKey;
   if (soughtCanonicalKey === null) return undefined;
-  const partnerItems = await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
-  // Match on the RAW item's GSI1SK. Parsing first would strip the key.
-  const canonicalNameMatch = partnerItems.find(
-    (partnerItem) => partnerItem.GSI1SK === soughtCanonicalKey,
-  );
-  const aliasMatch = partnerItems.find((partnerItem) =>
-    storedAliasesOf(partnerItem).some(
+  const sql = crmPostgresOf(context);
+  // Both stores reduce to the same lookup shape: the stored canonical key, the
+  // stored aliases, and the row to parse. Match on those RAW values -- parsing
+  // first would strip the key.
+  const lookupRows: PartnerLookupRow[] =
+    sql !== undefined
+      ? (await listPartnerRowsPostgres(sql, tenantId)).map((row) => ({
+          // Phase A backfill rows carry no canonical_key; derive it from the name.
+          canonicalKey:
+            row.canonicalKey ??
+            crm.normalizePartnerName(String(row.candidate["canonicalName"] ?? "")).canonicalKey,
+          aliases: row.aliases,
+          stored: row.candidate,
+        }))
+      : (await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId))).map((partnerItem) => ({
+          canonicalKey: partnerItem.GSI1SK ?? null,
+          aliases: storedAliasesOf(partnerItem),
+          stored: partnerItem,
+        }));
+  const canonicalNameMatch = lookupRows.find((lookupRow) => lookupRow.canonicalKey === soughtCanonicalKey);
+  const aliasMatch = lookupRows.find((lookupRow) =>
+    lookupRow.aliases.some(
       (alias) => crm.normalizePartnerName(alias).canonicalKey === soughtCanonicalKey,
     ),
   );
-  const matchingItem = canonicalNameMatch ?? aliasMatch;
-  return matchingItem ? parseStoredPartner(matchingItem) : undefined;
+  const matchingRow = canonicalNameMatch ?? aliasMatch;
+  return matchingRow ? parseStoredPartner(matchingRow.stored) : undefined;
+}
+
+interface PartnerLookupRow {
+  canonicalKey: string | null;
+  aliases: string[];
+  stored: Record<string, unknown>;
 }
 
 /**
@@ -164,7 +207,7 @@ export async function findPartnerByName(
  * readCase already does for a case partition that will not reassemble, and
  * listPartners can then catch precisely this and let everything else propagate.
  */
-function parseStoredPartner(partnerItem: TableItem): crm.Partner {
+function parseStoredPartner(partnerItem: Record<string, unknown>): crm.Partner {
   return parseStoredRecord(
     crm.PartnerSchema,
     "Partner",
@@ -193,9 +236,15 @@ export async function updatePartnerContact(
   partnerId: string,
   input: UpdatePartnerContactInput,
 ): Promise<crm.Partner> {
-  const partnerItem = await context.table.get(partnerPartitionKey(tenantId, partnerId), META_SORT_KEY);
-  if (!partnerItem) throw notFound("Partner");
-  const currentPartner = parseStoredPartner(partnerItem);
+  const sql = crmPostgresOf(context);
+  const partnerItem =
+    sql === undefined
+      ? await context.table.get(partnerPartitionKey(tenantId, partnerId), META_SORT_KEY)
+      : undefined;
+  const partnerRow = sql === undefined ? undefined : await getPartnerRowPostgres(sql, tenantId, partnerId);
+  const storedPartner = partnerItem ?? partnerRow?.candidate;
+  if (!storedPartner) throw notFound("Partner");
+  const currentPartner = parseStoredPartner(storedPartner);
 
   const { contactEmail: _email, contactPhone: _phone, contactWhatsapp: _whatsapp, ...partnerWithoutContact } = currentPartner;
   const resolveField = (next: string | null | undefined, current: string | undefined): string | undefined =>
@@ -211,15 +260,20 @@ export async function updatePartnerContact(
     ...(contactWhatsapp !== undefined ? { contactWhatsapp } : {}),
   });
 
+  if (sql !== undefined) {
+    await updatePartnerContactPostgres(sql, updatedPartner, context.now().toISOString());
+    return updatedPartner;
+  }
+
   // `TableItem` (lib/db.ts) types PK/SK as strings and GSI1PK/GSI1SK as
   // optional strings, so these read back typed. GSI1SK is the canonical name
   // key createPartner stored; it is not on PartnerSchema and must be carried
   // over by hand or the partner drops out of every by-name lookup.
   await context.table.put({
-    PK: partnerItem.PK,
-    SK: partnerItem.SK,
+    PK: partnerItem!.PK,
+    SK: partnerItem!.SK,
     GSI1PK: partnerListGsi1Pk(tenantId),
-    ...(partnerItem.GSI1SK !== undefined ? { GSI1SK: partnerItem.GSI1SK } : {}),
+    ...(partnerItem!.GSI1SK !== undefined ? { GSI1SK: partnerItem!.GSI1SK } : {}),
     ...updatedPartner,
   });
   return updatedPartner;

@@ -1,14 +1,7 @@
 import type { AppContext } from "../../lib/context";
 import { newId } from "../../lib/ids";
 import { EVENT_SORT_KEY_PREFIX, casePartitionKey, eventSortKey } from "./keys";
-
-/** `CRM_STORE=postgres` is only valid with a SQL client; fail loudly, never fall back to Dynamo. */
-function postgresClientFor(context: AppContext) {
-  if (context.sql === undefined) {
-    throw new Error("CRM_STORE=postgres requires context.sql");
-  }
-  return context.sql;
-}
+import { postgresClientFor } from "./postgresClient";
 
 export type CrmEventType =
   | "CASE_CREATED"

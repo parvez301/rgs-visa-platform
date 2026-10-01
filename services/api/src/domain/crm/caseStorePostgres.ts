@@ -1,5 +1,13 @@
 import { crm } from "@rgs/shared";
 import type { SqlClient } from "../../lib/sql";
+import {
+  candidateFromColumns,
+  isoDateSql,
+  isoTimestampSql,
+  jsonOrNull,
+  orNull,
+  type DbRow,
+} from "../../lib/sqlColumns";
 import { parseStoredRecord } from "../../lib/storedRecords";
 
 /**
@@ -10,20 +18,11 @@ import { parseStoredRecord } from "../../lib/storedRecords";
  * from a caller.
  */
 
-/** UTC ISO-8601 with milliseconds, the shape `z.string().datetime()` accepts. */
-function isoTimestampSql(column: string): string {
-  return `to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
-}
-
-function isoDateSql(column: string): string {
-  return `to_char(${column}, 'YYYY-MM-DD')`;
-}
-
 /**
  * Resolves the Ledger `searchText` for a case about to be written. A caller
- * (the Dynamo-travellers era `caseStore.writeCase`) may supply its own; the
- * default reads names from `crm_travellers` and falls back to the applicant's
- * own passport number, mirroring `resolveLedgerSearchText`.
+ * may supply its own; the default (what `caseStore.writeCase` uses under
+ * `CRM_STORE=postgres`) reads names from `crm_travellers` and falls back to
+ * the applicant's own passport number, mirroring `resolveLedgerSearchText`.
  */
 export type SearchTextResolver = (
   applicants: readonly crm.CaseApplicant[],
@@ -125,15 +124,6 @@ insert into crm_applicants (
   tracking_number, visa_result_key
 ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10, $11, $12, $13)`;
 
-/** Optional domain fields become SQL NULL, never the string "undefined". */
-function orNull<T>(value: T | undefined): T | null {
-  return value === undefined ? null : value;
-}
-
-function jsonOrNull(value: unknown): string | null {
-  return value === undefined ? null : JSON.stringify(value);
-}
-
 export async function writeCasePostgres(
   sql: SqlClient,
   crmCase: crm.CrmCase,
@@ -220,21 +210,6 @@ export async function writeCasePostgres(
     await sql.query("ROLLBACK");
     throw error;
   }
-}
-
-type DbRow = Record<string, unknown>;
-
-/** NULL columns become absent keys, as an absent Dynamo attribute would be. */
-function candidateFromColumns(
-  dbRow: DbRow,
-  columns: ReadonlyArray<readonly [fieldName: string, columnName: string]>,
-): Record<string, unknown> {
-  const candidate: Record<string, unknown> = {};
-  for (const [fieldName, columnName] of columns) {
-    const value = dbRow[columnName];
-    if (value !== null && value !== undefined) candidate[fieldName] = value;
-  }
-  return candidate;
 }
 
 const CASE_COLUMNS: ReadonlyArray<readonly [string, string]> = [

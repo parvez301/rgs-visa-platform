@@ -28,11 +28,22 @@ export interface BackfillCrmLedgerOptions {
 }
 
 const UPSERT_PARTNER_SQL = `
-insert into crm_partners (tenant_id, partner_id, canonical_name, contact_email, updated_at)
-values ($1, $2, $3, $4, $5)
+insert into crm_partners (
+  tenant_id, partner_id, canonical_name, canonical_key, partner_type, aliases,
+  contact_phone, contact_email, contact_whatsapp, notes, created_at,
+  created_by_email, updated_at
+) values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11::timestamptz, $12, $11::timestamptz)
 on conflict (tenant_id, partner_id) do update set
   canonical_name = excluded.canonical_name,
+  canonical_key = excluded.canonical_key,
+  partner_type = excluded.partner_type,
+  aliases = excluded.aliases,
+  contact_phone = excluded.contact_phone,
   contact_email = excluded.contact_email,
+  contact_whatsapp = excluded.contact_whatsapp,
+  notes = excluded.notes,
+  created_at = excluded.created_at,
+  created_by_email = excluded.created_by_email,
   updated_at = excluded.updated_at
 `;
 
@@ -130,8 +141,15 @@ export async function backfillCrmLedgerToPostgres(
       tenantId,
       partner.partnerId,
       partner.canonicalName,
+      crm.normalizePartnerName(partner.canonicalName).canonicalKey,
+      partner.partnerType,
+      JSON.stringify(partner.aliases),
+      partner.contactPhone ?? null,
       partner.contactEmail ?? null,
+      partner.contactWhatsapp ?? null,
+      partner.notes ?? null,
       partner.createdAt,
+      partner.createdByEmail ?? null,
     ]);
     result.partnersUpserted += 1;
   }

@@ -192,6 +192,7 @@ describe("applyMigrations 002_crm_case_sor", () => {
     expect(applied.rows.map((row) => row.filename)).toEqual([
       "001_crm_ledger.sql",
       "002_crm_case_sor.sql",
+      "003_crm_partners_sor.sql",
     ]);
     await sql.end();
   });

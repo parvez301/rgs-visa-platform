@@ -7,10 +7,15 @@ import {
   MIGRATION_FILENAME as CRM_CASE_SOR_FILENAME,
   MIGRATION_SQL as CRM_CASE_SOR_SQL,
 } from "./migrations/002_crm_case_sor.js";
+import {
+  MIGRATION_FILENAME as CRM_PARTNERS_SOR_FILENAME,
+  MIGRATION_SQL as CRM_PARTNERS_SOR_SQL,
+} from "./migrations/003_crm_partners_sor.js";
 
 const MIGRATIONS: ReadonlyArray<{ filename: string; sql: string }> = [
   { filename: CRM_LEDGER_FILENAME, sql: CRM_LEDGER_SQL },
   { filename: CRM_CASE_SOR_FILENAME, sql: CRM_CASE_SOR_SQL },
+  { filename: CRM_PARTNERS_SOR_FILENAME, sql: CRM_PARTNERS_SOR_SQL },
 ];
 
 async function isMigrationApplied(sql: SqlClient, filename: string): Promise<boolean> {
