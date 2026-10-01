@@ -20,6 +20,7 @@ import {
 } from "../../src/domain/crm/keys";
 import { recordReviewItem } from "../../src/domain/crm/reviewQueue";
 import type { AppContext } from "../../src/lib/context";
+import { pgliteAsSqlClient } from "../pgliteSqlClient";
 
 function buildRouter(context: AppContext): Router {
   return registerCrmRoutes(new Router(), context);
@@ -1352,21 +1353,6 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
   });
 });
 
-function pgliteAsSqlClient(database: PGlite): SqlClient {
-  return {
-    async query<T extends Record<string, unknown> = Record<string, unknown>>(
-      text: string,
-      values: readonly unknown[] = [],
-    ) {
-      const result = await database.query(text, [...values]);
-      return { rows: result.rows as T[], rowCount: result.affectedRows ?? 0 };
-    },
-    async end() {
-      await database.close();
-    },
-  };
-}
-
 async function seedPostgresLedgerCase(
   sql: SqlClient,
   caseId: string,
@@ -1935,4 +1921,42 @@ describe("CRM destination countries", () => {
       expect(response.statusCode).toBe(404);
     }
   });
+
+  it("400s an impossible calendar date on the write routes instead of storing or 500ing", async () => {
+    const context = buildTestContext();
+    const router = buildRouter(context);
+    const { payload: partner } = await call(router, "POST", "/api/v1/admin/crm/partners", { canonicalName: "Date Tours" });
+    const { payload: traveller } = await call(router, "POST", "/api/v1/admin/crm/travellers", { fullName: "Dee Date" });
+    const { payload: created } = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "RGS-DATE-1",
+      caseType: "VISA",
+      visaType: "TOURIST",
+      partnerId: partner.partnerId,
+      destinationCountry: "AE",
+      receivedDate: "2026-09-16",
+      applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
+    });
+
+    const createResponse = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "RGS-DATE-2",
+      caseType: "VISA",
+      visaType: "TOURIST",
+      partnerId: partner.partnerId,
+      destinationCountry: "AE",
+      receivedDate: "2026-02-30",
+      applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
+    });
+    const updateResponse = await call(router, "PUT", `/api/v1/admin/crm/cases/${created.caseId}`, {
+      appointmentDate: "2026-04-31",
+    });
+    const travellerResponse = await call(router, "POST", "/api/v1/admin/crm/travellers", {
+      fullName: "Bad Birthday",
+      dateOfBirth: "2026-02-30",
+    });
+
+    expect(createResponse.statusCode).toBe(400);
+    expect(updateResponse.statusCode).toBe(400);
+    expect(travellerResponse.statusCode).toBe(400);
+  });
 });
+

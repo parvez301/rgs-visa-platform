@@ -14,7 +14,7 @@ import {
 import { refKeysOfCase } from "@rgs/api/src/domain/crm/refClaims";
 import type { AppContext } from "@rgs/api/src/lib/context";
 import type { TableClient } from "@rgs/api/src/lib/db";
-import { CorruptRecordError } from "@rgs/api/src/lib/errors";
+import { ApiError, CorruptRecordError } from "@rgs/api/src/lib/errors";
 import type { SqlClient } from "@rgs/api/src/lib/sql";
 import { isUniqueViolation, orNull } from "@rgs/api/src/lib/sqlColumns";
 import {
@@ -112,6 +112,9 @@ const StoredRefClaimSchema = z.object({
  * dropped connection, a missing table -- is not about the record and aborts.
  */
 function isRecordLevelDatabaseError(error: unknown): boolean {
+  // writeCasePostgres refuses an impossible calendar date itself (a 400 naming
+  // the case and field) before Postgres' ::date cast can.
+  if (error instanceof ApiError && error.statusCode === 400) return true;
   if (typeof error !== "object" || error === null) return false;
   const sqlState = (error as { code?: unknown }).code;
   return typeof sqlState === "string" && (sqlState.startsWith("22") || sqlState.startsWith("23"));
@@ -157,8 +160,8 @@ async function listDynamoCaseIds(table: TableClient, tenantId: string): Promise<
  * and applicants, its REF claims and its events.
  *
  * Serial by design: `createPgSqlClient` is a one-connection pool, and
- * `writeCasePostgres` wraps each case in BEGIN/COMMIT, so two cases in flight
- * would interleave their transactions on that connection.
+ * `writeCasePostgres` holds that connection for each case's transaction, so a
+ * second case in flight would only queue behind it.
  *
  * Re-runnable: partners, travellers, claims and cases are upserted on their
  * primary keys (a case's applicants are replaced with it); events are

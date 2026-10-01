@@ -21,21 +21,7 @@ import type { AppContext } from "@rgs/api/src/lib/context";
 import { InMemoryTableClient } from "@rgs/api/src/lib/db";
 import type { SqlClient } from "@rgs/api/src/lib/sql";
 import { backfillCrmCaseSorToPostgres } from "../src/backfillCrmCaseSorToPostgres";
-
-function pgliteAsSqlClient(database: PGlite): SqlClient {
-  return {
-    async query<T extends Record<string, unknown> = Record<string, unknown>>(
-      text: string,
-      values: readonly unknown[] = [],
-    ) {
-      const result = await database.query(text, [...values]);
-      return { rows: result.rows as T[], rowCount: result.affectedRows ?? 0 };
-    },
-    async end() {
-      await database.close();
-    },
-  };
-}
+import { pgliteAsSqlClient } from "@rgs/api/test/pgliteSqlClient";
 
 let clockTick = 0;
 
@@ -544,7 +530,7 @@ describe("backfillCrmCaseSorToPostgres", () => {
     expect(progress).toEqual([1, 2]);
   });
 
-  it("copies cases one at a time (the shared connection runs one transaction at once)", async () => {
+  it("copies cases one at a time (keeps one transaction open at a time)", async () => {
     const context = buildDynamoContext();
     await seedPartner(context);
     await seedTwoApplicantCase(context, "case_1");
@@ -552,13 +538,15 @@ describe("backfillCrmCaseSorToPostgres", () => {
     let openTransactions = 0;
     let maxConcurrentTransactions = 0;
     const observingSql: SqlClient = {
-      async query(text, values) {
-        if (text === "BEGIN") {
-          openTransactions += 1;
-          maxConcurrentTransactions = Math.max(maxConcurrentTransactions, openTransactions);
+      query: (text, values) => sql.query(text, values),
+      async transaction(work) {
+        openTransactions += 1;
+        maxConcurrentTransactions = Math.max(maxConcurrentTransactions, openTransactions);
+        try {
+          return await sql.transaction(work);
+        } finally {
+          openTransactions -= 1;
         }
-        if (text === "COMMIT" || text === "ROLLBACK") openTransactions -= 1;
-        return sql.query(text, values);
       },
       end: () => sql.end(),
     };

@@ -9,21 +9,7 @@ import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { CorruptRecordError } from "../../src/lib/errors";
 import type { SqlClient } from "../../src/lib/sql";
 import { buildTestContext } from "../helpers";
-
-function pgliteAsSqlClient(database: PGlite): SqlClient {
-  return {
-    async query<T extends Record<string, unknown> = Record<string, unknown>>(
-      text: string,
-      values: readonly unknown[] = [],
-    ) {
-      const result = await database.query(text, [...values]);
-      return { rows: result.rows as T[], rowCount: result.affectedRows ?? 0 };
-    },
-    async end() {
-      await database.close();
-    },
-  };
-}
+import { pgliteAsSqlClient } from "../pgliteSqlClient";
 
 function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
   return {
@@ -299,6 +285,77 @@ describe("caseStorePostgres", () => {
        ) values ('rgs','orphan','O1','partner_1','AE','OTHER','NEW','UNKNOWN','2026-03-04',0,'2026-03-05T00:00:00.000Z')`,
     );
     await expect(readCasePostgres(sql, "rgs", "orphan")).rejects.toBeInstanceOf(CorruptRecordError);
+  });
+
+  describe("impossible calendar dates", () => {
+    it.each([
+      ["receivedDate", { receivedDate: "2026-02-30" }],
+      ["submissionDate", { submissionDate: "2026-04-31" }],
+      ["appointmentDate", { appointmentDate: "2026-13-01" }],
+      ["appointmentReminderSentFor", { appointmentReminderSentFor: "2026-02-30" }],
+      ["expectedCollectionDate", { expectedCollectionDate: "2026-02-30" }],
+      ["courierDate", { courierDate: "2026-06-31" }],
+    ])("refuses %s with a 400 naming the case and field, and writes nothing", async (fieldName, overrides) => {
+      const attempt = writeCasePostgres(sql, buildCase(overrides as Partial<crm.CrmCase>));
+      await expect(attempt).rejects.toMatchObject({ statusCode: 400, code: "BAD_REQUEST" });
+      await expect(attempt).rejects.toThrow(new RegExp(`case_1.*${fieldName}`));
+      expect((await sql.query(`select 1 from crm_cases`)).rows).toEqual([]);
+      expect((await sql.query(`select 1 from crm_applicants`)).rows).toEqual([]);
+    });
+
+    it("still accepts a real leap day", async () => {
+      await writeCasePostgres(sql, buildCase({ receivedDate: "2028-02-29" }));
+      expect(await readCasePostgres(sql, "rgs", "case_1")).toMatchObject({ receivedDate: "2028-02-29" });
+    });
+  });
+
+  describe("transactions", () => {
+    it("rolls back the case row when an applicant insert fails", async () => {
+      await writeCasePostgres(sql, buildCase({ remarks: "before" }));
+      // Duplicate applicantRef violates (case_id, applicant_ref) on the second insert.
+      const broken = buildCase({
+        remarks: "after",
+        applicants: [applicant("A1"), applicant("A1")],
+      });
+      await expect(writeCasePostgres(sql, broken)).rejects.toMatchObject({ code: "23505" });
+      expect(await readCasePostgres(sql, "rgs", "case_1")).toMatchObject({ remarks: "before" });
+      const applicants = await sql.query(`select 1 from crm_applicants where case_id = 'case_1'`);
+      expect(applicants.rows).toHaveLength(2);
+    });
+
+    it("does not interleave concurrent writers of different cases", async () => {
+      await Promise.all(
+        Array.from({ length: 6 }, (_unused, caseNumber) =>
+          writeCasePostgres(
+            sql,
+            buildCase({
+              caseId: `case_c${caseNumber}`,
+              caseRef: `C${caseNumber}`,
+              applicants: [applicant(`C${caseNumber}A`), applicant(`C${caseNumber}B`)],
+            }),
+          ),
+        ),
+      );
+      const counts = await sql.query<{ case_id: string; n: string }>(
+        `select case_id, count(*)::text as n from crm_applicants group by case_id order by case_id`,
+      );
+      expect(counts.rows).toHaveLength(6);
+      expect(counts.rows.every((row) => row.n === "2")).toBe(true);
+    });
+
+    it("runs a case write as exactly one transaction on the client", async () => {
+      let transactions = 0;
+      const counting: SqlClient = {
+        query: (text, values) => sql.query(text, values),
+        transaction: (work) => {
+          transactions += 1;
+          return sql.transaction(work);
+        },
+        end: () => sql.end(),
+      };
+      await writeCasePostgres(counting, buildCase());
+      expect(transactions).toBe(1);
+    });
   });
 });
 

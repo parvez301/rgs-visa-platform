@@ -2,21 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 import { applyMigrations } from "../src/db/migrate";
 import type { SqlClient } from "../src/lib/sql";
-
-function pgliteAsSqlClient(database: PGlite): SqlClient {
-  return {
-    async query<T extends Record<string, unknown> = Record<string, unknown>>(
-      text: string,
-      values: readonly unknown[] = [],
-    ) {
-      const result = await database.query(text, [...values]);
-      return { rows: result.rows as T[], rowCount: result.affectedRows ?? 0 };
-    },
-    async end() {
-      await database.close();
-    },
-  };
-}
+import { pgliteAsSqlClient } from "./pgliteSqlClient";
 
 async function migratedClient(): Promise<SqlClient> {
   const sql = pgliteAsSqlClient(new PGlite());

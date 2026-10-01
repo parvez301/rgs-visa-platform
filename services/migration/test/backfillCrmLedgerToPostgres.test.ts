@@ -15,21 +15,7 @@ import type { AppContext } from "@rgs/api/src/lib/context";
 import { InMemoryTableClient } from "@rgs/api/src/lib/db";
 import type { SqlClient } from "@rgs/api/src/lib/sql";
 import { backfillCrmLedgerToPostgres } from "../src/backfillCrmLedgerToPostgres";
-
-function pgliteAsSqlClient(database: PGlite): SqlClient {
-  return {
-    async query<T extends Record<string, unknown> = Record<string, unknown>>(
-      text: string,
-      values: readonly unknown[] = [],
-    ) {
-      const result = await database.query(text, [...values]);
-      return { rows: result.rows as T[], rowCount: result.affectedRows ?? 0 };
-    },
-    async end() {
-      await database.close();
-    },
-  };
-}
+import { pgliteAsSqlClient } from "@rgs/api/test/pgliteSqlClient";
 
 function buildContext(): AppContext & { table: InMemoryTableClient } {
   return {

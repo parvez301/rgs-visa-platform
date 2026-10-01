@@ -8,6 +8,8 @@ import {
   orNull,
   type DbRow,
 } from "../../lib/sqlColumns";
+import { badRequest } from "../../lib/errors";
+import { isRealIsoDate } from "../../lib/isoDate";
 import { parseStoredRecord } from "../../lib/storedRecords";
 
 /**
@@ -124,12 +126,40 @@ insert into crm_applicants (
   tracking_number, visa_result_key
 ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10, $11, $12, $13)`;
 
+/** Every date column `writeCasePostgres` casts through `::date`. */
+const CASE_DATE_FIELDS = [
+  "receivedDate",
+  "submissionDate",
+  "appointmentDate",
+  "appointmentReminderSentFor",
+  "expectedCollectionDate",
+  "courierDate",
+] as const;
+
+/**
+ * The calendar-day check the Dynamo path never needed (it stores strings):
+ * `2026-02-30` matches the schema's pattern but Postgres' `::date` refuses it
+ * with SQLSTATE 22008, which would surface as a bare 500. A 400 that names the
+ * case and field is what the caller (or the backfill's report) can act on.
+ */
+function assertRealCaseDates(crmCase: crm.CrmCase): void {
+  for (const fieldName of CASE_DATE_FIELDS) {
+    const value = crmCase[fieldName];
+    if (value !== undefined && !isRealIsoDate(value)) {
+      throw badRequest(
+        `Case ${crmCase.caseId}: ${fieldName} "${value}" is not a real calendar date (YYYY-MM-DD)`,
+      );
+    }
+  }
+}
+
 export async function writeCasePostgres(
   sql: SqlClient,
   crmCase: crm.CrmCase,
   options: WriteCasePostgresOptions = {},
 ): Promise<void> {
   const { applicants } = crmCase;
+  assertRealCaseDates(crmCase);
   const extraTerms = crmCase.groupName === undefined ? [] : [crmCase.groupName];
   // Resolved before BEGIN: nothing but writes should sit inside the transaction.
   const searchText =
@@ -137,9 +167,9 @@ export async function writeCasePostgres(
       ? await options.searchTextResolver(applicants, extraTerms)
       : await resolveSearchTextFromPostgres(sql, crmCase.tenantId, applicants, extraTerms);
 
-  await sql.query("BEGIN");
-  try {
-    await sql.query(UPSERT_CASE_SQL, [
+  // One dedicated connection for BEGIN..COMMIT: see SqlClient.transaction.
+  await sql.transaction(async (tx) => {
+    await tx.query(UPSERT_CASE_SQL, [
       crmCase.tenantId,
       crmCase.caseId,
       crmCase.caseRef,
@@ -184,12 +214,12 @@ export async function writeCasePostgres(
     // that shifts refs between indexes (an applicant removed from the middle)
     // collides with a row it has not yet rewritten. Delete-then-insert inside
     // the transaction also drops ghost applicants beyond the new count.
-    await sql.query(`delete from crm_applicants where tenant_id = $1 and case_id = $2`, [
+    await tx.query(`delete from crm_applicants where tenant_id = $1 and case_id = $2`, [
       crmCase.tenantId,
       crmCase.caseId,
     ]);
     for (const [applicantIndex, applicant] of applicants.entries()) {
-      await sql.query(INSERT_APPLICANT_SQL, [
+      await tx.query(INSERT_APPLICANT_SQL, [
         crmCase.tenantId,
         crmCase.caseId,
         applicantIndex,
@@ -205,11 +235,7 @@ export async function writeCasePostgres(
         orNull(applicant.visaResultKey),
       ]);
     }
-    await sql.query("COMMIT");
-  } catch (error) {
-    await sql.query("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 const CASE_COLUMNS: ReadonlyArray<readonly [string, string]> = [

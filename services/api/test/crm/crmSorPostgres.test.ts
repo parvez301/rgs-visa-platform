@@ -20,24 +20,10 @@ import {
 import type { AppContext } from "../../src/lib/context";
 import type { SqlClient } from "../../src/lib/sql";
 import { buildTestContext, type TestContext } from "../helpers";
+import { pgliteAsSqlClient } from "../pgliteSqlClient";
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
-
-function pgliteAsSqlClient(database: PGlite): SqlClient {
-  return {
-    async query<T extends Record<string, unknown> = Record<string, unknown>>(
-      text: string,
-      values: readonly unknown[] = [],
-    ) {
-      const result = await database.query(text, [...values]);
-      return { rows: result.rows as T[], rowCount: result.affectedRows ?? 0 };
-    },
-    async end() {
-      await database.close();
-    },
-  };
-}
 
 /** Records every string argument of every Dynamo table call, so "never touched Dynamo" is provable. */
 function trackTableAccess(table: TestContext["table"]): { table: TestContext["table"]; touchedKeys: string[] } {

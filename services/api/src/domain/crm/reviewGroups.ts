@@ -1,6 +1,7 @@
 import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
+import { isRealIsoDate } from "../../lib/isoDate";
 import { badRequest } from "../../lib/errors";
 import { describeFirstZodIssue } from "../../lib/storedRecords";
 import { readCaseRefReservation } from "./caseRefIndex";
@@ -183,7 +184,7 @@ async function validateResolvedValue(
       if (DATE_FIELD_BY_COLUMN[input.fieldName] === undefined) {
         throw badRequest(`The "${input.fieldName}" column is not a date the case stores`);
       }
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(resolvedValue)) throw badRequest("A date is YYYY-MM-DD");
+      if (!isRealIsoDate(resolvedValue)) throw badRequest("A date is a real calendar day, YYYY-MM-DD");
       return;
     case "UNMAPPED_STATUS":
       if (!crm.CASE_STATUSES.includes(resolvedValue as crm.CaseStatus)) {

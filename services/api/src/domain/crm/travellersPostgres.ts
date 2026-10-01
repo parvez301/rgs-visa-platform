@@ -1,4 +1,6 @@
 import type { crm } from "@rgs/shared";
+import { badRequest } from "../../lib/errors";
+import { isRealIsoDate } from "../../lib/isoDate";
 import type { SqlClient } from "../../lib/sql";
 import {
   candidateFromColumns,
@@ -75,6 +77,24 @@ export async function getTravellerPostgres(
   return selectOneTraveller(sql, "traveller_id = $2", [tenantId, travellerId]);
 }
 
+/** Several travellers in ONE round-trip (`traveller_id = any(...)`), keyed by id. */
+export async function getTravellersByIdPostgres(
+  sql: SqlClient,
+  tenantId: string,
+  travellerIds: readonly string[],
+): Promise<Map<string, Record<string, unknown>>> {
+  const travellersById = new Map<string, Record<string, unknown>>();
+  if (travellerIds.length === 0) return travellersById;
+  const result = await sql.query<DbRow>(
+    `${SELECT_TRAVELLER_SQL} and traveller_id = any($2::text[])`,
+    [tenantId, [...travellerIds]],
+  );
+  for (const travellerRow of result.rows) {
+    travellersById.set(String(travellerRow["traveller_id"]), candidateFromColumns(travellerRow, TRAVELLER_COLUMNS));
+  }
+  return travellersById;
+}
+
 /**
  * `false` when the passport already belongs to another traveller (the unique
  * index refused it) -- the caller re-reads the winner. Never throws for that.
@@ -83,6 +103,11 @@ export async function insertTravellerPostgres(
   sql: SqlClient,
   traveller: crm.CrmTraveller,
 ): Promise<boolean> {
+  if (traveller.dateOfBirth !== undefined && !isRealIsoDate(traveller.dateOfBirth)) {
+    throw badRequest(
+      `Traveller ${traveller.travellerId}: dateOfBirth "${traveller.dateOfBirth}" is not a real calendar date (YYYY-MM-DD)`,
+    );
+  }
   const result = await sql.query(
     `insert into crm_travellers (
        tenant_id, traveller_id, full_name, normalized_name, date_of_birth,

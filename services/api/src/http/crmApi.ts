@@ -2,6 +2,7 @@ import { crm } from "@rgs/shared";
 import { z } from "zod";
 import type { AppContext } from "../lib/context";
 import { badRequest, notFound, serviceUnavailable } from "../lib/errors";
+import { isRealIsoDate } from "../lib/isoDate";
 import {
   changeApplicantCustody,
   changeApplicantOutcome,
@@ -76,6 +77,15 @@ const UpdatePartnerContactBody = z.object({
   contactWhatsapp: z.string().trim().min(1).nullable().optional(),
 });
 
+/**
+ * YYYY-MM-DD naming a real calendar day. The bare pattern lets 2026-02-30
+ * through, which Postgres' ::date cast refuses -- a 500 for a caller mistake.
+ */
+const realIsoDateBody = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+  .refine(isRealIsoDate, "expected a real calendar date");
+
 const CreateCaseBody = z.object({
   caseRef: z.string().min(1),
   caseType: z.enum(crm.CASE_TYPES),
@@ -84,8 +94,8 @@ const CreateCaseBody = z.object({
   visaType: z.enum(crm.VISA_TYPES).optional(),
   entryType: z.enum(crm.ENTRY_TYPES).optional(),
   processing: z.enum(crm.PROCESSING_SPEEDS).optional(),
-  receivedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  expectedCollectionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  receivedDate: realIsoDateBody,
+  expectedCollectionDate: realIsoDateBody.optional(),
   remarks: z.string().trim().min(1).max(2000).optional(),
   groupName: z.string().trim().min(1).max(120).optional(),
   clientEmail: z.string().trim().email().optional(),
@@ -104,11 +114,11 @@ const CreateCaseBody = z.object({
 const UpsertTravellerBody = z.object({
   fullName: z.string().min(1),
   passportNumber: z.string().optional(),
-  dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  dateOfBirth: realIsoDateBody.optional(),
   phone: z.string().optional(),
 });
 
-const isoDateBody = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
+const isoDateBody = realIsoDateBody;
 
 /**
  * Every plain field `updateCaseDetails` may touch, written out by name.

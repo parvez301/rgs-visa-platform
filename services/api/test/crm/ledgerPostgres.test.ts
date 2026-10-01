@@ -4,21 +4,7 @@ import { applyMigrations } from "../../src/db/migrate";
 import { ApiError } from "../../src/lib/errors";
 import type { SqlClient } from "../../src/lib/sql";
 import { listLedgerRowsFromPostgres } from "../../src/domain/crm/ledgerPostgres";
-
-function pgliteAsSqlClient(database: PGlite): SqlClient {
-  return {
-    async query<T extends Record<string, unknown> = Record<string, unknown>>(
-      text: string,
-      values: readonly unknown[] = [],
-    ) {
-      const result = await database.query(text, [...values]);
-      return { rows: result.rows as T[], rowCount: result.affectedRows ?? 0 };
-    },
-    async end() {
-      await database.close();
-    },
-  };
-}
+import { pgliteAsSqlClient } from "../pgliteSqlClient";
 
 const APPLICANT_SUMMARY = { count: 1, custody: { WITH_RGS: 1 }, outcome: { PENDING: 1 } };
 

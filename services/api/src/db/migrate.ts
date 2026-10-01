@@ -47,17 +47,12 @@ async function applyOneMigration(
   filename: string,
   migrationSql: string,
 ): Promise<void> {
-  await sql.query("BEGIN");
-  try {
+  await sql.transaction(async (tx) => {
     for (const statement of splitSqlStatements(migrationSql)) {
-      await sql.query(statement);
+      await tx.query(statement);
     }
-    await sql.query(`insert into schema_migrations (filename) values ($1)`, [filename]);
-    await sql.query("COMMIT");
-  } catch (error) {
-    await sql.query("ROLLBACK");
-    throw error;
-  }
+    await tx.query(`insert into schema_migrations (filename) values ($1)`, [filename]);
+  });
 }
 
 export async function applyMigrations(sql: SqlClient): Promise<void> {
