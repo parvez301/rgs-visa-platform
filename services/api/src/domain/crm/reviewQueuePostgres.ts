@@ -175,3 +175,31 @@ export async function listOpenReviewSummaryRowsPostgres(
     ]),
   }));
 }
+
+/**
+ * The six columns the review-group sweep reads, for every OPEN item, as
+ * candidates for `ReviewGroupRowSchema` with the row id kept beside them.
+ */
+export async function listOpenReviewGroupRowsPostgres(
+  sql: SqlClient,
+  tenantId: string,
+): Promise<Array<{ reviewItemId: string; candidate: Record<string, unknown> }>> {
+  const result = await sql.query<DbRow>(
+    `select review_item_id, case_ref, reason, field_name, raw_value, proposed_value
+       from crm_review_items
+      where tenant_id = $1 and review_status = 'OPEN'
+      order by created_at, review_item_id`,
+    [tenantId],
+  );
+  return result.rows.map((groupRow) => ({
+    reviewItemId: String(groupRow["review_item_id"]),
+    candidate: candidateFromColumns(groupRow, [
+      ["reviewItemId", "review_item_id"],
+      ["caseRef", "case_ref"],
+      ["reason", "reason"],
+      ["fieldName", "field_name"],
+      ["rawValue", "raw_value"],
+      ["proposedValue", "proposed_value"],
+    ]),
+  }));
+}

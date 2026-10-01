@@ -26,7 +26,11 @@ import {
  *
  * Storage shape mirrors partners.ts — one item per review item, the record
  * itself under the shared meta sort key, and a GSI1 partition per review
- * status so the screen is one query rather than a scan.
+ * status so the screen is one query rather than a scan. Under
+ * `CRM_STORE=postgres` the same items live in `crm_review_items`
+ * (reviewQueuePostgres.ts), indexed on (tenant_id, review_status), and Dynamo
+ * is not touched. The review-group sweep (reviewGroups.ts) reads the same
+ * table, so it dispatches too.
  */
 export interface RecordReviewItemInput {
   reason: crm.ReviewReason;

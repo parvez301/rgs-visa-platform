@@ -9,7 +9,9 @@ import { readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
 import { reviewQueueGsi1Pk } from "./keys";
 import { getPartnerOrThrow } from "./partners";
+import { crmPostgresOf } from "./postgresClient";
 import { resolveReviewItem } from "./reviewQueue";
+import { listOpenReviewGroupRowsPostgres } from "./reviewQueuePostgres";
 
 /**
  * The review queue seen by RAW VALUE rather than by item.
@@ -68,18 +70,29 @@ async function sweepOpenReviewRows(
   context: AppContext,
   tenantId: string,
 ): Promise<{ rows: ReviewGroupRow[]; unreadableReviewItemIds: string[] }> {
-  const storedItems = await context.table.queryGsi("GSI1", reviewQueueGsi1Pk(tenantId, "OPEN"), {
-    scanForward: true,
-    projection: REVIEW_GROUP_PROJECTION,
-  });
+  const sql = crmPostgresOf(context);
+  // Both stores feed the same loop: the candidate the schema checks and the id
+  // to name the row by when it fails.
+  const sweptRows: Array<{ candidate: Record<string, unknown>; fallbackId: string }> =
+    sql !== undefined
+      ? (await listOpenReviewGroupRowsPostgres(sql, tenantId)).map((postgresRow) => ({
+          candidate: postgresRow.candidate,
+          fallbackId: postgresRow.reviewItemId,
+        }))
+      : (
+          await context.table.queryGsi("GSI1", reviewQueueGsi1Pk(tenantId, "OPEN"), {
+            scanForward: true,
+            projection: REVIEW_GROUP_PROJECTION,
+          })
+        ).map((storedItem) => ({ candidate: storedItem, fallbackId: storedItem.PK }));
   const rows: ReviewGroupRow[] = [];
   const unreadableReviewItemIds: string[] = [];
-  for (const storedItem of storedItems) {
-    const parsedRow = ReviewGroupRowSchema.safeParse(storedItem);
+  for (const { candidate, fallbackId } of sweptRows) {
+    const parsedRow = ReviewGroupRowSchema.safeParse(candidate);
     if (!parsedRow.success) {
-      const rawReviewItemId = storedItem["reviewItemId"];
+      const rawReviewItemId = candidate["reviewItemId"];
       unreadableReviewItemIds.push(
-        typeof rawReviewItemId === "string" && rawReviewItemId.length > 0 ? rawReviewItemId : storedItem.PK,
+        typeof rawReviewItemId === "string" && rawReviewItemId.length > 0 ? rawReviewItemId : fallbackId,
       );
       continue;
     }
