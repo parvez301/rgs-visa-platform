@@ -48,11 +48,13 @@ describe("admin RBAC infrastructure", () => {
     assert.equal(environments["rgs-user-api-test"]?.["ADMINS_USER_POOL_ID"], undefined);
   });
 
-  it("gives CRM database config to the admin API Lambda only", () => {
+  it("gives CRM database config to the admin API and appointment reminders Lambdas, never the user API", () => {
     const previousUrl = process.env["RGS_DATABASE_URL"];
     const previousStore = process.env["RGS_LEDGER_STORE"];
+    const previousCrmStore = process.env["RGS_CRM_STORE"];
     process.env["RGS_DATABASE_URL"] = "postgresql://example.invalid:6543/postgres";
     process.env["RGS_LEDGER_STORE"] = "postgres";
+    process.env["RGS_CRM_STORE"] = "postgres";
     try {
       const functions = resourcesOfType(synthesizedResources(), "AWS::Lambda::Function");
       const environments = Object.fromEntries(
@@ -72,15 +74,47 @@ describe("admin RBAC infrastructure", () => {
         "postgresql://example.invalid:6543/postgres",
       );
       assert.equal(environments["rgs-admin-api-test"]?.["LEDGER_STORE"], "postgres");
-      for (const functionName of ["rgs-user-api-test", "rgs-appointment-reminders-test"]) {
-        assert.equal(environments[functionName]?.["DATABASE_URL"], undefined, functionName);
-        assert.equal(environments[functionName]?.["LEDGER_STORE"], undefined, functionName);
+      assert.equal(environments["rgs-admin-api-test"]?.["CRM_STORE"], "postgres");
+      // Reminders read and stamp cases through the CRM store seam, so after
+      // cutover they must see Postgres, not the frozen Dynamo copy.
+      assert.equal(
+        environments["rgs-appointment-reminders-test"]?.["DATABASE_URL"],
+        "postgresql://example.invalid:6543/postgres",
+      );
+      assert.equal(environments["rgs-appointment-reminders-test"]?.["CRM_STORE"], "postgres");
+      assert.equal(environments["rgs-appointment-reminders-test"]?.["LEDGER_STORE"], undefined);
+      for (const key of ["DATABASE_URL", "LEDGER_STORE", "CRM_STORE"]) {
+        assert.equal(environments["rgs-user-api-test"]?.[key], undefined, key);
       }
     } finally {
       if (previousUrl === undefined) delete process.env["RGS_DATABASE_URL"];
       else process.env["RGS_DATABASE_URL"] = previousUrl;
       if (previousStore === undefined) delete process.env["RGS_LEDGER_STORE"];
       else process.env["RGS_LEDGER_STORE"] = previousStore;
+      if (previousCrmStore === undefined) delete process.env["RGS_CRM_STORE"];
+      else process.env["RGS_CRM_STORE"] = previousCrmStore;
+    }
+  });
+
+  it("leaves appointment reminders on Dynamo when no CRM Postgres config is set", () => {
+    const saved = {
+      url: process.env["RGS_DATABASE_URL"],
+      crm: process.env["RGS_CRM_STORE"],
+    };
+    delete process.env["RGS_DATABASE_URL"];
+    delete process.env["RGS_CRM_STORE"];
+    try {
+      const reminders = resourcesOfType(synthesizedResources(), "AWS::Lambda::Function").find(
+        (fn) => (fn.Properties as { FunctionName?: unknown }).FunctionName === "rgs-appointment-reminders-test",
+      );
+      const variables =
+        (reminders?.Properties as { Environment?: { Variables?: Record<string, unknown> } }).Environment
+          ?.Variables ?? {};
+      assert.equal(variables["DATABASE_URL"], undefined);
+      assert.equal(variables["CRM_STORE"], undefined);
+    } finally {
+      if (saved.url !== undefined) process.env["RGS_DATABASE_URL"] = saved.url;
+      if (saved.crm !== undefined) process.env["RGS_CRM_STORE"] = saved.crm;
     }
   });
 

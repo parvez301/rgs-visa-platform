@@ -155,10 +155,10 @@ export class RgsPlatformStack extends cdk.Stack {
       handler: "adminApiHandler",
     } as lambdaNodejs.NodejsFunctionProps);
     adminApiFunction.addEnvironment("ADMINS_USER_POOL_ID", adminsPool.userPoolId);
-    // CRM ledger Postgres (Supabase) lives on the admin API ONLY: it is the sole
-    // Lambda with a ledger route, so the portal-facing user API and the reminders
-    // job never carry CRM DB credentials, and a bad RGS_LEDGER_STORE value can
-    // only fail the admin cold start (buildProductionContext reads these).
+    // CRM Postgres (Supabase) lives on the admin API and the appointment
+    // reminders job (below). The portal-facing user API never carries CRM DB
+    // credentials, and a bad RGS_LEDGER_STORE value can only fail the admin cold
+    // start (buildProductionContext reads these).
     // Set RGS_DATABASE_URL to the Supabase transaction pooler URI (:6543).
     adminApiFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL ?? "");
     adminApiFunction.addEnvironment("LEDGER_STORE", process.env.RGS_LEDGER_STORE ?? "dynamo");
@@ -209,6 +209,17 @@ export class RgsPlatformStack extends cdk.Stack {
       "ADMINS_USER_POOL_ID",
       adminsPool.userPoolId,
     );
+    // The reminders job reads and stamps cases through the same CRM store seam
+    // as the admin API, so after RGS_CRM_STORE=postgres it must read Postgres or
+    // it would email partners from the frozen Dynamo copy. It needs only the
+    // case store (not LEDGER_STORE): it queries crm_cases directly. Unset
+    // RGS_* leaves both off and the job on Dynamo, matching the admin API.
+    if (process.env.RGS_DATABASE_URL !== undefined && process.env.RGS_DATABASE_URL !== "") {
+      appointmentRemindersFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL);
+    }
+    if (process.env.RGS_CRM_STORE !== undefined && process.env.RGS_CRM_STORE !== "") {
+      appointmentRemindersFunction.addEnvironment("CRM_STORE", process.env.RGS_CRM_STORE);
+    }
     platformTable.grantReadWriteData(appointmentRemindersFunction);
     appointmentRemindersFunction.addToRolePolicy(
       new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),

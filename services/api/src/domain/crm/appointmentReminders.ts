@@ -3,7 +3,9 @@ import type { AppContext } from "../../lib/context";
 import { readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
 import { DEFAULT_LEDGER_PAGE_LIMIT, listLedgerRows } from "./ledger";
+import { listLedgerRowsFromPostgres } from "./ledgerPostgres";
 import { getPartnerOrThrow } from "./partners";
+import { crmPostgresOf } from "./postgresClient";
 
 export const APPOINTMENT_REMINDER_ACTOR = "appointment-reminders@system";
 
@@ -28,19 +30,37 @@ function addCalendarDays(isoDate: string, dayCount: number): string {
 }
 
 /**
- * Nightly (or on-demand) pass: live cases whose appointment is tomorrow or the
- * day after get one partner email. Stamp `appointmentReminderSentFor` so a
- * re-run for the same appointment date is a no-op.
+ * Candidate rows (live cases whose appointment falls in the reminder window).
+ *
+ * Dynamo: the status-partition ledger scan, filtered to the window here.
+ * Postgres (`CRM_STORE=postgres`): `listLedgerRows` has no Postgres branch --
+ * the Dynamo table is frozen after cutover -- so ask `crm_cases` directly,
+ * once per window date with `appointment_date = $date`, and page each.
  */
-export async function runAppointmentReminders(
+async function* appointmentCandidateRows(
   context: AppContext,
   tenantId: string,
-  todayIso: string,
-  actorEmail: string = APPOINTMENT_REMINDER_ACTOR,
-): Promise<AppointmentReminderReport> {
-  const reminderDates = new Set(appointmentDatesInReminderWindow(todayIso));
-  const report: AppointmentReminderReport = { scanned: 0, reminded: 0, skipped: 0 };
+  reminderDates: readonly string[],
+): AsyncGenerator<crm.LedgerRow> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    for (const reminderDate of reminderDates) {
+      let cursor: string | undefined;
+      do {
+        const page = await listLedgerRowsFromPostgres(sql, tenantId, {
+          statuses: [...crm.LIVE_CASE_STATUSES],
+          appointmentDateOn: reminderDate,
+          limit: DEFAULT_LEDGER_PAGE_LIMIT,
+          ...(cursor !== undefined ? { cursor } : {}),
+        });
+        yield* page.rows;
+        cursor = page.nextCursor;
+      } while (cursor !== undefined);
+    }
+    return;
+  }
 
+  const reminderDateSet = new Set(reminderDates);
   let cursor: string | undefined;
   do {
     const page = await listLedgerRows(context, tenantId, {
@@ -48,27 +68,47 @@ export async function runAppointmentReminders(
       limit: DEFAULT_LEDGER_PAGE_LIMIT,
       ...(cursor !== undefined ? { cursor } : {}),
     });
-
     for (const row of page.rows) {
-      if (row.appointmentDate === undefined || !reminderDates.has(row.appointmentDate)) {
-        continue;
-      }
-      report.scanned += 1;
-
-      const crmCase = await readCaseOrThrow(context, tenantId, row.caseId);
-      if (crmCase.appointmentReminderSentFor === crmCase.appointmentDate) {
-        report.skipped += 1;
-        continue;
-      }
-
-      const sent = await sendAppointmentReminder(context, tenantId, crmCase, actorEmail);
-      if (sent) {
-        report.reminded += 1;
+      if (row.appointmentDate !== undefined && reminderDateSet.has(row.appointmentDate)) {
+        yield row;
       }
     }
-
     cursor = page.nextCursor;
   } while (cursor !== undefined);
+}
+
+/**
+ * Nightly (or on-demand) pass: live cases whose appointment is tomorrow or the
+ * day after get one partner email. Stamp `appointmentReminderSentFor` so a
+ * re-run for the same appointment date is a no-op.
+ *
+ * Every case/partner/event read and write below goes through the store seams
+ * (`readCase`, `writeCase`, `getPartnerOrThrow`, `recordCrmEvent`), so the job
+ * follows `context.crmStore`.
+ */
+export async function runAppointmentReminders(
+  context: AppContext,
+  tenantId: string,
+  todayIso: string,
+  actorEmail: string = APPOINTMENT_REMINDER_ACTOR,
+): Promise<AppointmentReminderReport> {
+  const reminderDates = appointmentDatesInReminderWindow(todayIso);
+  const report: AppointmentReminderReport = { scanned: 0, reminded: 0, skipped: 0 };
+
+  for await (const row of appointmentCandidateRows(context, tenantId, reminderDates)) {
+    report.scanned += 1;
+
+    const crmCase = await readCaseOrThrow(context, tenantId, row.caseId);
+    if (crmCase.appointmentReminderSentFor === crmCase.appointmentDate) {
+      report.skipped += 1;
+      continue;
+    }
+
+    const sent = await sendAppointmentReminder(context, tenantId, crmCase, actorEmail);
+    if (sent) {
+      report.reminded += 1;
+    }
+  }
 
   return report;
 }
