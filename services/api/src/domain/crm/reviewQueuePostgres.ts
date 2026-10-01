@@ -163,7 +163,7 @@ export async function listOpenReviewSummaryRowsPostgres(
     `select review_item_id, case_ref, reason
        from crm_review_items
       where tenant_id = $1 and review_status = 'OPEN'
-      order by created_at, review_item_id`,
+      order by created_at, case_ref, review_item_id`,
     [tenantId],
   );
   return result.rows.map((summaryRow) => ({
@@ -188,7 +188,7 @@ export async function listOpenReviewGroupRowsPostgres(
     `select review_item_id, case_ref, reason, field_name, raw_value, proposed_value
        from crm_review_items
       where tenant_id = $1 and review_status = 'OPEN'
-      order by created_at, review_item_id`,
+      order by created_at, case_ref, review_item_id`,
     [tenantId],
   );
   return result.rows.map((groupRow) => ({
