@@ -21,6 +21,8 @@
 
 > **Known B.1 gaps (agent / ops tooling).** With `CRM_STORE=postgres`, these paths still hit **Dynamo** only: `listCasesByStatus`, `listCasesByPartner`, `countCasesByField`, and **`caseRefIndex`** (ref reservation). Admin **Ledger Live** is OK when `LEDGER_STORE=postgres` (SQL ledger). Agent list/count tools and anything driven off GSI1/GSI2 or the ref index may be **stale or empty** relative to Postgres until Phase B.2+ migrates those reads.
 
+> **Appointment reminders follow `CRM_STORE`.** The nightly EventBridge job (`rgs-appointment-reminders-<stage>`, 03:00 UTC) reads live cases with an appointment 1–2 days out, emails the partner, and stamps `appointmentReminderSentFor`. CDK now sets **`DATABASE_URL`** and **`CRM_STORE`** on that Lambda from the same `RGS_DATABASE_URL` / `RGS_CRM_STORE` as the admin API (it does not need `LEDGER_STORE`: under Postgres it queries `crm_cases` directly by `appointment_date`). **Both Lambdas must be redeployed together** — a reminders Lambda left on `dynamo` after the flip would email partners from a frozen copy and stamp rows nobody reads. This puts the DB credential on a second Lambda (same staging-only caveat as the security note above); the portal-facing user API still carries none.
+
 ---
 
 ## Checklist
@@ -103,6 +105,7 @@ select count(*) as events from crm_events where tenant_id = 'rgs';
 - [ ] Keep **`RGS_LEDGER_STORE=postgres`** (→ **`LEDGER_STORE=postgres`**).
 - [ ] Set **`RGS_CRM_STORE=postgres`** (→ admin Lambda **`CRM_STORE=postgres`**). Default when unset is **`dynamo`** (`infra/lib/rgs-platform-stack.ts`).
 - [ ] Confirm cold start: **`CRM_STORE=postgres`** without **`DATABASE_URL`** fails at startup (by design, same as ledger).
+- [ ] Confirm the **appointment reminders Lambda** (`rgs-appointment-reminders-<stage>`) shows **`CRM_STORE=postgres`** and **`DATABASE_URL`** in its environment (same deploy; see freshness note above). Invoke once manually and check the report: `{ scanned, reminded, skipped }` should count only cases that exist in Postgres.
 - [ ] **Do not** run `backfill:crm-case-sor-postgres` or `backfill:crm-ledger-postgres` after this deploy except during a deliberate rollback/re-cutover procedure.
 
 ### 5. Smoke (desk)
@@ -111,12 +114,13 @@ These checks validate **live Postgres SoR**, not backfill freshness.
 
 - [ ] **Create case** on the desk → case opens on PG path; row appears on **Ledger Live** **without** re-running any backfill.
 - [ ] **Status walk** (or custody/outcome change) → ledger status chips / queue update without backfill.
-- [ ] **Export** from ledger.
+- [ ] **Export** from ledger. Under `CRM_STORE=postgres` the export reads cases **serially** (one pooled connection, one batched traveller query per case). A 500-case export is ~1,000 sequential round-trips against a 15 s Lambda timeout, so **time a large export** (start with the full Ledger Live set) and note the duration; if it nears 10 s, cap the export selection until B.2 batches case loads.
+- [ ] **Appointment reminder** (optional): set a staging case's appointment to tomorrow, invoke the reminders Lambda, confirm one partner email, an `APPOINTMENT_REMINDER_SENT` event, and `appointment_reminder_sent_for` set on the `crm_cases` row.
 - [ ] Status notification emails — optional if SES/templates unchanged.
 
 ### 6. Rollback
 
-- [ ] Set **`RGS_CRM_STORE=dynamo`** (or unset → default **`dynamo`**); redeploy admin API.
+- [ ] Set **`RGS_CRM_STORE=dynamo`** (or unset → default **`dynamo`**); redeploy **both the admin API and the appointment reminders Lambda** (one stack deploy does both). Reminders go back to the Dynamo copy, so anything scheduled only on Postgres gets no reminder until reconciled.
 - [ ] **`LEDGER_STORE=postgres` may stay on** if you only revert case writes; ledger SQL reads still work but reflect **last PG writes** until you reconcile.
 - [ ] **Warn operators:** any case/partner/traveller/event edits that happened only on Postgres **do not appear** in Dynamo-backed case screens (`getCase` / mutators on Dynamo). Desk view looks like those writes never happened unless manually repaired in Dynamo or you re-cutover to PG.
 - [ ] If you rolled back after PG-only writes and need Dynamo ledger parity again, you must **repair Dynamo** or accept staleness — **do not** blindly re-run Phase A ledger backfill while `CRM_STORE=postgres`; with `CRM_STORE=dynamo`, Phase A backfill can refresh ledger projection from Dynamo but **will not** restore PG-only case body edits.
@@ -130,9 +134,11 @@ These checks validate **live Postgres SoR**, not backfill freshness.
 | CDK / deploy | `RGS_DATABASE_URL` | Becomes admin Lambda **`DATABASE_URL`** (use **transaction pooler** `:6543` for runtime) |
 | CDK / deploy | `RGS_LEDGER_STORE` | Becomes **`LEDGER_STORE`** (`dynamo` default) |
 | CDK / deploy | `RGS_CRM_STORE` | Becomes **`CRM_STORE`** (`dynamo` default) |
-| Admin API Lambda only | `DATABASE_URL` | Required when **`LEDGER_STORE=postgres`** or **`CRM_STORE=postgres`** |
-| Admin API Lambda only | `LEDGER_STORE` | `dynamo` \| `postgres` |
-| Admin API Lambda only | `CRM_STORE` | `dynamo` \| `postgres` |
+| Admin API Lambda | `DATABASE_URL` | Required when **`LEDGER_STORE=postgres`** or **`CRM_STORE=postgres`** |
+| Admin API Lambda | `LEDGER_STORE` | `dynamo` \| `postgres` |
+| Admin API Lambda | `CRM_STORE` | `dynamo` \| `postgres` |
+| Appointment reminders Lambda | `DATABASE_URL`, `CRM_STORE` | Set only when `RGS_DATABASE_URL` / `RGS_CRM_STORE` are set at deploy; no `LEDGER_STORE` |
+| User (portal) API Lambda | — | Never receives CRM database config |
 | Lambda runtime | `TABLE_NAME` | Staging Dynamo table (still required) |
 | SoR backfill CLI | `TABLE_NAME`, `DATABASE_URL` | Required; reads Dynamo, writes **`rgs_staging`** |
 | Ref-claims backfill CLI | `TABLE_NAME`, AWS creds | Dynamo-only repair before SoR backfill |

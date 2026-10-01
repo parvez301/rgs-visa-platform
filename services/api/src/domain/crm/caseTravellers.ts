@@ -3,7 +3,7 @@ import type { AppContext } from "../../lib/context";
 import { stripStorageKeys } from "../../lib/storedRecords";
 import { META_SORT_KEY, travellerPartitionKey } from "./keys";
 import { crmPostgresOf } from "./postgresClient";
-import { getTravellerPostgres } from "./travellersPostgres";
+import { getTravellersByIdPostgres } from "./travellersPostgres";
 
 /**
  * The names behind a case's applicants, keyed by `travellerId` (spec
@@ -11,7 +11,8 @@ import { getTravellerPostgres } from "./travellersPostgres";
  * `resolveLedgerSearchText`: a traveller that is missing or will not parse is
  * simply absent from the map, and the reader falls back to
  * `crm.displayApplicantName`'s "Unnamed applicant". One `get` per distinct
- * traveller; a family of four costs four reads.
+ * traveller on Dynamo (a family of four costs four reads); one batched query
+ * on Postgres, where every round-trip queues on a single pooled connection.
  */
 export async function resolveCaseTravellers(
   context: AppContext,
@@ -21,10 +22,12 @@ export async function resolveCaseTravellers(
   const travellers: crm.CaseTravellerMap = {};
   const distinctTravellerIds = [...new Set(applicants.map((applicant) => applicant.travellerId))];
   const sql = crmPostgresOf(context);
+  const postgresTravellers =
+    sql !== undefined ? await getTravellersByIdPostgres(sql, tenantId, distinctTravellerIds) : undefined;
   for (const travellerId of distinctTravellerIds) {
     const storedTraveller =
-      sql !== undefined
-        ? await getTravellerPostgres(sql, tenantId, travellerId)
+      postgresTravellers !== undefined
+        ? postgresTravellers.get(travellerId)
         : await context.table
             .get(travellerPartitionKey(tenantId, travellerId), META_SORT_KEY)
             .then((travellerItem) => travellerItem && stripStorageKeys(travellerItem));

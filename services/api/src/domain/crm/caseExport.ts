@@ -8,6 +8,18 @@ import { listPartners } from "./partners";
 /** Parallel reads per batch: fast enough for 500 cases in a few seconds, gentle on on-demand capacity. */
 const EXPORT_READ_CONCURRENCY = 20;
 
+/**
+ * Under CRM_STORE=postgres every read shares `createPgSqlClient`'s one-connection
+ * pool, so a 20-way fan-out buys no parallelism: it only queues 20 waiters on
+ * the pool, and a waiter that sits past `connectionTimeoutMillis` fails. Read
+ * serially there; the per-case cost is two queries plus one traveller batch.
+ */
+export const POSTGRES_EXPORT_READ_CONCURRENCY = 1;
+
+export function exportReadConcurrency(context: AppContext): number {
+  return context.crmStore === "postgres" ? POSTGRES_EXPORT_READ_CONCURRENCY : EXPORT_READ_CONCURRENCY;
+}
+
 async function mapWithConcurrency<InputType, OutputType>(
   inputs: readonly InputType[],
   concurrencyLimit: number,
@@ -44,7 +56,7 @@ export async function buildCaseExportRows(
     partnerListing.partners.map((partner) => [partner.partnerId, partner.canonicalName]),
   );
 
-  const loadedCases = await mapWithConcurrency(caseIds, EXPORT_READ_CONCURRENCY, async (caseId) => {
+  const loadedCases = await mapWithConcurrency(caseIds, exportReadConcurrency(context), async (caseId) => {
     try {
       const storedCase = await readCase(context, tenantId, caseId);
       if (storedCase === undefined) return { caseId, storedCase: undefined, travellers: {} };
