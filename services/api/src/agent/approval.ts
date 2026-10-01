@@ -1,5 +1,5 @@
 import { crm } from "@rgs/shared";
-import { z, ZodError } from "zod";
+import { ZodError } from "zod";
 import type { AppContext } from "../lib/context";
 import type { TableItem } from "../lib/db";
 import { badRequest, conflict, notFound } from "../lib/errors";
@@ -13,6 +13,13 @@ import {
 import { getCase } from "../domain/crm/cases";
 import { recordCrmEvent } from "../domain/crm/crmEvents";
 import { PROPOSAL_SORT_KEY, proposalPartitionKey, proposalStatusGsi1Pk } from "../domain/crm/keys";
+import { crmPostgresOf } from "../domain/crm/postgresClient";
+import {
+  getProposalPostgres,
+  listProposalsByStatusPostgres,
+  upsertProposalPostgres,
+} from "../domain/crm/proposalsPostgres";
+import { ProposedChangeSchema } from "./proposedChangeSchema";
 import { ToolRegistry, type AgentTool } from "./tools/registry";
 import { WRITE_TOOLS } from "./tools/writeTools";
 
@@ -39,35 +46,6 @@ export interface ProposedChange {
   /** Set only on a DISCARDED proposal: the human's own account of what was wrong. */
   discardReason?: string;
 }
-
-/**
- * The write-path/read-path schema for a stored proposal. `ProposedChange`
- * above stays a plain interface -- the type every write tool's `execute`
- * already returns and is typechecked against (ruling P35) -- and this is
- * the separate validator a *stored* row is parsed back through, the same
- * split `reviewQueue.ts` uses between `crm.ReviewItem` and
- * `crm.ReviewItemSchema`.
- */
-const ProposedChangeSchema = z.object({
-  proposalId: z.string().min(1),
-  toolName: z.string().min(1),
-  input: z.record(z.unknown()),
-  summary: z.array(z.object({ field: z.string(), from: z.string(), to: z.string() })),
-  caseId: z.string().optional(),
-  proposedBy: z.string().min(1),
-  proposedAt: z.string(),
-  status: z.enum(["PENDING", "APPROVED", "DISCARDED"]),
-  // .min(1), not a bare .optional(): absent stays legal (a PENDING proposal
-  // has no decidedBy yet), but an empty string does not -- it is the
-  // backstop against an admin token with no email claim approving or
-  // discarding a proposal as "" (task-11-fix-1-review.md M3). The route
-  // layer (agentApi.ts's requireAdminEmail) is where this is actually
-  // prevented; this is what refuses it a second time, on read, if any call
-  // site ever forgets.
-  decidedBy: z.string().min(1).optional(),
-  decidedAt: z.string().optional(),
-  discardReason: z.string().optional(),
-});
 
 /**
  * Never auto-applied, at any trust level: money, and a terminal billing
@@ -196,6 +174,11 @@ async function putProposal(
   proposal: ProposedChange,
 ): Promise<void> {
   const validatedProposal = parseProposedChangeForWrite(proposal);
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    await upsertProposalPostgres(sql, tenantId, validatedProposal);
+    return;
+  }
   await context.table.put({
     PK: proposalPartitionKey(tenantId, validatedProposal.proposalId),
     SK: PROPOSAL_SORT_KEY,
@@ -247,10 +230,17 @@ export interface PendingProposalListing {
   unreadableProposalIds: string[];
 }
 
+/** The Dynamo path drains the PENDING partition; Postgres needs an explicit, generous cap. */
+const PENDING_PROPOSAL_LIMIT = 10_000;
+
 export async function listPendingProposals(
   context: AppContext,
   tenantId: string,
 ): Promise<PendingProposalListing> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    return listProposalsByStatusPostgres(sql, tenantId, "PENDING", PENDING_PROPOSAL_LIMIT);
+  }
   const storedItems = await context.table.queryGsi("GSI1", proposalStatusGsi1Pk(tenantId, "PENDING"));
   const { records, unreadableRecordIds } = await collectReadableRecords(storedItems, parseStoredProposal, {
     entityDescription: "agent proposal",
@@ -279,6 +269,10 @@ export async function getProposal(
   tenantId: string,
   proposalId: string,
 ): Promise<ProposedChange | undefined> {
+  // Postgres reads are read-your-writes, so the consistency note below is
+  // moot there.
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return getProposalPostgres(sql, tenantId, proposalId);
   // Strongly consistent, the same opt-in `caseStore.readCase` takes and for
   // the same documented reason (db.ts's GetOptions: "an eventually consistent
   // get can miss an item that was written moments earlier, which reads back
