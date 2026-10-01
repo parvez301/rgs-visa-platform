@@ -14,6 +14,15 @@ import {
   partnerCasesGsi2Pk,
 } from "./keys";
 import { getPartnerOrThrow } from "./partners";
+import { readCasesPostgres } from "./caseStorePostgres";
+import {
+  countCasesByFieldPostgres,
+  listCaseIdsByPartnerPostgres,
+  listCaseIdsByStatusPostgres,
+  listCaseRefsByStatusPostgres,
+} from "./casesListPostgres";
+import { crmPostgresOf } from "./postgresClient";
+import type { SqlClient } from "../../lib/sql";
 import { assertApplicantRefNosDistinct, claimNewRefs, releaseRefKeys, staleRefKeys } from "./refClaims";
 import { getTravellerOrThrow } from "./travellers";
 import { stampDocumentChecklistFromCountry } from "./caseDocumentChecklist";
@@ -519,6 +528,14 @@ export async function listCasesByStatus(
   caseStatus: crm.CaseStatus,
   limit = 50,
 ): Promise<CaseListing> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    return loadCasesFromPostgres(
+      sql,
+      tenantId,
+      await listCaseIdsByStatusPostgres(sql, tenantId, caseStatus, limit),
+    );
+  }
   const metaItems = await context.table.queryGsi(
     "GSI1",
     caseStatusGsi1Pk(tenantId, caseStatus),
@@ -576,6 +593,8 @@ export async function listCaseRefsByStatus(
   // size, so widening this changes no existing behaviour.
   limit?: number,
 ): Promise<CaseRefListing> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return listCaseRefsByStatusPostgres(sql, tenantId, caseStatus, limit);
   const metaItems = await context.table.queryGsi(
     "GSI1",
     caseStatusGsi1Pk(tenantId, caseStatus),
@@ -652,6 +671,8 @@ export async function countCasesByField(
   tenantId: string,
   groupByField: CaseCountGroupByField,
 ): Promise<CaseCountByField> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return countCasesByFieldPostgres(sql, tenantId, groupByField);
   const counts: Record<string, number> = {};
   const uncountedCaseIds: string[] = [];
   let total = 0;
@@ -679,12 +700,47 @@ export async function listCasesByPartner(
   partnerId: string,
   limit = 50,
 ): Promise<CaseListing> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    return loadCasesFromPostgres(
+      sql,
+      tenantId,
+      await listCaseIdsByPartnerPostgres(sql, tenantId, partnerId, limit),
+    );
+  }
   const metaItems = await context.table.queryGsi(
     "GSI2",
     partnerCasesGsi2Pk(tenantId, partnerId),
     { limit, scanForward: false },
   );
   return loadCasesFromMetaItems(context, tenantId, metaItems);
+}
+
+/**
+ * Reassembles the listed ids in one batched read, in the order the index query
+ * gave them. A row that exists but cannot be parsed (e.g. no applicant rows) is
+ * named in `unreadableCaseIds`, as on the Dynamo path; an id that vanished
+ * between the two statements is simply absent.
+ */
+async function loadCasesFromPostgres(
+  sql: SqlClient,
+  tenantId: string,
+  caseIds: string[],
+): Promise<CaseListing> {
+  const { cases, unreadableCaseIds } = await readCasesPostgres(sql, tenantId, caseIds);
+  if (unreadableCaseIds.length > 0) {
+    console.warn(
+      `Skipped ${unreadableCaseIds.length} unreadable CRM case(s) in tenant ${tenantId}: ${unreadableCaseIds.join(", ")}`,
+    );
+  }
+  const unreadable = new Set(unreadableCaseIds);
+  return {
+    cases: caseIds.flatMap((caseId) => {
+      const crmCase = cases.get(caseId);
+      return crmCase === undefined ? [] : [crmCase];
+    }),
+    unreadableCaseIds: caseIds.filter((caseId) => unreadable.has(caseId)),
+  };
 }
 
 /**
