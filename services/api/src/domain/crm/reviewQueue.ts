@@ -12,6 +12,13 @@ import {
   stripStorageKeys,
 } from "../../lib/storedRecords";
 import { REVIEW_ITEM_SORT_KEY, reviewItemPartitionKey, reviewQueueGsi1Pk } from "./keys";
+import { crmPostgresOf } from "./postgresClient";
+import {
+  getReviewItemPostgres,
+  insertReviewItemPostgres,
+  listOpenReviewSummaryRowsPostgres,
+  listReviewItemsPostgres,
+} from "./reviewQueuePostgres";
 
 /**
  * The migration review queue: the rows the importer could not apply
@@ -125,6 +132,8 @@ export async function listReviewItems(
   reviewStatus: crm.ReviewStatus,
   limit = 200,
 ): Promise<ReviewItemListing> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return listReviewItemsPostgres(sql, tenantId, reviewStatus, limit);
   // One more than the page, then dropped: the extra row is how the caller
   // learns the queue did not fit, and it costs one item's worth of read.
   const storedItemsPlusOne = await context.table.queryGsi(
@@ -151,6 +160,12 @@ export async function getReviewItemOrThrow(
   tenantId: string,
   reviewItemId: string,
 ): Promise<crm.ReviewItem> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    const postgresItem = await getReviewItemPostgres(sql, tenantId, reviewItemId);
+    if (!postgresItem) throw notFound("Review item");
+    return postgresItem;
+  }
   const storedItem = await context.table.get(
     reviewItemPartitionKey(tenantId, reviewItemId),
     REVIEW_ITEM_SORT_KEY,
@@ -204,6 +219,11 @@ export async function resolveReviewItem(
  * never empties.
  */
 async function writeReviewItem(context: AppContext, reviewItem: crm.ReviewItem): Promise<void> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    await insertReviewItemPostgres(sql, reviewItem);
+    return;
+  }
   await context.table.put({
     PK: reviewItemPartitionKey(reviewItem.tenantId, reviewItem.reviewItemId),
     SK: REVIEW_ITEM_SORT_KEY,
@@ -272,29 +292,49 @@ export async function summariseOpenReviewItems(
   context: AppContext,
   tenantId: string,
 ): Promise<OpenReviewSummary> {
-  const storedItems = await context.table.queryGsi("GSI1", reviewQueueGsi1Pk(tenantId, "OPEN"), {
-    scanForward: true,
-    projection: OPEN_REVIEW_SUMMARY_ATTRIBUTES,
-  });
+  const sql = crmPostgresOf(context);
+  // Both stores feed the same loop: the candidate the schema checks, the id to
+  // name the row by when it fails, and the label the warning points at.
+  const summaryRows: Array<{
+    candidate: Record<string, unknown>;
+    fallbackId: string;
+    rowLabel: string;
+  }> =
+    sql !== undefined
+      ? (await listOpenReviewSummaryRowsPostgres(sql, tenantId)).map((postgresRow) => ({
+          candidate: postgresRow.candidate,
+          fallbackId: postgresRow.reviewItemId,
+          rowLabel: postgresRow.reviewItemId,
+        }))
+      : (
+          await context.table.queryGsi("GSI1", reviewQueueGsi1Pk(tenantId, "OPEN"), {
+            scanForward: true,
+            projection: OPEN_REVIEW_SUMMARY_ATTRIBUTES,
+          })
+        ).map((storedItem) => ({
+          candidate: storedItem,
+          fallbackId: storedItem.PK,
+          rowLabel: storedItem.PK,
+        }));
 
   const entriesByCaseRef = new Map<string, OpenReviewSummaryEntry>();
   const unreadableReviewItemIds: string[] = [];
 
-  for (const storedItem of storedItems) {
-    const parsedRow = OpenReviewSummaryRowSchema.safeParse(storedItem);
+  for (const { candidate, fallbackId, rowLabel } of summaryRows) {
+    const parsedRow = OpenReviewSummaryRowSchema.safeParse(candidate);
     if (!parsedRow.success) {
       // Named, not dropped: an item missing from this summary is a dirty row
       // that renders as clean, which is the one thing the marker exists to
       // prevent. The storage key is the fallback id because it is all an
       // operator has to find the row with. This reads the raw item, not the
       // parse result -- the parse just failed, so it has nothing to offer.
-      const rawReviewItemId = storedItem["reviewItemId"];
+      const rawReviewItemId = candidate["reviewItemId"];
       unreadableReviewItemIds.push(
         typeof rawReviewItemId === "string" && rawReviewItemId.length > 0
           ? rawReviewItemId
-          : storedItem.PK,
+          : fallbackId,
       );
-      console.warn(`CRM review item in tenant ${tenantId} could not be summarised: ${storedItem.PK}`);
+      console.warn(`CRM review item in tenant ${tenantId} could not be summarised: ${rowLabel}`);
       continue;
     }
 
