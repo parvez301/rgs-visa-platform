@@ -227,7 +227,7 @@ export async function listLedgerRows(
  * when it is not, exactly as `cases.ts` does -- a half-written or hand-repaired
  * item is the case that most needs to be findable.
  */
-function parseLedgerRow(metaItem: TableItem): crm.LedgerRow {
+export function parseLedgerRow(metaItem: TableItem): crm.LedgerRow {
   const caseIdFromBody = metaItem["caseId"];
   const caseId =
     typeof caseIdFromBody === "string" && caseIdFromBody.length > 0
