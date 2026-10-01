@@ -360,17 +360,17 @@ describe("LedgerPage — the status/partner filter exclusion", () => {
     // status chip left highlighted here would be lying about what is
     // actually being filtered.
     expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "false");
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], "partner_1");
+    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], "partner_1", expect.any(Object));
 
     // Not stuck: choosing "All partners" clears the partner filter and
     // leaves status filtering selectable again.
     await user.selectOptions(screen.getByRole("combobox", { name: "Partner" }), "");
     expect(screen.getByRole("combobox", { name: "Partner" })).toHaveValue("");
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], undefined);
+    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], undefined, expect.any(Object));
 
     await user.click(screen.getByRole("button", { name: "Application Received" }));
     expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "true");
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["NEW"], undefined);
+    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["NEW"], undefined, expect.any(Object));
   });
 
   it("clears the partner selection the moment a status is chosen -- the reverse direction", async () => {
@@ -382,7 +382,7 @@ describe("LedgerPage — the status/partner filter exclusion", () => {
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Partner" }), "partner_1");
     expect(screen.getByRole("combobox", { name: "Partner" })).toHaveValue("partner_1");
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], "partner_1");
+    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], "partner_1", expect.any(Object));
 
     // The reverse of the first test's transition, starting from partner mode
     // rather than ending there: a status button must not be a dead end.
@@ -396,7 +396,63 @@ describe("LedgerPage — the status/partner filter exclusion", () => {
       "aria-pressed",
       "true",
     );
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["DOCS_UNDER_REVIEW"], undefined);
+    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["DOCS_UNDER_REVIEW"], undefined, expect.any(Object));
+  });
+});
+
+describe("LedgerPage — combined filters on the Postgres ledger (VITE_LEDGER_COMBINED_FILTERS)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps the status chips when a partner is chosen, and the other way round", async () => {
+    vi.stubEnv("VITE_LEDGER_COMBINED_FILTERS", "true");
+    const user = userEvent.setup();
+    stubLedgerLoad();
+    stubPartners();
+
+    renderLedgerPage();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Partner" }), "partner_1");
+    await user.click(screen.getByRole("button", { name: /Status ·/ }));
+    expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "true");
+    // The default Live work statuses survive choosing the partner.
+    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(
+      expect.arrayContaining(["NEW"]),
+      "partner_1",
+      expect.any(Object),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Application Received" }));
+    expect(screen.getByRole("combobox", { name: "Partner" })).toHaveValue("partner_1");
+    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(
+      expect.not.arrayContaining(["NEW"]),
+      "partner_1",
+      expect.any(Object),
+    );
+  });
+
+  it("hands the client filters to the hook, with the search settled after a pause", async () => {
+    vi.stubEnv("VITE_LEDGER_COMBINED_FILTERS", "true");
+    const user = userEvent.setup();
+    stubLedgerLoad();
+    stubPartners();
+
+    renderLedgerPage();
+
+    await user.type(screen.getByLabelText("Search"), "asha");
+    await waitFor(() =>
+      expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(
+        expect.anything(),
+        undefined,
+        expect.objectContaining({ search: "asha" }),
+      ),
+    );
+    // Every call on the way carried a settled search, never a half-typed one
+    // from a render in the middle of the burst that nothing refetched for.
+    const searchesSent = mockedUseLedgerRows.mock.calls.map((call) => call[2]?.search);
+    expect(searchesSent).not.toContain("a");
+    expect(searchesSent).not.toContain("as");
   });
 });
 

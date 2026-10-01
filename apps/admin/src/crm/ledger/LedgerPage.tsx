@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { crm } from "@rgs/shared";
 import { Link } from "react-router";
 import { useAdminAccess } from "../../lib/adminAccess";
@@ -17,7 +17,15 @@ import {
 } from "../components/controls";
 import { CASE_STATUS_LABELS, REVIEW_REASON_LABELS } from "../labels";
 import { NewCaseDrawer } from "../newCase/NewCaseDrawer";
-import { applyFilters, applySort, localTodayIso, type LedgerFilters, type LedgerSort } from "./filters";
+import {
+  applyFilters,
+  applySort,
+  isCombinedLedgerFiltersEnabled,
+  localTodayIso,
+  type ClientOnlyLedgerFilters,
+  type LedgerFilters,
+  type LedgerSort,
+} from "./filters";
 import { BulkActionsBar } from "./BulkActionsBar";
 import { LedgerSkeleton } from "./LedgerSkeleton";
 import { LedgerTable } from "./LedgerTable";
@@ -34,20 +42,13 @@ import { ViewChips } from "./ViewChips";
 const DEFAULT_LIVE_WORK = findBuiltInLedgerView(liveWorkViewId())!;
 
 /**
- * The client-only slice of `LedgerFilters` -- everything except `statuses`
- * and `partnerId`, which `LedgerPage` already tracks separately as the
- * server-side filter state (`selectedCaseStatuses`/`selectedPartnerId`
- * below, unchanged since Task 10). Keeping these apart is what let Task 13
- * land without touching that existing state or the tests pinned to it.
- */
-type ClientOnlyLedgerFilters = Omit<LedgerFilters, "statuses" | "partnerId">;
-
-/**
- * Exactly one of these two filters is ever in force server-side (spec §2.1,
- * `LedgerAppliedQuery`): a partner filter and a status filter never both
- * apply. Choosing a partner clears the status selection and vice versa, so
- * the filter bar never shows an agent a status chip that the server is
- * silently ignoring underneath a partner filter.
+ * Against the Dynamo ledger exactly one of the partner and status filters is
+ * ever in force server-side (spec §2.1, `LedgerAppliedQuery`): choosing a
+ * partner clears the status selection and vice versa, so the filter bar never
+ * shows an agent a status chip that the server is silently ignoring
+ * underneath a partner filter. Against the Postgres ledger every filter is a
+ * WHERE clause and they combine, so admin builds with
+ * VITE_LEDGER_COMBINED_FILTERS=true keep both (`isCombinedLedgerFiltersEnabled`).
  */
 const ALL_CASES = "";
 const WITH_ANY_ISSUE = "__any_issue__";
@@ -64,6 +65,18 @@ export function rowMatchesIssueFilter(
   if (issueFilter === WITH_ANY_ISSUE) return openReasons.length > 0;
   if (issueFilter === WITHOUT_ISSUES) return openReasons.length === 0;
   return openReasons.includes(issueFilter);
+}
+
+/** How long the search box rests before a new server query goes out (client-side filtering stays instant). */
+const SERVER_SEARCH_DEBOUNCE_MS = 300;
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debouncedValue;
 }
 
 function clientFiltersFromView(viewFilters: LedgerFilters): ClientOnlyLedgerFilters {
@@ -110,7 +123,15 @@ export function LedgerPage() {
     setSelectionClearToken((currentToken) => currentToken + 1);
   }
 
-  const ledgerRowsQuery = useLedgerRows(selectedCaseStatuses, selectedPartnerId);
+  // Only the search text is debounced; every other filter is a discrete
+  // click. The flag-off path ignores these filters in the hook, so debouncing
+  // never delays anything on the Dynamo ledger.
+  const debouncedSearch = useDebouncedValue(clientLedgerFilters.search, SERVER_SEARCH_DEBOUNCE_MS);
+  const serverClientFilters = useMemo<ClientOnlyLedgerFilters>(
+    () => ({ ...clientLedgerFilters, search: debouncedSearch }),
+    [clientLedgerFilters, debouncedSearch],
+  );
+  const ledgerRowsQuery = useLedgerRows(selectedCaseStatuses, selectedPartnerId, serverClientFilters);
   const partnersQuery = usePartners();
   const reviewSummaryQuery = useReviewSummary();
   const reviewEntriesByCaseRef = useMemo(() => {
@@ -130,7 +151,7 @@ export function LedgerPage() {
   }, [partnersQuery.data]);
 
   function toggleCaseStatus(caseStatus: crm.CaseStatus) {
-    setSelectedPartnerId(undefined);
+    if (!isCombinedLedgerFiltersEnabled()) setSelectedPartnerId(undefined);
     setActiveViewId(undefined);
     setSelectedCaseStatuses((currentCaseStatuses) =>
       currentCaseStatuses.includes(caseStatus)
@@ -140,7 +161,7 @@ export function LedgerPage() {
   }
 
   function selectPartner(partnerId: string | undefined) {
-    setSelectedCaseStatuses([]);
+    if (!isCombinedLedgerFiltersEnabled()) setSelectedCaseStatuses([]);
     setActiveViewId(undefined);
     setSelectedPartnerId(partnerId);
   }

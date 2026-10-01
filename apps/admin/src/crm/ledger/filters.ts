@@ -1,4 +1,5 @@
 import { crm } from "@rgs/shared";
+import type { LedgerQueryFilters } from "../api/crmClient";
 
 /**
  * Sentinel for built-in "today" views. Resolved to the desk agent's local
@@ -34,6 +35,52 @@ export interface LedgerFilters {
   billingStatuses?: crm.BillingStatus[];
   appointmentDateOn?: string;
   expectedCollectionDateOn?: string;
+}
+
+/**
+ * The slice of `LedgerFilters` beyond `statuses`/`partnerId`: what the Ledger
+ * page holds as client state and, when the Postgres ledger is on, also sends
+ * to the API.
+ */
+export type ClientOnlyLedgerFilters = Omit<LedgerFilters, "statuses" | "partnerId">;
+
+/**
+ * True on admin builds pointed at an API running LEDGER_STORE=postgres
+ * (VITE_LEDGER_COMBINED_FILTERS="true"). Only then does the server answer
+ * status + partner together and the filters in `ClientOnlyLedgerFilters`;
+ * the Dynamo handler answers partner XOR status and ignores the rest, so the
+ * UI keeps its mutually-exclusive chips and the client-only filters stay
+ * client-only (no refetch of the whole ledger per keystroke) when this is off.
+ * Read at call time so tests can stub the env.
+ */
+export function isCombinedLedgerFiltersEnabled(): boolean {
+  return import.meta.env.VITE_LEDGER_COMBINED_FILTERS === "true";
+}
+
+/**
+ * The query-string filters for the client-only slice, or `{}` when the
+ * combined-filters flag is off. Resolves the `__TODAY__` sentinel to a real
+ * date (the server only understands YYYY-MM-DD) and drops blank values, so
+ * the result doubles as the React Query cache-key fingerprint input.
+ */
+export function toServerLedgerFilters(
+  filters: ClientOnlyLedgerFilters | undefined,
+  todayIso: string = localTodayIso(),
+): Omit<LedgerQueryFilters, "statuses" | "partnerId"> {
+  if (filters === undefined || !isCombinedLedgerFiltersEnabled()) return {};
+  const search = filters.search?.trim();
+  const appointmentDateOn = resolveDateOnFilter(filters.appointmentDateOn, todayIso);
+  const expectedCollectionDateOn = resolveDateOnFilter(filters.expectedCollectionDateOn, todayIso);
+  return {
+    ...(filters.destinationCountry ? { destinationCountry: filters.destinationCountry } : {}),
+    ...(filters.caseType ? { caseType: filters.caseType } : {}),
+    ...(filters.billingStatuses !== undefined && filters.billingStatuses.length > 0
+      ? { billingStatuses: [...filters.billingStatuses] }
+      : {}),
+    ...(appointmentDateOn ? { appointmentDateOn } : {}),
+    ...(expectedCollectionDateOn ? { expectedCollectionDateOn } : {}),
+    ...(search ? { search } : {}),
+  };
 }
 
 /**

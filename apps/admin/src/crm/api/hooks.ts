@@ -1,7 +1,8 @@
 import { crm } from "@rgs/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../../lib/auth";
-import { crmClient, type LedgerLoad } from "./crmClient";
+import { toServerLedgerFilters, type ClientOnlyLedgerFilters } from "../ledger/filters";
+import { crmClient, type LedgerLoad, type LedgerQueryFilters } from "./crmClient";
 
 /**
  * Query keys are namespaced under "crm" so nothing here can collide with the
@@ -15,8 +16,18 @@ export const crmQueryKeys = {
   // response -- harmless on its own, but a later invalidation keyed off the
   // canonical order would then miss the entry built from the other order.
   // `[...statuses].sort()` never touches the array the caller passed in.
-  ledger: (statuses: crm.CaseStatus[], partnerId: string | undefined) =>
-    ["crm", "ledger", [...statuses].sort().join(","), partnerId ?? ""] as const,
+  //
+  // The fourth segment fingerprints the server-side filters beyond
+  // status/partner (search, country, ...), so changing one refetches instead
+  // of serving another filter set's rows. It is "" when none are sent, which
+  // keeps the key for a plain status/partner query exactly as it was; the
+  // `["crm", "ledger"]` prefix mutations invalidate by is untouched.
+  ledger: (
+    statuses: crm.CaseStatus[],
+    partnerId: string | undefined,
+    extraFilters: Omit<LedgerQueryFilters, "statuses" | "partnerId"> = {},
+  ) =>
+    ["crm", "ledger", [...statuses].sort().join(","), partnerId ?? "", ledgerFiltersFingerprint(extraFilters)] as const,
   case: (caseId: string) => ["crm", "case", caseId] as const,
   caseEvents: (caseId: string) => ["crm", "case", caseId, "events"] as const,
   partners: () => ["crm", "partners"] as const,
@@ -29,16 +40,36 @@ export const crmQueryKeys = {
     ["crm", "memories", scope, partnerId ?? ""] as const,
 };
 
+/** Stable string for a filter set: fixed key order, billing statuses sorted, empties dropped. */
+export function ledgerFiltersFingerprint(extraFilters: Omit<LedgerQueryFilters, "statuses" | "partnerId">): string {
+  const parts: string[] = [];
+  if (extraFilters.destinationCountry) parts.push(`country=${extraFilters.destinationCountry}`);
+  if (extraFilters.caseType) parts.push(`caseType=${extraFilters.caseType}`);
+  if (extraFilters.billingStatuses && extraFilters.billingStatuses.length > 0) {
+    parts.push(`billing=${[...extraFilters.billingStatuses].sort().join(",")}`);
+  }
+  if (extraFilters.appointmentDateOn) parts.push(`appt=${extraFilters.appointmentDateOn}`);
+  if (extraFilters.expectedCollectionDateOn) parts.push(`collect=${extraFilters.expectedCollectionDateOn}`);
+  if (extraFilters.search) parts.push(`search=${extraFilters.search}`);
+  return parts.join("|");
+}
+
 /**
  * Streams ledger pages into the query cache as they arrive so the first ~500
  * rows can paint while later pages keep loading. `isFetching` stays true
  * until the walk finishes; callers treat `data !== undefined` as "ready to
  * show rows" rather than waiting on `isLoading` alone.
  */
-export function useLedgerRows(statuses: crm.CaseStatus[], partnerId?: string) {
+export function useLedgerRows(
+  statuses: crm.CaseStatus[],
+  partnerId?: string,
+  clientFilters?: ClientOnlyLedgerFilters,
+) {
   const { idToken } = useAuth();
   const queryClient = useQueryClient();
-  const queryKey = crmQueryKeys.ledger(statuses, partnerId);
+  // `{}` unless VITE_LEDGER_COMBINED_FILTERS is on -- see toServerLedgerFilters.
+  const serverFilters = toServerLedgerFilters(clientFilters);
+  const queryKey = crmQueryKeys.ledger(statuses, partnerId, serverFilters);
 
   const query = useQuery({
     queryKey,
@@ -46,7 +77,7 @@ export function useLedgerRows(statuses: crm.CaseStatus[], partnerId?: string) {
       let latestLoad: LedgerLoad | undefined;
       const finalLoad = await crmClient.loadLedger(
         idToken!,
-        { statuses, ...(partnerId ? { partnerId } : {}) },
+        { statuses, ...(partnerId ? { partnerId } : {}), ...serverFilters },
         {
           onPage(partialLoad) {
             latestLoad = partialLoad;

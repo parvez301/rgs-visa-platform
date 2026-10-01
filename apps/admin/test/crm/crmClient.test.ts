@@ -41,6 +41,56 @@ const oneRow = {
   updatedAt: "2026-03-04T10:00:00.000Z",
 };
 
+describe("crmClient.loadLedger query string", () => {
+  it("encodes search, country and every other filter the Postgres ledger understands", async () => {
+    const recorded = stubFetch([{ rows: [], unreadableCaseIds: [], appliedQuery: { statuses: [], limit: 500 } }]);
+
+    await crmClient.loadLedger("token-1", {
+      statuses: ["NEW", "SUBMITTED"],
+      partnerId: "partner_1",
+      destinationCountry: "AE",
+      caseType: "VISA",
+      billingStatuses: ["BILL_SENT", "PART_PAID"],
+      appointmentDateOn: "2026-10-01",
+      expectedCollectionDateOn: "2026-10-02",
+      search: "  asha ",
+    });
+
+    const requestUrl = new URL(recorded[0]!.url, "http://localhost");
+    expect(requestUrl.searchParams.get("status")).toBe("NEW,SUBMITTED");
+    expect(requestUrl.searchParams.get("partnerId")).toBe("partner_1");
+    expect(requestUrl.searchParams.get("destinationCountry")).toBe("AE");
+    expect(requestUrl.searchParams.get("caseType")).toBe("VISA");
+    expect(requestUrl.searchParams.get("billingStatus")).toBe("BILL_SENT,PART_PAID");
+    expect(requestUrl.searchParams.get("appointmentDateOn")).toBe("2026-10-01");
+    expect(requestUrl.searchParams.get("expectedCollectionDateOn")).toBe("2026-10-02");
+    expect(requestUrl.searchParams.get("search")).toBe("asha");
+    expect(recorded[0]!.url).toContain("destinationCountry=AE");
+    expect(recorded[0]!.url).toContain("search=asha");
+  });
+
+  it("sends none of the optional filters when none are set", async () => {
+    const recorded = stubFetch([{ rows: [], unreadableCaseIds: [], appliedQuery: { statuses: [], limit: 500 } }]);
+
+    await crmClient.loadLedger("token-1", { statuses: [], billingStatuses: [], search: "   " });
+
+    expect(recorded[0]!.url).not.toContain("?");
+  });
+
+  it("carries the same filters on every page after the first", async () => {
+    const recorded = stubFetch([
+      { rows: [], unreadableCaseIds: [], nextCursor: "cursor-2", appliedQuery: { statuses: [], limit: 500 } },
+      { rows: [], unreadableCaseIds: [], appliedQuery: { statuses: [], limit: 500 } },
+    ]);
+
+    await crmClient.loadLedger("token-1", { search: "asha", destinationCountry: "AE" });
+
+    expect(recorded[1]!.url).toContain("search=asha");
+    expect(recorded[1]!.url).toContain("destinationCountry=AE");
+    expect(recorded[1]!.url).toContain("cursor=cursor-2");
+  });
+});
+
 describe("crmClient.loadLedger", () => {
   it("follows the cursor to the end and concatenates every page", async () => {
     const recorded = stubFetch([

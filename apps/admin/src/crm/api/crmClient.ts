@@ -47,7 +47,22 @@ async function apiFetch<ResponseType>(
  * either field.
  */
 export type LedgerAppliedQuery =
-  | { statuses: crm.CaseStatus[]; limit: number }
+  | {
+      statuses: crm.CaseStatus[];
+      /**
+       * Present only when the Postgres ledger path ran: every filter there is
+       * a WHERE clause, so status and partner (and the filters below) apply
+       * together and the response names each one that ran. The Dynamo path
+       * never sets these.
+       */
+      partnerId?: string;
+      destinationCountry?: string;
+      caseType?: crm.CaseType;
+      billingStatuses?: crm.BillingStatus[];
+      appointmentDateOn?: string;
+      expectedCollectionDateOn?: string;
+      limit: number;
+    }
   | { partnerId: string; limit: number };
 
 export interface LedgerPageResponse {
@@ -286,9 +301,27 @@ export interface ReviewGroupResolution {
 
 export const MAX_LEDGER_PAGES = 40;
 
+/**
+ * Every filter `GET /cases/ledger` understands. `statuses` and `partnerId` are
+ * the two the Dynamo path also honours; the rest are answered only by the
+ * Postgres ledger (LEDGER_STORE=postgres) and ignored by the Dynamo handler.
+ * Dates must be concrete YYYY-MM-DD -- the `__TODAY__` view sentinel is
+ * resolved by the caller (`toServerLedgerFilters`), never sent over the wire.
+ */
+export interface LedgerQueryFilters {
+  statuses?: crm.CaseStatus[];
+  partnerId?: string;
+  destinationCountry?: string;
+  caseType?: crm.CaseType;
+  billingStatuses?: crm.BillingStatus[];
+  appointmentDateOn?: string;
+  expectedCollectionDateOn?: string;
+  search?: string;
+}
+
 async function fetchLedgerPage(
   idToken: string,
-  params: { statuses?: crm.CaseStatus[]; partnerId?: string; limit?: number; cursor?: string },
+  params: LedgerQueryFilters & { limit?: number; cursor?: string },
 ): Promise<LedgerPageResponse> {
   const queryParams = new URLSearchParams();
   // Comma-joined, because API Gateway v2 collapses a repeated parameter into
@@ -297,6 +330,16 @@ async function fetchLedgerPage(
     queryParams.set("status", params.statuses.join(","));
   }
   if (params.partnerId !== undefined) queryParams.set("partnerId", params.partnerId);
+  if (params.destinationCountry !== undefined) queryParams.set("destinationCountry", params.destinationCountry);
+  if (params.caseType !== undefined) queryParams.set("caseType", params.caseType);
+  if (params.billingStatuses !== undefined && params.billingStatuses.length > 0) {
+    queryParams.set("billingStatus", params.billingStatuses.join(","));
+  }
+  if (params.appointmentDateOn !== undefined) queryParams.set("appointmentDateOn", params.appointmentDateOn);
+  if (params.expectedCollectionDateOn !== undefined) {
+    queryParams.set("expectedCollectionDateOn", params.expectedCollectionDateOn);
+  }
+  if (params.search !== undefined && params.search.trim() !== "") queryParams.set("search", params.search.trim());
   if (params.limit !== undefined) queryParams.set("limit", String(params.limit));
   if (params.cursor !== undefined) queryParams.set("cursor", params.cursor);
   const queryString = queryParams.toString();
@@ -322,7 +365,7 @@ async function fetchLedgerPage(
  */
 async function loadLedger(
   idToken: string,
-  params: { statuses?: crm.CaseStatus[]; partnerId?: string },
+  params: LedgerQueryFilters,
   options?: { onPage?: (partialLoad: LedgerLoad) => void },
 ): Promise<LedgerLoad> {
   const rows: crm.LedgerRow[] = [];
