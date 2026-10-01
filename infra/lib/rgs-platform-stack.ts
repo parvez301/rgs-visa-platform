@@ -140,9 +140,6 @@ export class RgsPlatformStack extends cdk.Stack {
         // into the RgsSesEvents stack (cloud account). Must match that stack.
         SES_CONFIGURATION_SET: SES_CONFIGURATION_SET_NAME,
         NODE_OPTIONS: "--enable-source-maps",
-        // Staging/prod deploy: set RGS_DATABASE_URL to Supabase transaction pooler URI (:6543).
-        DATABASE_URL: process.env.RGS_DATABASE_URL ?? "",
-        LEDGER_STORE: process.env.RGS_LEDGER_STORE ?? "dynamo",
       },
     };
 
@@ -158,6 +155,13 @@ export class RgsPlatformStack extends cdk.Stack {
       handler: "adminApiHandler",
     } as lambdaNodejs.NodejsFunctionProps);
     adminApiFunction.addEnvironment("ADMINS_USER_POOL_ID", adminsPool.userPoolId);
+    // CRM ledger Postgres (Supabase) lives on the admin API ONLY: it is the sole
+    // Lambda with a ledger route, so the portal-facing user API and the reminders
+    // job never carry CRM DB credentials, and a bad RGS_LEDGER_STORE value can
+    // only fail the admin cold start (buildProductionContext reads these).
+    // Set RGS_DATABASE_URL to the Supabase transaction pooler URI (:6543).
+    adminApiFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL ?? "");
+    adminApiFunction.addEnvironment("LEDGER_STORE", process.env.RGS_LEDGER_STORE ?? "dynamo");
     adminApiFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [

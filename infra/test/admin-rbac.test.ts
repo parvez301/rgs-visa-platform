@@ -48,6 +48,42 @@ describe("admin RBAC infrastructure", () => {
     assert.equal(environments["rgs-user-api-test"]?.["ADMINS_USER_POOL_ID"], undefined);
   });
 
+  it("gives CRM database config to the admin API Lambda only", () => {
+    const previousUrl = process.env["RGS_DATABASE_URL"];
+    const previousStore = process.env["RGS_LEDGER_STORE"];
+    process.env["RGS_DATABASE_URL"] = "postgresql://example.invalid:6543/postgres";
+    process.env["RGS_LEDGER_STORE"] = "postgres";
+    try {
+      const functions = resourcesOfType(synthesizedResources(), "AWS::Lambda::Function");
+      const environments = Object.fromEntries(
+        functions
+          .filter((fn) => typeof (fn.Properties as { FunctionName?: unknown }).FunctionName === "string")
+          .map((fn) => {
+            const props = fn.Properties as {
+              FunctionName: string;
+              Environment?: { Variables?: Record<string, unknown> };
+            };
+            return [props.FunctionName, props.Environment?.Variables ?? {}];
+          }),
+      );
+
+      assert.equal(
+        environments["rgs-admin-api-test"]?.["DATABASE_URL"],
+        "postgresql://example.invalid:6543/postgres",
+      );
+      assert.equal(environments["rgs-admin-api-test"]?.["LEDGER_STORE"], "postgres");
+      for (const functionName of ["rgs-user-api-test", "rgs-appointment-reminders-test"]) {
+        assert.equal(environments[functionName]?.["DATABASE_URL"], undefined, functionName);
+        assert.equal(environments[functionName]?.["LEDGER_STORE"], undefined, functionName);
+      }
+    } finally {
+      if (previousUrl === undefined) delete process.env["RGS_DATABASE_URL"];
+      else process.env["RGS_DATABASE_URL"] = previousUrl;
+      if (previousStore === undefined) delete process.env["RGS_LEDGER_STORE"];
+      else process.env["RGS_LEDGER_STORE"] = previousStore;
+    }
+  });
+
   it("grants Cognito staff administration actions to the admin API role only", () => {
     const resources = synthesizedResources();
     const functions = resourcesOfType(resources, "AWS::Lambda::Function");
