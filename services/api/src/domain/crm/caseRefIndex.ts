@@ -1,7 +1,9 @@
 import { z } from "zod";
 import type { AppContext } from "../../lib/context";
 import { parseStoredRecord, stripStorageKeys } from "../../lib/storedRecords";
+import { readCaseRefReservationPostgres, writeCaseRefReservationPostgres } from "./caseRefIndexPostgres";
 import { META_SORT_KEY, caseRefIndexPartitionKey } from "./keys";
+import { crmPostgresOf } from "./postgresClient";
 
 /**
  * The importer's idempotency anchor: one tiny item per imported `caseRef`,
@@ -68,6 +70,8 @@ export async function readCaseRefReservation(
   tenantId: string,
   caseRef: string,
 ): Promise<CaseRefReservation | undefined> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return readCaseRefReservationPostgres(sql, tenantId, caseRef);
   const storedItem = await context.table.get(
     caseRefIndexPartitionKey(tenantId, caseRef),
     META_SORT_KEY,
@@ -120,6 +124,11 @@ async function writeReservation(
   context: AppContext,
   reservation: CaseRefReservation,
 ): Promise<void> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    await writeCaseRefReservationPostgres(sql, reservation);
+    return;
+  }
   await context.table.put({
     PK: caseRefIndexPartitionKey(reservation.tenantId, reservation.caseRef),
     SK: META_SORT_KEY,
