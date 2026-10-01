@@ -9,6 +9,8 @@ import {
   stripStorageKeys,
 } from "../lib/storedRecords";
 import { CRM_USER_PREFS_SORT_KEY, crmUserPrefsPartitionKey } from "../domain/crm/keys";
+import { readUserPrefsPostgres, writeUserPrefsPostgres } from "../domain/crm/prefsPostgres";
+import { crmPostgresOf } from "../domain/crm/postgresClient";
 
 /**
  * One CRM user's trust-ladder preferences (task-10 brief, spec §7). Persists
@@ -62,6 +64,8 @@ async function readStoredUserPrefs(
   tenantId: string,
   email: string,
 ): Promise<crm.CrmUserPrefs | undefined> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return readUserPrefsPostgres(sql, tenantId, email);
   const storedItem = await context.table.get(crmUserPrefsPartitionKey(tenantId, email), CRM_USER_PREFS_SORT_KEY);
   if (storedItem === undefined) return undefined;
   return parseStoredRecord(
@@ -94,6 +98,11 @@ async function writeUserPrefs(
       throw badRequest(`CRM user prefs ${describeFirstZodIssue(error)}`);
     }
     throw error;
+  }
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    await writeUserPrefsPostgres(sql, { ...validatedUserPrefs, tenantId });
+    return validatedUserPrefs;
   }
   await context.table.put({
     PK: crmUserPrefsPartitionKey(tenantId, validatedUserPrefs.email),
