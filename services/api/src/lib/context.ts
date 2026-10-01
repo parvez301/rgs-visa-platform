@@ -4,6 +4,7 @@ import type { TableClient } from "./db";
 import type { CognitoAdminsClient } from "./cognitoAdmins";
 import type { DocumentStore } from "./documentStore";
 import type { EmailSender } from "./email";
+import type { SqlClient } from "./sql";
 import { newId } from "./ids";
 
 /** Everything a domain function needs, injected once at handler startup. */
@@ -21,6 +22,8 @@ export interface AppContext {
   llm?: LlmProvider;
   /** Staff administration seam; supplied by admin handlers that manage Cognito. */
   cognitoAdmins?: CognitoAdminsClient;
+  /** Postgres pool when DATABASE_URL is configured (Supabase transaction pooler). */
+  sql?: SqlClient;
 }
 
 export async function logActivity(

@@ -11,6 +11,11 @@ import { createLlmProvider } from "../agent/providers/index";
 import type { LlmProvider } from "../agent/providers/types";
 import { runAppointmentReminders } from "../domain/crm/appointmentReminders";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
+import {
+  createPgSqlClient,
+  databaseUrlFromEnvironment,
+  ledgerStoreFromEnvironment,
+} from "../lib/sql";
 import { buildAdminRouter } from "./adminApi";
 import { buildUserRouter } from "./userApi";
 
@@ -69,6 +74,14 @@ export function buildProductionContext(): AppContext {
   }
   const llmProvider = tryBuildLlmProvider();
   const adminsUserPoolId = process.env["ADMINS_USER_POOL_ID"];
+  const ledgerStore = ledgerStoreFromEnvironment(process.env);
+  const databaseUrl = databaseUrlFromEnvironment(process.env);
+  if (ledgerStore === "postgres" && databaseUrl === undefined) {
+    throw new Error(
+      "LEDGER_STORE is postgres but DATABASE_URL is not configured",
+    );
+  }
+  const sqlClient = databaseUrl !== undefined ? createPgSqlClient(databaseUrl) : undefined;
   return {
     // N11: every write in the process goes through the retry seam, including
     // the migration's -- `cli.ts` builds its context from this same function,
@@ -99,6 +112,7 @@ export function buildProductionContext(): AppContext {
           ),
         }
       : {}),
+    ...(sqlClient !== undefined ? { sql: sqlClient } : {}),
   };
 }
 

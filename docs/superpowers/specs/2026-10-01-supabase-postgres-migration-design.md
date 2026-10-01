@@ -127,6 +127,7 @@ UI may keep client-side polish filters for tiny result sets, but the
 | Rule | Detail |
 |---|---|
 | Staging first | Full Phase A→B on staging; desk smoke (create case, status walk, ledger filters, export). |
+| Lambda deploy env | CDK synth reads `RGS_DATABASE_URL` → Lambda `DATABASE_URL`. Use the Supabase **transaction pooler** URI (`:6543`; add `?pgbouncer=true` when required). Set `RGS_LEDGER_STORE=postgres` only after the URL is wired; `LEDGER_STORE=postgres` without `DATABASE_URL` fails cold start. |
 | Backfill idempotent | Re-runnable import from Dynamo (or export snapshot) keyed by existing ids (`case_…`, etc.). |
 | Dual-write window (optional, short) | Only if needed for zero-downtime; must not become permanent (cost + drift). Prefer read-switch after verified backfill, then write-switch in a maintenance window if desk can pause briefly. |
 | Unreadable / corrupt rows | Preserve today’s discipline: name bad rows; do not silently drop from queues. |

@@ -13,6 +13,15 @@ export interface SqlClient {
   end(): Promise<void>;
 }
 
+export type LedgerStore = "dynamo" | "postgres";
+
+export function ledgerStoreFromEnvironment(environment: NodeJS.ProcessEnv): LedgerStore {
+  const rawStore = environment["LEDGER_STORE"]?.trim();
+  if (rawStore === undefined || rawStore === "") return "dynamo";
+  if (rawStore === "dynamo" || rawStore === "postgres") return rawStore;
+  throw new Error(`LEDGER_STORE must be dynamo or postgres, got ${rawStore}`);
+}
+
 export function databaseUrlFromEnvironment(
   environment: NodeJS.ProcessEnv,
 ): string | undefined {

@@ -140,6 +140,9 @@ export class RgsPlatformStack extends cdk.Stack {
         // into the RgsSesEvents stack (cloud account). Must match that stack.
         SES_CONFIGURATION_SET: SES_CONFIGURATION_SET_NAME,
         NODE_OPTIONS: "--enable-source-maps",
+        // Staging/prod deploy: set RGS_DATABASE_URL to Supabase transaction pooler URI (:6543).
+        DATABASE_URL: process.env.RGS_DATABASE_URL ?? "",
+        LEDGER_STORE: process.env.RGS_LEDGER_STORE ?? "dynamo",
       },
     };
 
