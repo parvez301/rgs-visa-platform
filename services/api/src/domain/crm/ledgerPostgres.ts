@@ -43,7 +43,7 @@ const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
  * what is a caller mistake. Round-tripping through Date rejects month 13 and
  * day 45, and also 2026-02-30 (which Date would silently roll to March 2).
  */
-function isRealIsoDate(value: string): boolean {
+export function isRealIsoDate(value: string): boolean {
   // Postgres has no year 0000 either; Date would accept it.
   if (!ISO_DATE_PATTERN.test(value) || value.startsWith("0000-")) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);

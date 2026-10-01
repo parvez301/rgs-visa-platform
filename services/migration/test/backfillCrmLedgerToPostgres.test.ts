@@ -200,4 +200,67 @@ describe("backfillCrmLedgerToPostgres", () => {
     expect(rows.rows).toEqual([{ case_id: "case_1" }]);
     warn.mockRestore();
   });
+
+  describe("rows that parse but Postgres would reject", () => {
+    async function putRawCase(
+      context: AppContext,
+      caseId: string,
+      overrides: Record<string, unknown>,
+    ): Promise<void> {
+      await context.table.put({
+        PK: casePartitionKey("rgs", caseId),
+        SK: META_SORT_KEY,
+        GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
+        GSI1SK: "2026-03-05T10:00:00.000Z",
+        caseId,
+        caseRef: `RGS-${caseId}`,
+        partnerId: "partner_1",
+        destinationCountry: "AE",
+        caseType: "VISA",
+        caseStatus: "NEW",
+        billingStatus: "UNKNOWN",
+        receivedDate: "2026-03-05",
+        totalInr: 0,
+        updatedAt: "2026-03-05T10:00:00.000Z",
+        ...overrides,
+      });
+    }
+
+    it.each([
+      ["receivedDate", { receivedDate: "2026-02-30" }],
+      ["appointmentDate", { appointmentDate: "2026-13-01" }],
+      ["expectedCollectionDate", { expectedCollectionDate: "2026-04-31" }],
+      ["totalInr", { totalInr: 2_147_483_648 }],
+    ])("names a case with an impossible %s and keeps going", async (_field, overrides) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const context = buildContext();
+      await putRawCase(context, "case_bad", overrides);
+      await seedCase(context, "case_good");
+
+      const result = await backfillCrmLedgerToPostgres({
+        table: context.table,
+        sql,
+        tenantId: "rgs",
+      });
+
+      expect(result.unreadableCaseIds).toEqual(["case_bad"]);
+      expect(result.casesUpserted).toBe(1);
+      const rows = await sql.query<{ case_id: string }>(`select case_id from crm_cases`);
+      expect(rows.rows).toEqual([{ case_id: "case_good" }]);
+      warn.mockRestore();
+    });
+
+    it("still writes a case at the integer ceiling", async () => {
+      const context = buildContext();
+      await putRawCase(context, "case_max", { totalInr: 2_147_483_647 });
+
+      const result = await backfillCrmLedgerToPostgres({
+        table: context.table,
+        sql,
+        tenantId: "rgs",
+      });
+
+      expect(result).toMatchObject({ casesUpserted: 1, unreadableCaseIds: [] });
+    });
+  });
 });

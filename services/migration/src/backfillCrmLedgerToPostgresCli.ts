@@ -30,7 +30,7 @@ try {
     unreadablePartners: result.unreadablePartnerIds.length,
   });
   if (result.unreadableCaseIds.length > 0) {
-    console.error(`Cases not inserted (unreadable META): ${result.unreadableCaseIds.join(", ")}`);
+    console.error(`Cases not inserted (unreadable META or unwritable date/total): ${result.unreadableCaseIds.join(", ")}`);
   }
   if (result.unreadablePartnerIds.length > 0) {
     console.error(`Partners not inserted (unreadable META): ${result.unreadablePartnerIds.join(", ")}`);

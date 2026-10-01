@@ -1,4 +1,5 @@
 import { LEDGER_PROJECTED_ATTRIBUTES, parseLedgerRow } from "@rgs/api/src/domain/crm/ledger";
+import { isRealIsoDate } from "@rgs/api/src/domain/crm/ledgerPostgres";
 import { META_SORT_KEY, caseStatusGsi1Pk, partnerListGsi1Pk } from "@rgs/api/src/domain/crm/keys";
 import type { TableClient } from "@rgs/api/src/lib/db";
 import type { SqlClient } from "@rgs/api/src/lib/sql";
@@ -62,6 +63,33 @@ on conflict (tenant_id, case_id) do update set
   search_text = excluded.search_text
 `;
 
+/** Postgres `integer` ceiling; `crm_cases.total_inr` is `integer`. */
+const POSTGRES_INTEGER_MAX = 2_147_483_647;
+
+/**
+ * `LedgerRowSchema` only regex-checks dates and bounds `totalInr` below by
+ * zero, so a row can parse and still be unwritable: "2026-02-30" fails the
+ * `date` cast and a huge total overflows `integer`. Either would abort the
+ * whole run with a raw Postgres error against a half-populated table, so they
+ * are caught here and the case is named instead.
+ */
+function describeUnwritableCase(row: crm.LedgerRow): string | undefined {
+  const dateFields: Array<[string, string | undefined]> = [
+    ["receivedDate", row.receivedDate],
+    ["appointmentDate", row.appointmentDate],
+    ["expectedCollectionDate", row.expectedCollectionDate],
+  ];
+  for (const [fieldName, value] of dateFields) {
+    if (value !== undefined && !isRealIsoDate(value)) {
+      return `${fieldName} "${value}" is not a real calendar date`;
+    }
+  }
+  if (row.totalInr > POSTGRES_INTEGER_MAX) {
+    return `totalInr ${row.totalInr} exceeds the Postgres integer column`;
+  }
+  return undefined;
+}
+
 /**
  * Copies the Dynamo CRM ledger projections (partner META items and case META
  * items) into Postgres. Re-runnable: both upserts are keyed on the table's
@@ -119,6 +147,14 @@ export async function backfillCrmLedgerToPostgres(
     );
     result.unreadableCaseIds.push(...caseCollection.unreadableRecordIds);
     for (const ledgerRow of caseCollection.records) {
+      const unwritableReason = describeUnwritableCase(ledgerRow);
+      if (unwritableReason !== undefined) {
+        console.warn(
+          `Skipping CRM case ${ledgerRow.caseId} in tenant ${tenantId}: ${unwritableReason}`,
+        );
+        result.unreadableCaseIds.push(ledgerRow.caseId);
+        continue;
+      }
       await sql.query(UPSERT_CASE_SQL, [
         tenantId,
         ledgerRow.caseId,
