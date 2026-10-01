@@ -19,7 +19,7 @@
 
 > **Security note (unchanged from Phase A).** `RGS_DATABASE_URL` (password included) is a plaintext admin Lambda env var; the pg client does not pin the Supabase CA. Staging-only until secrets and TLS are hardened for prod.
 
-> **Known B.1 gaps (agent / ops tooling).** With `CRM_STORE=postgres`, these paths still hit **Dynamo** only: `listCasesByStatus`, `listCasesByPartner`, `countCasesByField`, and **`caseRefIndex`** (ref reservation). Admin **Ledger Live** is OK when `LEDGER_STORE=postgres` (SQL ledger). Agent list/count tools and anything driven off GSI1/GSI2 or the ref index may be **stale or empty** relative to Postgres until Phase B.2+ migrates those reads.
+> **Known B.1 gaps (agent / ops tooling).** With `CRM_STORE=postgres`, these paths still hit **Dynamo** only: `listCasesByStatus`, `listCasesByPartner`, `countCasesByField`, and **`caseRefIndex`** (ref reservation). Admin **Ledger Live** is OK when `LEDGER_STORE=postgres` (SQL ledger). Agent list/count tools and anything driven off GSI1/GSI2 or the ref index may be **stale or empty** relative to Postgres until Phase B.2+ migrates those reads. **After B.1 cutover:** follow **`2026-10-01-supabase-phase-b2-staging-runbook.md`** to close those gaps.
 
 > **Appointment reminders follow `CRM_STORE`.** The nightly EventBridge job (`rgs-appointment-reminders-<stage>`, 03:00 UTC) reads live cases with an appointment 1–2 days out, emails the partner, and stamps `appointmentReminderSentFor`. CDK now sets **`DATABASE_URL`** and **`CRM_STORE`** on that Lambda from the same `RGS_DATABASE_URL` / `RGS_CRM_STORE` as the admin API (it does not need `LEDGER_STORE`: under Postgres it queries `crm_cases` directly by `appointment_date`). **Both Lambdas must be redeployed together** — a reminders Lambda left on `dynamo` after the flip would email partners from a frozen copy and stamp rows nobody reads. This puts the DB credential on a second Lambda (same staging-only caveat as the security note above); the portal-facing user API still carries none.
 
@@ -149,4 +149,5 @@ These checks validate **live Postgres SoR**, not backfill freshness.
 
 ## Related runbooks
 
+- Phase B.2 (remaining CRM on Postgres): `2026-10-01-supabase-phase-b2-staging-runbook.md`
 - Phase A (ledger reads only): `2026-10-01-supabase-phase-a-staging-runbook.md`

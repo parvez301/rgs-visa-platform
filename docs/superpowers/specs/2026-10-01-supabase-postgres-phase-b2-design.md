@@ -1,7 +1,7 @@
 # RGS — Supabase Postgres Phase B.2 (remaining CRM SoR)
 
 **Date:** 2026-10-01  
-**Status:** draft — awaiting owner review  
+**Status:** approved (implementation plan landed)  
 **Parent:** `2026-10-01-supabase-postgres-migration-design.md`  
 **Prior:** Phase B.1 plan + staging runbook (`CRM_STORE=postgres` case/partner/traveller/event/ref-claim SoR)
 
@@ -158,7 +158,7 @@ cutover.
 | Memory / prefs | `domain/crm/memory.ts`, `agent/prefs.ts` + postgres |
 | Status email | `domain/crm/statusEmailTemplates.ts` + postgres |
 | Backfill | `services/migration/src/backfillCrmRemainingToPostgres*.ts` |
-| Runbook | `docs/superpowers/specs/2026-10-01-supabase-phase-b2-staging-runbook.md` (or B.1 addendum) |
+| Runbook | [`2026-10-01-supabase-phase-b2-staging-runbook.md`](2026-10-01-supabase-phase-b2-staging-runbook.md) |
 | Worktree | `.worktrees/supabase-crm-remaining` |
 
 Implementation detail and task checkboxes live in the Phase B.2 **plan**
