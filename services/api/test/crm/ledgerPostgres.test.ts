@@ -341,4 +341,42 @@ describe("listLedgerRowsFromPostgres", () => {
       ),
     ).toMatchObject({ statusCode: 400 });
   });
+
+  it.each(["2026-13-45", "2026-02-30", "2026-00-10", "2026-04-31", "0000-01-01"])(
+    "rejects the impossible date %s with a 400, not a Postgres error",
+    async (impossibleDate) => {
+      for (const filterName of ["appointmentDateOn", "expectedCollectionDateOn"] as const) {
+        const error = await rejectionOf(
+          listLedgerRowsFromPostgres(sql, "rgs", {
+            statuses: [],
+            limit: 10,
+            [filterName]: impossibleDate,
+          }),
+        );
+        expect(error).toBeInstanceOf(ApiError);
+        expect(error).toMatchObject({ statusCode: 400 });
+      }
+    },
+  );
+
+  it("accepts a real leap day", async () => {
+    const page = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: [],
+      limit: 10,
+      appointmentDateOn: "2028-02-29",
+    });
+    expect(page.rows).toEqual([]);
+  });
+
+  it("refuses a well-formed cursor carrying an impossible receivedDate with the unreadable-cursor 400", async () => {
+    const forged = Buffer.from(
+      JSON.stringify({ v: 1, scopeKey: "x", receivedDate: "2026-13-45", caseId: "case_a" }),
+      "utf8",
+    ).toString("base64url");
+    const error = await rejectionOf(
+      listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 10, cursor: forged }),
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ statusCode: 400, message: "This ledger cursor could not be read" });
+  });
 });
