@@ -231,7 +231,8 @@ export class RgsPlatformStack extends cdk.Stack {
     // as the admin API, so after RGS_CRM_STORE=postgres it must read Postgres or
     // it would email partners from the frozen Dynamo copy. It needs only the
     // case store (not LEDGER_STORE): it queries crm_cases directly. Unset
-    // RGS_* leaves both off and the job on Dynamo, matching the admin API.
+    // RGS_* leaves the job on Dynamo on non-staging stages; on staging it
+    // follows the postgres default like the admin API.
     if (process.env.RGS_DATABASE_URL !== undefined && process.env.RGS_DATABASE_URL !== "") {
       appointmentRemindersFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL);
     }

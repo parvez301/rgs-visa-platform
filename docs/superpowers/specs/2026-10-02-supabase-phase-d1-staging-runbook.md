@@ -18,7 +18,8 @@
 
 > **No schema / backfill.** D.1 is CDK default + deploy only. Do **not** re-run any `backfill:*` script.  
 > **`RGS_DATABASE_URL` still required.** Staging defaults set store flags to postgres; cold start still needs the transaction pooler URI (`:6543`). Unset URL + postgres store = loud fail, not Dynamo fallback.  
-> **Rollback blast radius.** Flipping back to Dynamo shows only data that was on Dynamo; PG-only writes since A–C.2.2 cutovers are invisible. Prefer fix-forward.
+> **Rollback blast radius.** Flipping back to Dynamo shows only data that was on Dynamo; PG-only writes since A–C.2.2 cutovers are invisible. Prefer fix-forward.  
+> **Supersedes prior runbooks:** on staging, "or unset → default dynamo" no longer holds — rollback must set `RGS_CRM_STORE=dynamo` (and ledger if needed) explicitly.
 
 ---
 
@@ -35,10 +36,10 @@
 Deploy `RgsPlatform-staging` with usual credentials. Optional: omit `RGS_CRM_STORE` / `RGS_LEDGER_STORE` to exercise defaults, **or** keep explicit `postgres` (redundant but fine).
 
 ```bash
-# Example — match your existing staging deploy entrypoint
+# RGS_CRM_STORE / RGS_LEDGER_STORE intentionally unset to exercise D.1 defaults
 RGS_DATABASE_URL='postgresql://…:6543/rgs_staging?pgbouncer=true' \
-  # RGS_CRM_STORE / RGS_LEDGER_STORE intentionally unset to use D.1 defaults
-  <your staging cdk deploy command for RgsPlatform-staging>
+RGS_STAGE=staging \
+  pnpm --filter @rgs/infra exec cdk deploy RgsPlatform-staging
 ```
 
 - [ ] Deploy succeeded.
