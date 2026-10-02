@@ -6,6 +6,8 @@ import type { DocumentStore } from "./documentStore";
 import type { EmailSender } from "./email";
 import type { CrmStore, LedgerStore, SqlClient } from "./sql";
 import { newId } from "./ids";
+import { crmPostgresOf } from "../domain/crm/postgresClient";
+import { insertActivityEventPostgres } from "../domain/activityPostgres";
 
 /** Everything a domain function needs, injected once at handler startup. */
 export interface AppContext {
@@ -52,6 +54,11 @@ export async function logActivity(
     ...(actor?.actorEmail !== undefined ? { actorEmail: actor.actorEmail } : {}),
     ...(actor?.actorRole !== undefined ? { actorRole: actor.actorRole } : {}),
   };
+  const sql = crmPostgresOf(context);
+  if (sql) {
+    await insertActivityEventPostgres(sql, activityEvent);
+    return activityEvent;
+  }
   await context.table.put({
     PK: `EVENT#${dayBucket}`,
     SK: `${createdAt}#${eventId}`,

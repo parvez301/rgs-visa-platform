@@ -6,6 +6,8 @@ import {
   storedRecordId,
   stripStorageKeys,
 } from "../lib/storedRecords";
+import { crmPostgresOf } from "./crm/postgresClient";
+import { listRecentActivityPostgres, listUserActivityPostgres } from "./activityPostgres";
 
 function dayBucketsBetween(startDate: Date, endDate: Date): string[] {
   const buckets: string[] = [];
@@ -75,6 +77,8 @@ export async function listRecentActivity(
 ): Promise<ActivityListing> {
   const endDate = context.now();
   const startDate = new Date(endDate.getTime() - daysBack * 24 * 60 * 60 * 1000);
+  const sql = crmPostgresOf(context);
+  if (sql) return listRecentActivityPostgres(sql, startDate.toISOString(), limit);
   const buckets = dayBucketsBetween(startDate, endDate).reverse();
   const events: ActivityEvent[] = [];
   const unreadableEventIds: string[] = [];
@@ -95,6 +99,8 @@ export async function listUserActivity(
   userId: string,
   limit = 100,
 ): Promise<ActivityListing> {
+  const sql = crmPostgresOf(context);
+  if (sql) return listUserActivityPostgres(sql, userId, limit);
   const items = await context.table.queryGsi("GSI2", `USER#${userId}`, {
     scanForward: false,
     limit,
