@@ -23,6 +23,7 @@ describe("buildProductionContext sql wiring", () => {
   it("throws when LEDGER_STORE=postgres but DATABASE_URL is missing", async () => {
     Object.assign(process.env, requiredEnv);
     process.env["LEDGER_STORE"] = "postgres";
+    delete process.env["CRM_STORE"];
     delete process.env["DATABASE_URL"];
 
     const { buildProductionContext } = await import("../src/http/handler");
@@ -32,6 +33,7 @@ describe("buildProductionContext sql wiring", () => {
   it("throws when CRM_STORE=postgres but DATABASE_URL is missing", async () => {
     Object.assign(process.env, requiredEnv);
     process.env["CRM_STORE"] = "postgres";
+    delete process.env["LEDGER_STORE"];
     delete process.env["DATABASE_URL"];
 
     const { buildProductionContext } = await import("../src/http/handler");
