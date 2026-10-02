@@ -13,11 +13,38 @@ function synthesizedResources(): Record<string, Record<string, unknown>> {
   return Template.fromStack(stack).toJSON().Resources;
 }
 
+function synthesizedResourcesForStage(
+  stage: string,
+): Record<string, Record<string, unknown>> {
+  const app = new cdk.App();
+  const stack = new RgsPlatformStack(app, `AdminRbacTest-${stage}`, {
+    stage,
+    env: { account: "111111111111", region: "ap-south-1" },
+  });
+  return Template.fromStack(stack).toJSON().Resources;
+}
+
 function resourcesOfType(
   resources: Record<string, Record<string, unknown>>,
   type: string,
 ): Array<Record<string, unknown>> {
   return Object.values(resources).filter((resource) => resource.Type === type);
+}
+
+function lambdaEnvByName(
+  resources: Record<string, Record<string, unknown>>,
+): Record<string, Record<string, unknown>> {
+  return Object.fromEntries(
+    resourcesOfType(resources, "AWS::Lambda::Function")
+      .filter((fn) => typeof (fn.Properties as { FunctionName?: unknown }).FunctionName === "string")
+      .map((fn) => {
+        const props = fn.Properties as {
+          FunctionName: string;
+          Environment?: { Variables?: Record<string, unknown> };
+        };
+        return [props.FunctionName, props.Environment?.Variables ?? {}];
+      }),
+  );
 }
 
 describe("admin RBAC infrastructure", () => {
@@ -121,6 +148,75 @@ describe("admin RBAC infrastructure", () => {
     } finally {
       if (saved.url !== undefined) process.env["RGS_DATABASE_URL"] = saved.url;
       if (saved.crm !== undefined) process.env["RGS_CRM_STORE"] = saved.crm;
+    }
+  });
+
+  it("defaults CRM_STORE and LEDGER_STORE to postgres on staging when RGS_* unset", () => {
+    const saved = {
+      url: process.env["RGS_DATABASE_URL"],
+      crm: process.env["RGS_CRM_STORE"],
+      ledger: process.env["RGS_LEDGER_STORE"],
+    };
+    delete process.env["RGS_DATABASE_URL"];
+    delete process.env["RGS_CRM_STORE"];
+    delete process.env["RGS_LEDGER_STORE"];
+    try {
+      const env = lambdaEnvByName(synthesizedResourcesForStage("staging"));
+      assert.equal(env["rgs-admin-api-staging"]?.["CRM_STORE"], "postgres");
+      assert.equal(env["rgs-admin-api-staging"]?.["LEDGER_STORE"], "postgres");
+      assert.equal(env["rgs-user-api-staging"]?.["CRM_STORE"], "postgres");
+      assert.equal(env["rgs-user-api-staging"]?.["LEDGER_STORE"], undefined);
+      assert.equal(env["rgs-appointment-reminders-staging"]?.["CRM_STORE"], "postgres");
+    } finally {
+      if (saved.url === undefined) delete process.env["RGS_DATABASE_URL"];
+      else process.env["RGS_DATABASE_URL"] = saved.url;
+      if (saved.crm === undefined) delete process.env["RGS_CRM_STORE"];
+      else process.env["RGS_CRM_STORE"] = saved.crm;
+      if (saved.ledger === undefined) delete process.env["RGS_LEDGER_STORE"];
+      else process.env["RGS_LEDGER_STORE"] = saved.ledger;
+    }
+  });
+
+  it("honors explicit RGS_*=dynamo on staging (rollback path)", () => {
+    const saved = {
+      crm: process.env["RGS_CRM_STORE"],
+      ledger: process.env["RGS_LEDGER_STORE"],
+    };
+    process.env["RGS_CRM_STORE"] = "dynamo";
+    process.env["RGS_LEDGER_STORE"] = "dynamo";
+    try {
+      const env = lambdaEnvByName(synthesizedResourcesForStage("staging"));
+      assert.equal(env["rgs-admin-api-staging"]?.["CRM_STORE"], "dynamo");
+      assert.equal(env["rgs-admin-api-staging"]?.["LEDGER_STORE"], "dynamo");
+      assert.equal(env["rgs-user-api-staging"]?.["CRM_STORE"], "dynamo");
+      assert.equal(env["rgs-appointment-reminders-staging"]?.["CRM_STORE"], "dynamo");
+    } finally {
+      if (saved.crm === undefined) delete process.env["RGS_CRM_STORE"];
+      else process.env["RGS_CRM_STORE"] = saved.crm;
+      if (saved.ledger === undefined) delete process.env["RGS_LEDGER_STORE"];
+      else process.env["RGS_LEDGER_STORE"] = saved.ledger;
+    }
+  });
+
+  it("keeps non-staging unset defaults on dynamo", () => {
+    const saved = {
+      crm: process.env["RGS_CRM_STORE"],
+      ledger: process.env["RGS_LEDGER_STORE"],
+    };
+    delete process.env["RGS_CRM_STORE"];
+    delete process.env["RGS_LEDGER_STORE"];
+    try {
+      const env = lambdaEnvByName(synthesizedResourcesForStage("prod"));
+      assert.equal(env["rgs-admin-api-prod"]?.["CRM_STORE"], "dynamo");
+      assert.equal(env["rgs-admin-api-prod"]?.["LEDGER_STORE"], "dynamo");
+      assert.equal(env["rgs-user-api-prod"]?.["CRM_STORE"], "dynamo");
+      // Reminders still omit CRM_STORE when unset on non-staging (pre-D.1 behavior).
+      assert.equal(env["rgs-appointment-reminders-prod"]?.["CRM_STORE"], undefined);
+    } finally {
+      if (saved.crm === undefined) delete process.env["RGS_CRM_STORE"];
+      else process.env["RGS_CRM_STORE"] = saved.crm;
+      if (saved.ledger === undefined) delete process.env["RGS_LEDGER_STORE"];
+      else process.env["RGS_LEDGER_STORE"] = saved.ledger;
     }
   });
 

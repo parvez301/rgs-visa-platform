@@ -20,6 +20,14 @@ import {
 } from "aws-cdk-lib";
 import { SES_CONFIGURATION_SET_NAME } from "./rgs-ses-events-stack";
 
+/** When RGS_* unset/empty: staging → postgres, else dynamo. Non-empty env always wins. */
+function resolveStoreEnv(envValue: string | undefined, stage: string): string {
+  if (envValue !== undefined && envValue !== "") {
+    return envValue;
+  }
+  return stage === "staging" ? "postgres" : "dynamo";
+}
+
 export interface RgsPlatformStackProps extends cdk.StackProps {
   stage: string;
 }
@@ -164,11 +172,15 @@ export class RgsPlatformStack extends cdk.Stack {
     // the user API), so a bad RGS_LEDGER_STORE value can only fail the admin cold
     // start (buildProductionContext reads these).
     // Set RGS_DATABASE_URL to the Supabase transaction pooler URI (:6543).
+    // Staging unset defaults to postgres; non-staging unset stays dynamo; explicit RGS_* wins.
+    const crmStore = resolveStoreEnv(process.env.RGS_CRM_STORE, stage);
+    const ledgerStore = resolveStoreEnv(process.env.RGS_LEDGER_STORE, stage);
+
     for (const crmFunction of [adminApiFunction, userApiFunction]) {
       crmFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL ?? "");
-      crmFunction.addEnvironment("CRM_STORE", process.env.RGS_CRM_STORE ?? "dynamo");
+      crmFunction.addEnvironment("CRM_STORE", crmStore);
     }
-    adminApiFunction.addEnvironment("LEDGER_STORE", process.env.RGS_LEDGER_STORE ?? "dynamo");
+    adminApiFunction.addEnvironment("LEDGER_STORE", ledgerStore);
     adminApiFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -223,8 +235,10 @@ export class RgsPlatformStack extends cdk.Stack {
     if (process.env.RGS_DATABASE_URL !== undefined && process.env.RGS_DATABASE_URL !== "") {
       appointmentRemindersFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL);
     }
-    if (process.env.RGS_CRM_STORE !== undefined && process.env.RGS_CRM_STORE !== "") {
-      appointmentRemindersFunction.addEnvironment("CRM_STORE", process.env.RGS_CRM_STORE);
+    const remindersCrmExplicit =
+      process.env.RGS_CRM_STORE !== undefined && process.env.RGS_CRM_STORE !== "";
+    if (remindersCrmExplicit || stage === "staging") {
+      appointmentRemindersFunction.addEnvironment("CRM_STORE", crmStore);
     }
     platformTable.grantReadWriteData(appointmentRemindersFunction);
     appointmentRemindersFunction.addToRolePolicy(
