@@ -3,13 +3,11 @@ import { COUNTRY_PRODUCTS, DOC_TYPE_LABELS, type CountryProduct, type DocType } 
 import { beforeEach, describe, expect, it } from "vitest";
 import { listCountryConfig } from "@rgs/api/src/domain/config";
 import { listCountryProductsPostgres } from "@rgs/api/src/domain/configCountryProductsPostgres";
-import { putCountryChecklist } from "@rgs/api/src/domain/crm/countryChecklist";
 import { META_SORT_KEY, countryChecklistPartitionKey } from "@rgs/api/src/domain/crm/keys";
 import type { SqlClient } from "@rgs/api/src/lib/sql";
 import { buildTestContext, type TestContext } from "@rgs/api/test/helpers";
 import { pgliteAsSqlClient } from "@rgs/api/test/pgliteSqlClient";
 import { backfillCountryCatalogToPostgres } from "../src/backfillCountryCatalogToPostgres";
-import { migrateCountryDocumentsToProducts } from "../src/migrateCountryDocumentsToProducts";
 
 const TENANT_ID = "rgs";
 const CONFIG_PARTITION_KEY = "CONFIG#COUNTRY";
@@ -36,6 +34,22 @@ async function putLegacyProduct(
 ): Promise<void> {
   const { requiredDocuments: _dropped, ...fields } = seedProduct(countryCode);
   await context.table.put({ PK: CONFIG_PARTITION_KEY, SK: `${countryCode}#${fields.productCode}`, ...fields, docsRequired });
+}
+
+/** A leftover Dynamo checklist row, written raw: nothing in production writes these any more. */
+async function putChecklist(
+  context: TestContext,
+  tenantId: string,
+  input: { countryCode: string; requiredDocuments: string[] },
+  updatedBy: string,
+): Promise<void> {
+  await context.table.put({
+    PK: countryChecklistPartitionKey(tenantId, input.countryCode),
+    SK: META_SORT_KEY,
+    ...input,
+    updatedAt: "2026-09-30T10:00:00.000Z",
+    updatedBy,
+  });
 }
 
 async function postgresProduct(sql: SqlClient, countryCode: string): Promise<CountryProduct | undefined> {
@@ -83,7 +97,7 @@ describe("backfillCountryCatalogToPostgres", () => {
   it("is idempotent: a second run reports and stores the same thing", async () => {
     await putProduct(context, { ...seedProduct("AE"), serviceFeeInr: 4321 });
     await putLegacyProduct(context, "SG", ["PASSPORT_BIO"]);
-    await putCountryChecklist(
+    await putChecklist(
       context,
       TENANT_ID,
       { countryCode: "SG", requiredDocuments: ["Custom letter", DOC_TYPE_LABELS.PASSPORT_BIO] },
@@ -127,26 +141,23 @@ describe("backfillCountryCatalogToPostgres", () => {
   });
 
   describe("checklist fold", () => {
-    it("folds checklist labels into a legacy row, matching what the Dynamo migration would store", async () => {
+    it("folds checklist labels into a legacy row, same as the retired Dynamo migration stored", async () => {
       await putLegacyProduct(context, "AE", ["PASSPORT_BIO", "PHOTO"]);
-      await putCountryChecklist(
+      await putChecklist(
         context,
         TENANT_ID,
         { countryCode: "AE", requiredDocuments: ["Custom letter", DOC_TYPE_LABELS.PASSPORT_BIO, "custom letter"] },
         "desk@rgs.test",
       );
 
-      // Reference: the Dynamo-era migration run over an identical copy.
-      const reference = buildTestContext();
-      await putLegacyProduct(reference, "AE", ["PASSPORT_BIO", "PHOTO"]);
-      await putCountryChecklist(
-        reference,
-        TENANT_ID,
-        { countryCode: "AE", requiredDocuments: ["Custom letter", DOC_TYPE_LABELS.PASSPORT_BIO, "custom letter"] },
-        "desk@rgs.test",
-      );
-      await migrateCountryDocumentsToProducts(reference, TENANT_ID, "migration@rgs.test");
-      const expected = (await listCountryConfig(reference)).countryProducts.find((p) => p.countryCode === "AE");
+      const { requiredDocuments: _legacyBaseline, ...aeFields } = seedProduct("AE");
+      const expected: CountryProduct = {
+        ...aeFields,
+        requiredDocuments: [
+          { label: "Custom letter" },
+          { label: DOC_TYPE_LABELS.PASSPORT_BIO, portalDocType: "PASSPORT_BIO" },
+        ],
+      };
 
       const result = await backfillCountryCatalogToPostgres({ table: context.table, sql });
 
@@ -166,7 +177,7 @@ describe("backfillCountryCatalogToPostgres", () => {
       await putProduct(context, { ...aeBase, active: false, requiredDocuments: [] });
       await putProduct(context, { ...sgBase, requiredDocuments: [{ label: "Desk edit" }] });
       for (const countryCode of ["AE", "SG"]) {
-        await putCountryChecklist(
+        await putChecklist(
           context,
           TENANT_ID,
           { countryCode, requiredDocuments: [DOC_TYPE_LABELS.PASSPORT_BIO] },
@@ -186,7 +197,7 @@ describe("backfillCountryCatalogToPostgres", () => {
     it("names the country and keeps the product unmerged when the merged result would be invalid", async () => {
       // AE is fulfilled: a free-text-only checklist leaves it with no portal-collectable document.
       await putProduct(context, { ...seedProduct("AE"), requiredDocuments: [] });
-      await putCountryChecklist(
+      await putChecklist(
         context,
         TENANT_ID,
         { countryCode: "AE", requiredDocuments: ["Free text only"] },

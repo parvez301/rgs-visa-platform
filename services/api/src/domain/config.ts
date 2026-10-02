@@ -30,7 +30,7 @@ function configSortKey(countryCode: string, productCode: string): string {
 
 /**
  * Rows written before `requiredDocuments` existed carry `docsRequired` (portal
- * DocTypes) instead. Until the `migrate:country-documents-to-products` script
+ * DocTypes) instead. Until the `backfill:country-catalog-postgres` backfill
  * has run, read such a row as if it had been migrated: one checklist line per
  * legacy DocType. A row that already has a non-empty `requiredDocuments` wins,
  * and the legacy/read-time-only attributes are dropped either way so they never

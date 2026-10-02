@@ -2,13 +2,13 @@ import { requiredDocumentsFromLegacyDocTypes, type CountryProduct } from "@rgs/s
 import { applyMigrations } from "@rgs/api/src/db/migrate";
 import { itemToCountryProduct } from "@rgs/api/src/domain/config";
 import { upsertCountryProductPostgres } from "@rgs/api/src/domain/configCountryProductsPostgres";
-import { CountryChecklistSchema } from "@rgs/api/src/domain/crm/countryChecklist";
 import { DEFAULT_TENANT_ID, META_SORT_KEY, countryChecklistPartitionKey } from "@rgs/api/src/domain/crm/keys";
 import type { TableClient, TableItem } from "@rgs/api/src/lib/db";
 import { CorruptRecordError } from "@rgs/api/src/lib/errors";
 import type { SqlClient } from "@rgs/api/src/lib/sql";
 import { parseStoredRecord, stripStorageKeys } from "@rgs/api/src/lib/storedRecords";
 import { describeError, isRecordLevelDatabaseError } from "./backfillCrmRemainingToPostgres";
+import { CountryChecklistSchema } from "./countryChecklistSchema";
 import {
   type CountryProductForMigration,
   mergeChecklistIntoDocuments,
@@ -60,7 +60,7 @@ function storedRowName(storedItem: TableItem): string {
  * seed.
  *
  * Checklist fold uses `mergeChecklistIntoDocuments`, the same rule as
- * `migrateCountryDocumentsToProducts`: a legacy row, or a converted row with no
+ * the retired Dynamo-era migration: a legacy row, or a converted row with no
  * documents, takes the checklist's labels; a converted row that already has
  * documents is left alone. An unreadable checklist names its country and skips
  * the merge (the product is still copied unmerged).
