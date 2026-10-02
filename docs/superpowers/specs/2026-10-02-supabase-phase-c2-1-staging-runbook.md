@@ -25,9 +25,9 @@
 
 > **Other backfill limitations.** An application with **no profile and an unknown status** is unreachable by discovery (and unreadable by the live API); documents belonging to undiscovered applications are not copied.
 
-> **Security note (unchanged from Phase A/B/C.1).** `RGS_DATABASE_URL` (password included) is a plaintext admin Lambda env var; the pg client does not pin the Supabase CA. Staging-only until secrets and TLS are hardened for prod.
+> **Security note (unchanged from Phase A/B/C.1).** `RGS_DATABASE_URL` (password included) is a plaintext Lambda env var on the admin API, **user API** (C.2.1), and appointment reminders; the pg client does not pin the Supabase CA. Staging-only until secrets and TLS are hardened for prod.
 
-> **No env flag flip.** Staging should already have **`RGS_CRM_STORE=postgres`** and **`RGS_LEDGER_STORE=postgres`** from B.1/B.2/C.1. This cutover is **migrate → backfill → deploy C.2.1 code** with the same `RGS_*` deploy inputs. No new portal-only flag.
+> **No env flag flip.** Staging should already have **`RGS_CRM_STORE=postgres`** and **`RGS_LEDGER_STORE=postgres`** from B.1/B.2/C.1. This cutover is **migrate → backfill → deploy C.2.1 code** with the same `RGS_*` deploy inputs. No new portal-only flag. The only new wiring: the stack now also injects **`DATABASE_URL`** + **`CRM_STORE`** into the **user API** Lambda (portal writes run there); the user API does **not** get `LEDGER_STORE`.
 
 ---
 
@@ -36,6 +36,7 @@
 ### 0. Preconditions (Phase B.2 / C.1 live)
 
 - [ ] **`CRM_STORE=postgres`** and **`LEDGER_STORE=postgres`** on staging admin API (and appointment reminders **`CRM_STORE=postgres`** + **`DATABASE_URL`** per B.1).
+- [ ] **User API** Lambda (`rgs-user-api-<stage>`) will receive **`CRM_STORE=postgres`** + **`DATABASE_URL`** from the same `RGS_*` inputs on the C.2.1 stack deploy (verify after deploy in §4); it must **not** have `LEDGER_STORE`.
 - [ ] B.1 + B.2 + C.1 migrations **`001`–`005`** applied; case/partner, remaining CRM, and country catalog SoR already on Postgres (C.1 runbook complete).
 - [ ] **`RGS_DATABASE_URL`** → admin Lambda **`DATABASE_URL`** (transaction pooler **`:6543`**, `?pgbouncer=true` if required).
 - [ ] Admin build: **`VITE_LEDGER_COMBINED_FILTERS=true`** iff **`LEDGER_STORE=postgres`** (unchanged).
@@ -109,6 +110,7 @@ select
 
 - [ ] Deploy staging stack with **`RGS_DATABASE_URL`**, **`RGS_LEDGER_STORE=postgres`**, **`RGS_CRM_STORE=postgres`** unchanged from C.1.
 - [ ] Confirm cold start: **`CRM_STORE=postgres`** still requires **`DATABASE_URL`** (unchanged).
+- [ ] **User API env check** (blocking): `aws lambda get-function-configuration --function-name rgs-user-api-<stage> --query 'Environment.Variables.[CRM_STORE,DATABASE_URL!=`null`,LEDGER_STORE]'` → `postgres`, `true`, `null`. If the user API lacks `CRM_STORE`/`DATABASE_URL`, portal writes stay on Dynamo while admin reads Postgres — stop and fix the deploy inputs.
 - [ ] Appointment reminders Lambda: still **`CRM_STORE=postgres`** + **`DATABASE_URL`**; no C.2.1-specific env additions expected.
 - [ ] **Do not** run `backfill:portal-sor-postgres`, `backfill:country-catalog-postgres`, `backfill:crm-remaining-postgres`, `backfill:crm-case-sor-postgres`, or `backfill:crm-ledger-postgres` after this deploy except during a deliberate rollback/re-cutover procedure.
 
@@ -143,7 +145,7 @@ These checks validate **live Postgres**, not backfill freshness alone.
 
 ### 6. Rollback
 
-- [ ] Set **`RGS_CRM_STORE=dynamo`** (or unset → default **`dynamo`**); redeploy **admin API and appointment reminders Lambda** (one stack deploy does both). **Entire** CRM SoR (B.1 + B.2 + C.1 catalog + C.2.1 portal/activity) returns to Dynamo reads/writes — same blast radius as C.1. If you rolled forward on C.2.1 code, redeploy the **previous** artifact or keep `postgres` and repair data instead.
+- [ ] Set **`RGS_CRM_STORE=dynamo`** (or unset → default **`dynamo`**); redeploy **admin API, user API, and appointment reminders Lambda** (one stack deploy covers all three; the user API must flip too or portal writes diverge from admin). **Entire** CRM SoR (B.1 + B.2 + C.1 catalog + C.2.1 portal/activity) returns to Dynamo reads/writes — same blast radius as C.1. If you rolled forward on C.2.1 code, redeploy the **previous** artifact or keep `postgres` and repair data instead.
 - [ ] **`LEDGER_STORE=postgres` may stay on** if you only revert **`CRM_STORE`**; ledger SQL reads still work but case-linked views may disagree until reconciled.
 - [ ] **Warn operators:** any applications, profiles, document metadata, activity, or other CRM edits that happened only on Postgres **do not appear** in Dynamo-backed tooling until manually repaired or you re-cutover to PG.
 - [ ] **Do not** re-run `backfill:portal-sor-postgres` while C.2.1 is live and Postgres holds newer data — it overwrites PG from stale Dynamo. Re-cutover requires a documented procedure (flag + code version + optional fresh backfill only while the old build is serving writes).
@@ -155,9 +157,9 @@ These checks validate **live Postgres**, not backfill freshness alone.
 
 | Where | Variable | Role |
 |---|---|---|
-| CDK / deploy | `RGS_DATABASE_URL` | Admin Lambda **`DATABASE_URL`** (transaction pooler **`:6543`** at runtime) |
-| CDK / deploy | `RGS_LEDGER_STORE` | **`LEDGER_STORE`** — stay **`postgres`** on staging |
-| CDK / deploy | `RGS_CRM_STORE` | **`CRM_STORE`** — stay **`postgres`** on staging (no C.2.1 flip) |
+| CDK / deploy | `RGS_DATABASE_URL` | **`DATABASE_URL`** on admin API, **user API**, and reminders (transaction pooler **`:6543`** at runtime) |
+| CDK / deploy | `RGS_LEDGER_STORE` | **`LEDGER_STORE`** on admin API only (**not** user API) — stay **`postgres`** on staging |
+| CDK / deploy | `RGS_CRM_STORE` | **`CRM_STORE`** on admin API, **user API**, and reminders — stay **`postgres`** on staging (no C.2.1 flip) |
 | Portal backfill CLI | `TABLE_NAME`, `DATABASE_URL` | Required; reads Dynamo, writes **`rgs_staging`** |
 | Portal backfill CLI | `ACTIVITY_START_DATE` | Optional `YYYY-MM-DD`; widens the activity day-bucket walk before the earliest profile/application |
 | Migrations (one-off) | `DATABASE_URL` | **Session** URL through migration **006** |

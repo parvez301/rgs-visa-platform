@@ -48,7 +48,7 @@ describe("admin RBAC infrastructure", () => {
     assert.equal(environments["rgs-user-api-test"]?.["ADMINS_USER_POOL_ID"], undefined);
   });
 
-  it("gives CRM database config to the admin API and appointment reminders Lambdas, never the user API", () => {
+  it("gives CRM database config to admin, user API, and reminders Lambdas; LEDGER_STORE stays admin-only", () => {
     const previousUrl = process.env["RGS_DATABASE_URL"];
     const previousStore = process.env["RGS_LEDGER_STORE"];
     const previousCrmStore = process.env["RGS_CRM_STORE"];
@@ -83,9 +83,15 @@ describe("admin RBAC infrastructure", () => {
       );
       assert.equal(environments["rgs-appointment-reminders-test"]?.["CRM_STORE"], "postgres");
       assert.equal(environments["rgs-appointment-reminders-test"]?.["LEDGER_STORE"], undefined);
-      for (const key of ["DATABASE_URL", "LEDGER_STORE", "CRM_STORE"]) {
-        assert.equal(environments["rgs-user-api-test"]?.[key], undefined, key);
-      }
+      // C.2.1: portal writes (applications/profiles/documents/activity) go
+      // through CRM_STORE on the user API, so it needs the same CRM Postgres env.
+      assert.equal(
+        environments["rgs-user-api-test"]?.["DATABASE_URL"],
+        "postgresql://example.invalid:6543/postgres",
+      );
+      assert.equal(environments["rgs-user-api-test"]?.["CRM_STORE"], "postgres");
+      // Ledger stays admin-only.
+      assert.equal(environments["rgs-user-api-test"]?.["LEDGER_STORE"], undefined);
     } finally {
       if (previousUrl === undefined) delete process.env["RGS_DATABASE_URL"];
       else process.env["RGS_DATABASE_URL"] = previousUrl;

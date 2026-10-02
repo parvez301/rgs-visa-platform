@@ -155,14 +155,20 @@ export class RgsPlatformStack extends cdk.Stack {
       handler: "adminApiHandler",
     } as lambdaNodejs.NodejsFunctionProps);
     adminApiFunction.addEnvironment("ADMINS_USER_POOL_ID", adminsPool.userPoolId);
-    // CRM Postgres (Supabase) lives on the admin API and the appointment
-    // reminders job (below). The portal-facing user API never carries CRM DB
-    // credentials, and a bad RGS_LEDGER_STORE value can only fail the admin cold
+    // CRM Postgres (Supabase) env: DATABASE_URL + CRM_STORE go to the admin API,
+    // the user API, and the appointment reminders job (below). The user API needs
+    // CRM Postgres because portal writes (applications, profiles, document
+    // metadata, activity) are CRM system of record after C.2.1, plus catalog
+    // reads if any; without it the portal would stay on Dynamo while admin reads
+    // Postgres. LEDGER_STORE stays admin-only (ledger is never read or written by
+    // the user API), so a bad RGS_LEDGER_STORE value can only fail the admin cold
     // start (buildProductionContext reads these).
     // Set RGS_DATABASE_URL to the Supabase transaction pooler URI (:6543).
-    adminApiFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL ?? "");
+    for (const crmFunction of [adminApiFunction, userApiFunction]) {
+      crmFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL ?? "");
+      crmFunction.addEnvironment("CRM_STORE", process.env.RGS_CRM_STORE ?? "dynamo");
+    }
     adminApiFunction.addEnvironment("LEDGER_STORE", process.env.RGS_LEDGER_STORE ?? "dynamo");
-    adminApiFunction.addEnvironment("CRM_STORE", process.env.RGS_CRM_STORE ?? "dynamo");
     adminApiFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
