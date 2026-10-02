@@ -105,9 +105,10 @@ review queue, proposals, agent memory/prefs, status-email R/W) is
 ### Phase C — Visa platform / shared admin data
 
 Split in practice: **C.1** = country catalog SoR
-(`2026-10-02-supabase-postgres-phase-c1-catalog-design.md`). **C.2** =
-`applications`, `users` (app profile rows), `documents` metadata (bytes stay
-S3), `leads`, `notices`, activity/admin queues as applicable.
+(`2026-10-02-supabase-postgres-phase-c1-catalog-design.md`). **C.2.1** =
+applications, user profiles, documents metadata (bytes stay S3), and activity
+(`2026-10-02-supabase-postgres-phase-c2-1-portal-design.md`). **C.2.2** =
+`leads`, `notices`, remaining admin queues as applicable.
 
 ### Phase D — Decommission Dynamo
 
