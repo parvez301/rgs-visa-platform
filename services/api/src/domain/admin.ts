@@ -11,10 +11,13 @@ import { logActivity } from "../lib/context";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { collectReadableRecords } from "../lib/storedRecords";
 import {
+  getApplicationDocument,
   itemToApplication,
   listApplicationDocuments,
   saveApplication,
+  saveApplicationDocument,
 } from "./applications";
+import { listApplicationDocumentsPostgres } from "./applicationDocumentsPostgres";
 import {
   getApplicationPostgres,
   listApplicationsByStatusPostgres,
@@ -157,6 +160,19 @@ export async function transitionApplication(
   assertTransition(application.status, toStatus);
 
   if (toStatus === "DOCS_VERIFIED") {
+    const sql = crmPostgresOf(context);
+    if (sql) {
+      // A document row that will not parse is not an approved document.
+      const { unreadableDocumentIds } = await listApplicationDocumentsPostgres(
+        sql,
+        applicationId,
+      );
+      if (unreadableDocumentIds.length > 0) {
+        throw conflict(
+          `Unreadable document records must be fixed first: ${unreadableDocumentIds.join(", ")}`,
+        );
+      }
+    }
     const documents = await listApplicationDocuments(context, applicationId);
     const allApproved =
       documents.length > 0 &&
@@ -215,9 +231,11 @@ export async function reviewDocument(
   userEmail: string,
   rejectReason?: string,
 ): Promise<ApplicationDocument> {
-  const documentItem = await context.table.get(
-    `APP#${applicationId}`,
-    `DOC#${docType}#${travellerIndex}`,
+  const documentItem = await getApplicationDocument(
+    context,
+    applicationId,
+    docType,
+    travellerIndex,
   );
   if (!documentItem) throw notFound("Document");
   if (decision === "REJECTED" && !rejectReason) {
@@ -233,11 +251,7 @@ export async function reviewDocument(
     ...(decision === "REJECTED" ? { rejectReason } : {}),
     uploadedAt: String(documentItem.uploadedAt),
   };
-  await context.table.put({
-    PK: `APP#${applicationId}`,
-    SK: `DOC#${docType}#${travellerIndex}`,
-    ...reviewedDocument,
-  });
+  await saveApplicationDocument(context, reviewedDocument);
   await logActivity(
     context,
     "DOC_REVIEWED",
@@ -272,9 +286,11 @@ export async function presignDocumentDownloadForAdmin(
   travellerIndex: number,
 ): Promise<string> {
   await getApplicationById(context, applicationId);
-  const documentItem = await context.table.get(
-    `APP#${applicationId}`,
-    `DOC#${docType}#${travellerIndex}`,
+  const documentItem = await getApplicationDocument(
+    context,
+    applicationId,
+    docType,
+    travellerIndex,
   );
   if (!documentItem) throw notFound("Document");
   return context.documents.presignDownload(String(documentItem.s3Key));

@@ -6,7 +6,11 @@ import {
   type AllowedUploadContentType,
 } from "../lib/documentStore";
 import { badRequest, notFound } from "../lib/errors";
-import { getOwnedApplication } from "./applications";
+import {
+  getApplicationDocument,
+  getOwnedApplication,
+  saveApplicationDocument,
+} from "./applications";
 import { resolveCountryProduct } from "./config";
 
 const CONTENT_TYPE_EXTENSIONS: Record<AllowedUploadContentType, string> = {
@@ -104,11 +108,7 @@ export async function recordDocumentUpload(
     reviewStatus: "PENDING",
     uploadedAt: context.now().toISOString(),
   };
-  await context.table.put({
-    PK: `APP#${applicationId}`,
-    SK: `DOC#${docType}#${travellerIndex}`,
-    ...applicationDocument,
-  });
+  await saveApplicationDocument(context, applicationDocument);
   await logActivity(
     context,
     "DOC_UPLOADED",
@@ -131,10 +131,12 @@ export async function presignOwnedDocumentDownload(
   travellerIndex: number,
 ): Promise<string> {
   await getOwnedApplication(context, userId, applicationId);
-  const documentItem = await context.table.get(
-    `APP#${applicationId}`,
-    `DOC#${docType}#${travellerIndex}`,
+  const storedDocument = await getApplicationDocument(
+    context,
+    applicationId,
+    docType,
+    travellerIndex,
   );
-  if (!documentItem) throw notFound("Document");
-  return context.documents.presignDownload(String(documentItem.s3Key));
+  if (!storedDocument) throw notFound("Document");
+  return context.documents.presignDownload(String(storedDocument.s3Key));
 }

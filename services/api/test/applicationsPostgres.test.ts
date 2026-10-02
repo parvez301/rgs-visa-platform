@@ -5,6 +5,7 @@ import {
   addInternalNote,
   getApplicationById,
   listApplicationsByStatus,
+  reviewDocument,
   setPaymentStatus,
   transitionApplication,
 } from "../src/domain/admin";
@@ -126,10 +127,11 @@ describe("portal applications with CRM_STORE=postgres", () => {
     const reloaded = await getApplicationPostgres(sql, applicationId);
     expect(reloaded?.paymentStatus).toBe("REQUESTED");
     expect(reloaded?.internalNotes).toHaveLength(1);
-    // Dynamo document rows approved so the transition guard passes.
-    for (const docType of ["PASSPORT_BIO", "PHOTO"]) {
-      const row = await baseContext.table.get(`APP#${applicationId}`, `DOC#${docType}#0`);
-      await baseContext.table.put({ ...row!, reviewStatus: "APPROVED" });
+    // Documents approved so the transition guard passes.
+    for (const docType of ["PASSPORT_BIO", "PHOTO"] as const) {
+      await reviewDocument(
+        context, "admin_1", "a@example.com", applicationId, docType, 0, "APPROVED", USER_EMAIL,
+      );
     }
     await transitionApplication(context, "admin_1", "a@example.com", applicationId, "DOCS_VERIFIED", USER_EMAIL);
     expect((await listApplicationsByStatus(context, "DOCS_VERIFIED")).applications).toHaveLength(1);

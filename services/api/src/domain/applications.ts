@@ -7,6 +7,7 @@ import {
   type Application,
   type ApplicationDocument,
   type CountryProduct,
+  type DocType,
   type WizardStep,
 } from "@rgs/shared";
 import { ZodError, z } from "zod";
@@ -27,6 +28,11 @@ import {
   listApplicationsByUserPostgres,
   upsertApplicationPostgres,
 } from "./applicationsPostgres";
+import {
+  getApplicationDocumentPostgres,
+  listApplicationDocumentsPostgres,
+  upsertApplicationDocumentPostgres,
+} from "./applicationDocumentsPostgres";
 import { ensureUserProfile } from "./users";
 
 export function applicationToItem(application: Application): TableItem {
@@ -220,11 +226,45 @@ export async function listApplicationDocuments(
   context: AppContext,
   applicationId: string,
 ): Promise<ApplicationDocument[]> {
+  const sql = crmPostgresOf(context);
+  if (sql) return (await listApplicationDocumentsPostgres(sql, applicationId)).documents;
   const items = await context.table.query(`APP#${applicationId}`, { skPrefix: "DOC#" });
   return items.map((item) => {
     const { PK, SK, ...documentAttributes } = item;
     return documentAttributes as unknown as ApplicationDocument;
   });
+}
+
+/** Persists document metadata to whichever store this context uses. S3 bytes are untouched. */
+export async function saveApplicationDocument(
+  context: AppContext,
+  document: ApplicationDocument,
+): Promise<void> {
+  const sql = crmPostgresOf(context);
+  if (sql) {
+    await upsertApplicationDocumentPostgres(sql, document);
+    return;
+  }
+  await context.table.put({
+    PK: `APP#${document.applicationId}`,
+    SK: `DOC#${document.docType}#${document.travellerIndex}`,
+    ...document,
+  });
+}
+
+/** One document's stored metadata, or undefined when none was recorded. */
+export async function getApplicationDocument(
+  context: AppContext,
+  applicationId: string,
+  docType: DocType,
+  travellerIndex: number,
+): Promise<ApplicationDocument | undefined> {
+  const sql = crmPostgresOf(context);
+  if (sql) return getApplicationDocumentPostgres(sql, applicationId, docType, travellerIndex);
+  const item = await context.table.get(`APP#${applicationId}`, `DOC#${docType}#${travellerIndex}`);
+  if (!item) return undefined;
+  const { PK, SK, ...documentAttributes } = item;
+  return documentAttributes as unknown as ApplicationDocument;
 }
 
 /** Docs required for submission: every traveller needs each doc on the country checklist. */
