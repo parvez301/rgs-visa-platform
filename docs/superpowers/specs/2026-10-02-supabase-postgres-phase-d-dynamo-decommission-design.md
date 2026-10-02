@@ -1,7 +1,7 @@
 # RGS — Supabase Postgres Phase D (Dynamo decommission)
 
 **Date:** 2026-10-02  
-**Status:** draft (awaiting written-spec review)  
+**Status:** approved (D.1 plan unlocked; D.2 plan after D.1 soak)  
 **Parent:** `2026-10-01-supabase-postgres-migration-design.md`  
 **Prior:** Phase C.2.2 (`CRM_STORE=postgres` leads + notices) + staging cutover  
 
@@ -192,4 +192,4 @@ Approve this design to unlock the Phase **D.1** implementation plan
 (`docs/superpowers/plans/2026-10-02-supabase-postgres-phase-d1-staging-defaults.md`).
 D.2 plan follows after D.1 lands / soaks.
 
-**Owner sign-off:** _pending_
+**Owner sign-off:** approved 2026-10-02 (chat); D.1 plan follows
