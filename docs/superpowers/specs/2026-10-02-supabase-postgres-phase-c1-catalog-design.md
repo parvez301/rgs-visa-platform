@@ -82,7 +82,7 @@ No separate checklist SoR table.
 
 ```
 CRM_STORE=dynamo     → existing Dynamo CONFIG#COUNTRY paths
-CRM_STORE=postgres   → countryProductsPostgres (or equivalent); require DATABASE_URL
+CRM_STORE=postgres   → configCountryProductsPostgres; require DATABASE_URL
 LEDGER_STORE         → unchanged
 ```
 
