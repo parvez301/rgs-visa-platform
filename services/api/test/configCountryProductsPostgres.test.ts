@@ -1,0 +1,129 @@
+import { PGlite } from "@electric-sql/pglite";
+import { COUNTRY_PRODUCTS, UnknownCountryProductError, getCountryProduct } from "@rgs/shared";
+import { beforeEach, describe, expect, it } from "vitest";
+import { applyMigrations } from "../src/db/migrate";
+import {
+  listActiveCountryConfig,
+  listCountryConfig,
+  resolveCountryProduct,
+  upsertCountryProduct,
+} from "../src/domain/config";
+import {
+  listCountryProductsPostgres,
+  upsertCountryProductPostgres,
+} from "../src/domain/configCountryProductsPostgres";
+import type { AppContext } from "../src/lib/context";
+import type { SqlClient } from "../src/lib/sql";
+import { buildTestContext, type TestContext } from "./helpers";
+import { pgliteAsSqlClient } from "./pgliteSqlClient";
+
+const uaeSeed = getCountryProduct("AE");
+
+describe("country catalog with CRM_STORE=postgres", () => {
+  let sql: SqlClient;
+  let baseContext: TestContext;
+  let context: TestContext & AppContext;
+
+  beforeEach(async () => {
+    sql = pgliteAsSqlClient(new PGlite());
+    await applyMigrations(sql);
+    baseContext = buildTestContext();
+    context = { ...baseContext, crmStore: "postgres", sql };
+  });
+
+  it("lists the migrated seed catalog without touching Dynamo", async () => {
+    const listing = await listCountryConfig(context);
+    expect(listing.countryProducts).toHaveLength(COUNTRY_PRODUCTS.length);
+    expect(listing.unreadableCountryProductIds).toEqual([]);
+    expect(await baseContext.table.query("CONFIG#COUNTRY")).toEqual([]);
+    const seededUae = listing.countryProducts.find((p) => p.productCode === uaeSeed.productCode);
+    expect(seededUae).toEqual(uaeSeed);
+  });
+
+  it("does not fall back to the in-memory seed when the table is empty", async () => {
+    await sql.query("delete from crm_country_products");
+    expect(await listCountryConfig(context)).toEqual({
+      countryProducts: [],
+      unreadableCountryProductIds: [],
+    });
+  });
+
+  it("upsert writes Postgres, shows in list, and leaves Dynamo empty", async () => {
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
+      ...uaeSeed,
+      requiredDocuments: [...uaeSeed.requiredDocuments],
+      governmentFeeInr: 7200,
+    });
+    const listing = await listCountryConfig(context);
+    expect(listing.countryProducts).toHaveLength(COUNTRY_PRODUCTS.length);
+    expect(
+      listing.countryProducts.find((p) => p.productCode === uaeSeed.productCode)?.governmentFeeInr,
+    ).toBe(7200);
+    expect(await baseContext.table.query("CONFIG#COUNTRY")).toEqual([]);
+  });
+
+  it("upsert inserts a brand-new product", async () => {
+    const created = await upsertCountryProduct(context, "admin_1", "admin@example.com", {
+      ...uaeSeed,
+      countryCode: "ZZ",
+      productCode: "ZZ_DESK",
+      countryName: "Desk Land",
+      requiredDocuments: [...uaeSeed.requiredDocuments],
+    });
+    expect(created.productCode).toBe("ZZ_DESK");
+    const resolved = await resolveCountryProduct(context, "ZZ", "ZZ_DESK");
+    expect(resolved.countryName).toBe("Desk Land");
+    expect(await listCountryConfig(context).then((l) => l.countryProducts)).toHaveLength(
+      COUNTRY_PRODUCTS.length + 1,
+    );
+  });
+
+  it("resolveCountryProduct finds an upserted row and rejects unknown ones", async () => {
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
+      ...uaeSeed,
+      requiredDocuments: [...uaeSeed.requiredDocuments],
+      serviceFeeInr: 1800,
+    });
+    expect((await resolveCountryProduct(context, "AE", uaeSeed.productCode)).serviceFeeInr).toBe(1800);
+    await expect(resolveCountryProduct(context, "ZZ")).rejects.toBeInstanceOf(
+      UnknownCountryProductError,
+    );
+  });
+
+  it("listActiveCountryConfig filters inactive rows", async () => {
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
+      ...uaeSeed,
+      requiredDocuments: [...uaeSeed.requiredDocuments],
+      active: false,
+    });
+    const active = await listActiveCountryConfig(context);
+    expect(active.countryProducts.find((p) => p.productCode === uaeSeed.productCode)).toBeUndefined();
+  });
+
+  it("names a corrupt row in unreadableCountryProductIds and serves the rest", async () => {
+    await sql.query(`update crm_country_products set visa_type = 'BOGUS' where product_code = $1`, [
+      uaeSeed.productCode,
+    ]);
+    const listing = await listCountryProductsPostgres(sql);
+    expect(listing.unreadableCountryProductIds).toEqual([`AE#${uaeSeed.productCode}`]);
+    expect(listing.countryProducts).toHaveLength(COUNTRY_PRODUCTS.length - 1);
+  });
+
+  it("upsertCountryProductPostgres is idempotent on (country, product)", async () => {
+    await upsertCountryProductPostgres(sql, { ...uaeSeed, serviceFeeInr: 1 });
+    await upsertCountryProductPostgres(sql, { ...uaeSeed, serviceFeeInr: 2 });
+    const rows = await sql.query<{ n: number }>(
+      `select count(*)::int as n from crm_country_products where product_code = $1`,
+      [uaeSeed.productCode],
+    );
+    expect(rows.rows[0]?.n).toBe(1);
+    const listing = await listCountryProductsPostgres(sql);
+    expect(listing.countryProducts.find((p) => p.productCode === uaeSeed.productCode)?.serviceFeeInr).toBe(2);
+  });
+
+  it("with crmStore=dynamo an empty table still returns the in-memory seed", async () => {
+    const dynamoContext = buildTestContext();
+    const listing = await listCountryConfig(dynamoContext);
+    expect(listing.countryProducts).toHaveLength(COUNTRY_PRODUCTS.length);
+  });
+});

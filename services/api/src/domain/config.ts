@@ -10,6 +10,11 @@ import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
 import { badRequest, corruptRecord } from "../lib/errors";
 import {
+  listCountryProductsPostgres,
+  upsertCountryProductPostgres,
+} from "./configCountryProductsPostgres";
+import { crmPostgresOf } from "./crm/postgresClient";
+import {
   collectReadableRecords,
   describeFirstZodIssue,
   storedRecordId,
@@ -111,6 +116,8 @@ export interface CountryConfigListing {
  * edit the DB copy and it wins everywhere (portal, API guards, pricing).
  */
 export async function listCountryConfig(context: AppContext): Promise<CountryConfigListing> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return listCountryProductsPostgres(sql);
   const configItems = await context.table.query(CONFIG_PARTITION_KEY);
   if (configItems.length === 0) {
     return { countryProducts: [...COUNTRY_PRODUCTS], unreadableCountryProductIds: [] };
@@ -171,18 +178,24 @@ export async function upsertCountryProduct(
   }
   const countryProduct = parseResult.data;
 
-  // First write on a fresh table: seed everything else so one edit
-  // doesn't make the rest of the catalog vanish from DB reads.
-  const existingItems = await context.table.query(CONFIG_PARTITION_KEY);
-  if (existingItems.length === 0) {
-    await seedCountryConfig(context);
-  }
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) {
+    // Migration 005 seeds the table; no first-write seeding needed.
+    await upsertCountryProductPostgres(sql, countryProduct);
+  } else {
+    // First write on a fresh table: seed everything else so one edit
+    // doesn't make the rest of the catalog vanish from DB reads.
+    const existingItems = await context.table.query(CONFIG_PARTITION_KEY);
+    if (existingItems.length === 0) {
+      await seedCountryConfig(context);
+    }
 
-  await context.table.put({
-    PK: CONFIG_PARTITION_KEY,
-    SK: configSortKey(countryProduct.countryCode, countryProduct.productCode),
-    ...countryProduct,
-  });
+    await context.table.put({
+      PK: CONFIG_PARTITION_KEY,
+      SK: configSortKey(countryProduct.countryCode, countryProduct.productCode),
+      ...countryProduct,
+    });
+  }
   await logActivity(
     context,
     "CONFIG_CHANGED",
