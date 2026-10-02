@@ -16,7 +16,8 @@
     "backfill:crm-ledger-postgres": "tsx src/backfillCrmLedgerToPostgresCli.ts",
     "backfill:crm-case-sor-postgres": "tsx src/backfillCrmCaseSorToPostgresCli.ts",
     "backfill:crm-remaining-postgres": "tsx src/backfillCrmRemainingToPostgresCli.ts",
-    "backfill:country-catalog-postgres": "tsx src/backfillCountryCatalogToPostgresCli.ts"
+    "backfill:country-catalog-postgres": "tsx src/backfillCountryCatalogToPostgresCli.ts",
+    "backfill:portal-sor-postgres": "tsx src/backfillPortalSoRToPostgresCli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",
