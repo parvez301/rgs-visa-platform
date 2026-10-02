@@ -151,5 +151,6 @@ These checks validate **live Postgres** for B.2 domains, not backfill freshness 
 
 ## Related runbooks
 
+- Phase C.1 (country catalog SoR): `2026-10-02-supabase-phase-c1-staging-runbook.md` — closes catalog gaps left when B.2 shipped (Dynamo `CONFIG#COUNTRY` until C.1 cutover).
 - Phase B.1 (case SoR): `2026-10-01-supabase-phase-b-staging-runbook.md`
 - Phase A (ledger reads): `2026-10-01-supabase-phase-a-staging-runbook.md`

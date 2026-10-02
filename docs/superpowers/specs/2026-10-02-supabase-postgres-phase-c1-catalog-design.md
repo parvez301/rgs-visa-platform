@@ -171,7 +171,14 @@ Implementation detail and task checkboxes live in the Phase C.1 **plan**
 
 ---
 
-## 10. Approval
+## 10. Related
+
+- Staging cutover: `2026-10-02-supabase-phase-c1-staging-runbook.md`
+- Implementation plan: `2026-10-02-supabase-postgres-phase-c1-catalog.md`
+
+---
+
+## 11. Approval
 
 Approve this design to unlock
 `docs/superpowers/plans/2026-10-02-supabase-postgres-phase-c1-catalog.md`.
