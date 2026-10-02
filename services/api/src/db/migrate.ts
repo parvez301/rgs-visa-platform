@@ -23,6 +23,10 @@ import {
   MIGRATION_FILENAME as PORTAL_SOR_FILENAME,
   MIGRATION_SQL as PORTAL_SOR_SQL,
 } from "./migrations/006_portal_sor.js";
+import {
+  MIGRATION_FILENAME as PORTAL_LEADS_NOTICES_FILENAME,
+  MIGRATION_SQL as PORTAL_LEADS_NOTICES_SQL,
+} from "./migrations/007_portal_leads_notices.js";
 
 const MIGRATIONS: ReadonlyArray<{ filename: string; sql: string }> = [
   { filename: CRM_LEDGER_FILENAME, sql: CRM_LEDGER_SQL },
@@ -31,6 +35,7 @@ const MIGRATIONS: ReadonlyArray<{ filename: string; sql: string }> = [
   { filename: CRM_REMAINING_SOR_FILENAME, sql: CRM_REMAINING_SOR_SQL },
   { filename: CRM_COUNTRY_PRODUCTS_FILENAME, sql: CRM_COUNTRY_PRODUCTS_SQL },
   { filename: PORTAL_SOR_FILENAME, sql: PORTAL_SOR_SQL },
+  { filename: PORTAL_LEADS_NOTICES_FILENAME, sql: PORTAL_LEADS_NOTICES_SQL },
 ];
 
 async function isMigrationApplied(sql: SqlClient, filename: string): Promise<boolean> {

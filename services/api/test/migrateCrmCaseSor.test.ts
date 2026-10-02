@@ -182,6 +182,7 @@ describe("applyMigrations 002_crm_case_sor", () => {
       "004_crm_remaining_sor.sql",
       "005_crm_country_products.sql",
       "006_portal_sor.sql",
+      "007_portal_leads_notices.sql",
     ]);
     await sql.end();
   });
