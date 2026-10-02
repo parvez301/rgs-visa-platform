@@ -148,7 +148,7 @@ Separate runbook after staging soak. Not day-one of this design.
 | Area | Location |
 |---|---|
 | Migration | `services/api/src/db/migrations/005_…`, `migrate.ts` |
-| Catalog SQL | `services/api/src/domain/countryProductsPostgres.ts` (or under `domain/crm/` — plan picks) |
+| Catalog SQL | `services/api/src/domain/configCountryProductsPostgres.ts` (or sibling next to `config.ts`) |
 | Dispatch | `services/api/src/domain/config.ts` |
 | Checklist removal | `services/api/src/domain/crm/countryChecklist.ts` (+ callers/tests) |
 | Backfill | `services/migration/src/backfillCountryCatalogToPostgres*.ts` |
