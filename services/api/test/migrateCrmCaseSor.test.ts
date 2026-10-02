@@ -180,6 +180,7 @@ describe("applyMigrations 002_crm_case_sor", () => {
       "002_crm_case_sor.sql",
       "003_crm_partners_sor.sql",
       "004_crm_remaining_sor.sql",
+      "005_crm_country_products.sql",
     ]);
     await sql.end();
   });
