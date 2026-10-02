@@ -11,6 +11,7 @@ import { logActivity } from "../lib/context";
 import { badRequest, corruptRecord } from "../lib/errors";
 import {
   listCountryProductsPostgres,
+  seedCountryProductsPostgres,
   upsertCountryProductPostgres,
 } from "./configCountryProductsPostgres";
 import { crmPostgresOf } from "./crm/postgresClient";
@@ -216,6 +217,8 @@ export async function upsertCountryProduct(
 
 /** Copies the static seed catalog into DB rows that don't exist yet. Idempotent. */
 export async function seedCountryConfig(context: AppContext): Promise<number> {
+  const sql = crmPostgresOf(context);
+  if (sql !== undefined) return seedCountryProductsPostgres(sql, COUNTRY_PRODUCTS);
   let seededCount = 0;
   for (const seedProduct of COUNTRY_PRODUCTS) {
     const sortKey = configSortKey(seedProduct.countryCode, seedProduct.productCode);

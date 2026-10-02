@@ -64,17 +64,39 @@ export async function listCountryProductsPostgres(
   return { countryProducts: records, unreadableCountryProductIds: unreadableRecordIds };
 }
 
+const INSERT_PRODUCT_SQL = `insert into crm_country_products (
+       country_code, product_code, country_name, visa_type, region, tier,
+       validity_days, stay_days, entry, government_fee_inr, service_fee_inr,
+       processing_days, required_documents, active, official_url
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15)`;
+
+function productParams(product: CountryProduct): unknown[] {
+  return [
+    product.countryCode,
+    product.productCode,
+    product.countryName,
+    product.visaType,
+    product.region,
+    product.tier,
+    product.validityDays,
+    product.stayDays,
+    product.entry,
+    product.governmentFeeInr,
+    product.serviceFeeInr,
+    product.processingDays,
+    JSON.stringify(product.requiredDocuments),
+    product.active,
+    product.officialUrl ?? null,
+  ];
+}
+
 /** An upsert on the primary key. The caller has already validated the product. */
 export async function upsertCountryProductPostgres(
   sql: SqlClient,
   product: CountryProduct,
 ): Promise<void> {
   await sql.query(
-    `insert into crm_country_products (
-       country_code, product_code, country_name, visa_type, region, tier,
-       validity_days, stay_days, entry, government_fee_inr, service_fee_inr,
-       processing_days, required_documents, active, official_url
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15)
+    `${INSERT_PRODUCT_SQL}
      on conflict (country_code, product_code) do update set
        country_name = excluded.country_name,
        visa_type = excluded.visa_type,
@@ -89,22 +111,27 @@ export async function upsertCountryProductPostgres(
        required_documents = excluded.required_documents,
        active = excluded.active,
        official_url = excluded.official_url`,
-    [
-      product.countryCode,
-      product.productCode,
-      product.countryName,
-      product.visaType,
-      product.region,
-      product.tier,
-      product.validityDays,
-      product.stayDays,
-      product.entry,
-      product.governmentFeeInr,
-      product.serviceFeeInr,
-      product.processingDays,
-      JSON.stringify(product.requiredDocuments),
-      product.active,
-      product.officialUrl ?? null,
-    ],
+    productParams(product),
   );
+}
+
+/**
+ * Inserts the given seed products that have no row yet; existing rows (desk
+ * edits included) are left untouched. Returns how many rows were newly inserted.
+ */
+export async function seedCountryProductsPostgres(
+  sql: SqlClient,
+  seedProducts: readonly CountryProduct[],
+): Promise<number> {
+  let insertedCount = 0;
+  for (const seedProduct of seedProducts) {
+    const result = await sql.query(
+      `${INSERT_PRODUCT_SQL}
+       on conflict (country_code, product_code) do nothing
+       returning product_code`,
+      productParams(seedProduct),
+    );
+    insertedCount += result.rows.length;
+  }
+  return insertedCount;
 }

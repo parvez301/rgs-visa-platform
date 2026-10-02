@@ -6,6 +6,7 @@ import {
   listActiveCountryConfig,
   listCountryConfig,
   resolveCountryProduct,
+  seedCountryConfig,
   upsertCountryProduct,
 } from "../src/domain/config";
 import {
@@ -119,6 +120,34 @@ describe("country catalog with CRM_STORE=postgres", () => {
     expect(rows.rows[0]?.n).toBe(1);
     const listing = await listCountryProductsPostgres(sql);
     expect(listing.countryProducts.find((p) => p.productCode === uaeSeed.productCode)?.serviceFeeInr).toBe(2);
+  });
+
+  it("seedCountryConfig returns 0 when migration already seeded, and never touches Dynamo", async () => {
+    expect(await seedCountryConfig(context)).toBe(0);
+    expect(await baseContext.table.query("CONFIG#COUNTRY")).toEqual([]);
+  });
+
+  it("seedCountryConfig re-inserts only a deleted row and keeps desk edits", async () => {
+    await upsertCountryProduct(context, "admin_1", "admin@example.com", {
+      ...uaeSeed,
+      requiredDocuments: [...uaeSeed.requiredDocuments],
+      governmentFeeInr: 7200,
+    });
+    const other = COUNTRY_PRODUCTS.find((p) => p.productCode !== uaeSeed.productCode);
+    if (!other) throw new Error("need a second seed product");
+    await sql.query(
+      `delete from crm_country_products where country_code = $1 and product_code = $2`,
+      [other.countryCode, other.productCode],
+    );
+    expect(await seedCountryConfig(context)).toBe(1);
+    expect(await seedCountryConfig(context)).toBe(0);
+    const listing = await listCountryConfig(context);
+    expect(listing.countryProducts).toHaveLength(COUNTRY_PRODUCTS.length);
+    expect(listing.countryProducts.find((p) => p.productCode === other.productCode)).toEqual(other);
+    expect(
+      listing.countryProducts.find((p) => p.productCode === uaeSeed.productCode)?.governmentFeeInr,
+    ).toBe(7200);
+    expect(await baseContext.table.query("CONFIG#COUNTRY")).toEqual([]);
   });
 
   it("with crmStore=dynamo an empty table still returns the in-memory seed", async () => {
