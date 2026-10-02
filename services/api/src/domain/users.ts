@@ -2,6 +2,12 @@ import { UserSchema, type User } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
 import type { TableItem } from "../lib/db";
+import { crmPostgresOf } from "./crm/postgresClient";
+import {
+  getUserProfilePostgres,
+  listUserProfilesPostgres,
+  upsertUserProfilePostgres,
+} from "./userProfilesPostgres";
 import {
   collectReadableRecords,
   parseStoredRecord,
@@ -37,6 +43,8 @@ export async function getUserProfile(
   context: AppContext,
   userId: string,
 ): Promise<User | null> {
+  const sql = crmPostgresOf(context);
+  if (sql) return (await getUserProfilePostgres(sql, userId)) ?? null;
   const profileItem = await context.table.get(userPartitionKey(userId), PROFILE_SORT_KEY);
   if (!profileItem) return null;
   return itemToUser(profileItem);
@@ -53,6 +61,8 @@ export interface UserProfileListing {
 }
 
 export async function listUserProfiles(context: AppContext): Promise<UserProfileListing> {
+  const sql = crmPostgresOf(context);
+  if (sql) return listUserProfilesPostgres(sql);
   const profileItems = await context.table.queryGsi("GSI1", USER_PROFILE_GSI_PARTITION);
   const { records, unreadableRecordIds } = await collectReadableRecords(
     profileItems,
@@ -80,13 +90,18 @@ export async function ensureUserProfile(
     ...(extra?.phone !== undefined ? { phone: extra.phone } : {}),
   };
 
-  await context.table.put({
-    PK: userPartitionKey(userId),
-    SK: PROFILE_SORT_KEY,
-    GSI1PK: USER_PROFILE_GSI_PARTITION,
-    GSI1SK: createdAt,
-    ...userProfile,
-  });
+  const sql = crmPostgresOf(context);
+  if (sql) {
+    await upsertUserProfilePostgres(sql, userProfile);
+  } else {
+    await context.table.put({
+      PK: userPartitionKey(userId),
+      SK: PROFILE_SORT_KEY,
+      GSI1PK: USER_PROFILE_GSI_PARTITION,
+      GSI1SK: createdAt,
+      ...userProfile,
+    });
+  }
 
   await logActivity(
     context,
