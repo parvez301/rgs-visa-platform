@@ -1,7 +1,7 @@
 # RGS — Supabase Postgres Phase C.2.1 (portal + activity SoR)
 
 **Date:** 2026-10-02  
-**Status:** draft (awaiting owner review)  
+**Status:** approved (implementation plan landed)  
 **Parent:** `2026-10-01-supabase-postgres-migration-design.md`  
 **Prior:** Phase C.1 (`CRM_STORE=postgres` country catalog) + staging runbook
 
@@ -38,7 +38,7 @@ SES.
 | 2 | Gate on existing **`CRM_STORE`** (`dynamo` \| `postgres`) | New `PORTAL_STORE` |
 | 3 | End state for these domains = **Postgres only** | Long-lived Dynamo fallback for apps/activity |
 | 4 | Approach = **mirror B.2 / C.1**: SQL adapters + migrate → backfill → deploy; no dual-write | Dual-write window; apps first then activity as a separate ship without you choosing activity in |
-| 5 | **Documents metadata** stays on the application row (JSON); S3 object keys / bytes unchanged | Separate `documents` SoR table in C.2.1 |
+| 5 | **Documents metadata** in table `portal_application_documents` (matches live Dynamo `APP#/DOC#`); S3 bytes unchanged | Embed docs only as jsonb on application row (would drop multi-doc review shape) |
 | 6 | **Admin status queue** included (same application SoR) | Portal-only writes with admin still on Dynamo |
 | 7 | **Activity included** — `logActivity` + list feeds/trails on PG (CRM config changes also write PG activity under postgres) | Leave activity on Dynamo (C.1 style) |
 | 8 | Staging first on `rgs_staging`; prod later after soak | Prod in same change |
@@ -74,11 +74,10 @@ Exact DDL in the migration file(s); shapes must round-trip shared Zod schemas
 
 | Table | Role |
 |---|---|
-| `portal_applications` | PK `application_id`; `user_id`; `status`; traveller / document / wizard fields as columns and/or jsonb matching `ApplicationSchema`; `created_at` / `updated_at`; indexes `(user_id, updated_at DESC)`, `(status, updated_at DESC)` |
+| `portal_applications` | PK `application_id`; `user_id`; `status`; traveller / wizard fields as columns and/or jsonb matching `ApplicationSchema`; `created_at` / `updated_at`; indexes `(user_id, updated_at DESC)`, `(status, updated_at DESC)` |
+| `portal_application_documents` | PK `(application_id, traveller_index, doc_type)`; `s3_key`, review fields; matches live `DOC#` items |
 | `portal_user_profiles` | PK `user_id`; profile columns matching `UserSchema`; timestamps as needed |
 | `activity_events` | PK `event_id`; `event_type`; `user_id`; optional `application_id`; `meta` jsonb; `created_at`; optional actor fields; indexes `(created_at DESC)`, `(user_id, created_at DESC)` |
-
-No separate documents table in C.2.1.
 
 ---
 
