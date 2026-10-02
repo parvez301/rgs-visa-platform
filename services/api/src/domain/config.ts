@@ -112,9 +112,11 @@ export interface CountryConfigListing {
 }
 
 /**
- * Runtime catalog: DB rows when seeded, static code catalog as fallback.
- * The static catalog in @rgs/shared is the SEED — after deployment, admins
- * edit the DB copy and it wins everywhere (portal, API guards, pricing).
+ * Runtime catalog: under `CRM_STORE=postgres`, rows in `crm_country_products`
+ * (seeded at migrate; no empty-read memory fallback). Under Dynamo, DB rows when
+ * seeded, else the static `@rgs/shared` catalog as empty-table fallback.
+ * After deployment, admins edit the store copy and it wins everywhere (portal,
+ * API guards, pricing).
  */
 export async function listCountryConfig(context: AppContext): Promise<CountryConfigListing> {
   const sql = crmPostgresOf(context);

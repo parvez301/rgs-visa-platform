@@ -3,7 +3,6 @@ import {
   DOC_TYPES,
   RequiredDocumentSchema,
   docTypeForLabel,
-  requiredDocumentsFromLegacyDocTypes,
   type DocType,
   type RequiredDocument,
 } from "@rgs/shared";
