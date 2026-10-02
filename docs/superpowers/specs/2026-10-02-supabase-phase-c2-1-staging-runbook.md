@@ -5,6 +5,8 @@
 **Design:** `2026-10-02-supabase-postgres-phase-c2-1-portal-design.md` · **Plan:** `docs/superpowers/plans/2026-10-02-supabase-postgres-phase-c2-1-portal.md`  
 **Prerequisite runbooks:** `2026-10-02-supabase-phase-c1-staging-runbook.md` (C.1 catalog) → `2026-10-01-supabase-phase-b2-staging-runbook.md` (B.2 remaining CRM SoR)
 
+**Related:** leads and notices close via the C.2.2 runbook: `2026-10-02-supabase-phase-c2-2-staging-runbook.md`.
+
 **Out of scope:** leads and notices (Phase C.2.2); deleting the Dynamo table (Phase D); Cognito / S3 / SES changes.
 
 **Staging target**
