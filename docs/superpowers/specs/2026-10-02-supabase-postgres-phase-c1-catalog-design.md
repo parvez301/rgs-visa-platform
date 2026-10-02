@@ -1,7 +1,7 @@
 # RGS — Supabase Postgres Phase C.1 (country catalog SoR)
 
 **Date:** 2026-10-02  
-**Status:** draft (awaiting owner review)  
+**Status:** approved (implementation plan landed)  
 **Parent:** `2026-10-01-supabase-postgres-migration-design.md`  
 **Prior:** Phase B.2 (`CRM_STORE=postgres` remaining CRM SoR) + staging runbook
 
