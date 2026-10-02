@@ -95,7 +95,7 @@ function normalizeLabel(label: string): string {
 }
 
 /** Checklist order wins; known labels regain their portal upload slot, free text stays label-only. */
-function requiredDocumentsFromChecklistLabels(checklistLabels: readonly string[]): RequiredDocument[] {
+export function requiredDocumentsFromChecklistLabels(checklistLabels: readonly string[]): RequiredDocument[] {
   const requiredDocuments: RequiredDocument[] = [];
   const seenLabels = new Set<string>();
   for (const checklistLabel of checklistLabels) {
@@ -110,6 +110,25 @@ function requiredDocumentsFromChecklistLabels(checklistLabels: readonly string[]
     );
   }
   return requiredDocuments;
+}
+
+/**
+ * The merge rule shared by the Dynamo-era migration and the Postgres backfill:
+ * a country's checklist, when it has labels, replaces the product's baseline
+ * wholesale; otherwise a legacy row's baseline is kept (converted
+ * label-for-label). Returns `undefined` when there is nothing to write -- the
+ * row is already converted (it has documents, or it is converted and the
+ * checklist adds none).
+ */
+export function mergeChecklistIntoDocuments(args: {
+  isLegacyRow: boolean;
+  baselineDocuments: readonly RequiredDocument[];
+  checklistDocuments: readonly RequiredDocument[];
+}): RequiredDocument[] | undefined {
+  const { isLegacyRow, baselineDocuments, checklistDocuments } = args;
+  if (!isLegacyRow && baselineDocuments.length > 0) return undefined;
+  if (checklistDocuments.length > 0) return [...checklistDocuments];
+  return isLegacyRow ? [...baselineDocuments] : undefined;
 }
 
 /**
@@ -191,10 +210,10 @@ export async function migrateCountryDocumentsToProducts(
         ? requiredDocumentsFromLegacyDocTypes(product.legacyDocTypes)
         : (product.requiredDocuments ?? []);
     const checklistDocuments = requiredDocumentsFromChecklistLabels(checklistLabels);
-    const mergedDocuments = checklistDocuments.length > 0 ? checklistDocuments : baselineDocuments;
+    const mergedDocuments = mergeChecklistIntoDocuments({ isLegacyRow, baselineDocuments, checklistDocuments });
 
     // A converted row with nothing to add (no checklist, empty baseline) has no work left.
-    if (!isLegacyRow && checklistDocuments.length === 0) {
+    if (mergedDocuments === undefined) {
       report.productsSkippedAlreadyMigrated += 1;
       continue;
     }

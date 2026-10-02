@@ -15,7 +15,8 @@
     "migrate:country-documents-to-products": "tsx src/migrateCountryDocumentsToProductsCli.ts",
     "backfill:crm-ledger-postgres": "tsx src/backfillCrmLedgerToPostgresCli.ts",
     "backfill:crm-case-sor-postgres": "tsx src/backfillCrmCaseSorToPostgresCli.ts",
-    "backfill:crm-remaining-postgres": "tsx src/backfillCrmRemainingToPostgresCli.ts"
+    "backfill:crm-remaining-postgres": "tsx src/backfillCrmRemainingToPostgresCli.ts",
+    "backfill:country-catalog-postgres": "tsx src/backfillCountryCatalogToPostgresCli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",

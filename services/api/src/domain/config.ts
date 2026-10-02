@@ -70,7 +70,7 @@ export function coerceLegacyCountryProduct(raw: Record<string, unknown>): unknow
  * their prices from. Typed as CorruptRecordError, the one bad row is skipped
  * and named while the rest of the catalog serves.
  */
-function itemToCountryProduct(item: Record<string, unknown>): CountryProduct {
+export function itemToCountryProduct(item: Record<string, unknown>): CountryProduct {
   const productAttributes = coerceLegacyCountryProduct(stripStorageKeys(item)) as Record<
     string,
     unknown

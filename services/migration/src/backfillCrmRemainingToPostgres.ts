@@ -74,13 +74,13 @@ const PROPOSAL_STATUSES = ["PENDING", "APPROVED", "DISCARDED"] as const;
  * goes on. Anything else -- a dropped connection, a missing table -- is not
  * about the record and aborts.
  */
-function isRecordLevelDatabaseError(error: unknown): boolean {
+export function isRecordLevelDatabaseError(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const sqlState = (error as { code?: unknown }).code;
   return typeof sqlState === "string" && (sqlState.startsWith("22") || sqlState.startsWith("23"));
 }
 
-function describeError(error: unknown): string {
+export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
