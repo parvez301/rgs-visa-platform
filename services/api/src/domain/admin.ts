@@ -11,16 +11,27 @@ import { logActivity } from "../lib/context";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { collectReadableRecords } from "../lib/storedRecords";
 import {
-  applicationToItem,
   itemToApplication,
   listApplicationDocuments,
+  saveApplication,
 } from "./applications";
+import {
+  getApplicationPostgres,
+  listApplicationsByStatusPostgres,
+} from "./applicationsPostgres";
+import { crmPostgresOf } from "./crm/postgresClient";
 
 /** Admin lookup by application id alone (GSI3). */
 export async function getApplicationById(
   context: AppContext,
   applicationId: string,
 ): Promise<Application> {
+  const sql = crmPostgresOf(context);
+  if (sql) {
+    const application = await getApplicationPostgres(sql, applicationId);
+    if (!application) throw notFound("Application");
+    return application;
+  }
   const items = await context.table.queryGsi("GSI3", `APP#${applicationId}`, { limit: 1 });
   const applicationItem = items[0];
   if (!applicationItem) throw notFound("Application");
@@ -51,6 +62,8 @@ export async function listApplicationsByStatus(
   status: ApplicationStatus,
   limit = 50,
 ): Promise<ApplicationListing> {
+  const sql = crmPostgresOf(context);
+  if (sql) return listApplicationsByStatusPostgres(sql, status, limit);
   const items = await context.table.queryGsi("GSI1", `STATUS#${status}`, {
     limit,
     scanForward: false,
@@ -102,7 +115,7 @@ export async function setPaymentStatus(
     paymentStatus: toPaymentStatus,
     updatedAt: context.now().toISOString(),
   };
-  await context.table.put(applicationToItem(updatedApplication));
+  await saveApplication(context, updatedApplication);
   const eventType =
     toPaymentStatus === "REQUESTED" ? "PAYMENT_REQUESTED" : "PAYMENT_MARKED_PAID";
   await logActivity(
@@ -114,7 +127,8 @@ export async function setPaymentStatus(
       actor: adminId,
     },
     { actorEmail: adminEmail, actorRole: "admin" },
-  );  if (toPaymentStatus === "REQUESTED") {
+  );
+  if (toPaymentStatus === "REQUESTED") {
     const totalAmountInr =
       application.amounts.governmentFeeInr + application.amounts.serviceFeeInr;
     await context.email.send({
@@ -157,7 +171,7 @@ export async function transitionApplication(
     status: toStatus,
     updatedAt: context.now().toISOString(),
   };
-  await context.table.put(applicationToItem(updatedApplication));
+  await saveApplication(context, updatedApplication);
   await logActivity(
     context,
     "STATUS_CHANGED",
@@ -236,7 +250,8 @@ export async function reviewDocument(
       decision,
     },
     { actorEmail: adminEmail, actorRole: "admin" },
-  );  if (decision === "REJECTED") {
+  );
+  if (decision === "REJECTED") {
     await context.email.send({
       toAddress: userEmail,
       subject: `Action needed — re-upload a document (${application.countryCode} visa)`,
@@ -279,6 +294,6 @@ export async function addInternalNote(
     internalNotes: [...application.internalNotes, timestampedNote],
     updatedAt: context.now().toISOString(),
   };
-  await context.table.put(applicationToItem(updatedApplication));
+  await saveApplication(context, updatedApplication);
   return updatedApplication;
 }

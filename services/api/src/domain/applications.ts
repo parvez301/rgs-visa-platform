@@ -21,6 +21,12 @@ import {
   storedRecordId,
 } from "../lib/storedRecords";
 import { resolveCountryProduct } from "./config";
+import { crmPostgresOf } from "./crm/postgresClient";
+import {
+  getApplicationPostgres,
+  listApplicationsByUserPostgres,
+  upsertApplicationPostgres,
+} from "./applicationsPostgres";
 import { ensureUserProfile } from "./users";
 
 export function applicationToItem(application: Application): TableItem {
@@ -54,6 +60,19 @@ export function itemToApplication(item: TableItem): Application {
     storedRecordId(item, "applicationId"),
     item,
   );
+}
+
+/** Persists an application to whichever store this context uses (Postgres or Dynamo). */
+export async function saveApplication(
+  context: AppContext,
+  application: Application,
+): Promise<void> {
+  const sql = crmPostgresOf(context);
+  if (sql) {
+    await upsertApplicationPostgres(sql, application);
+    return;
+  }
+  await context.table.put(applicationToItem(application));
 }
 
 export async function createDraft(
@@ -97,7 +116,7 @@ export async function createDraft(
     createdAt,
     updatedAt: createdAt,
   };
-  await context.table.put(applicationToItem(application));
+  await saveApplication(context, application);
   await logActivity(
     context,
     "APPLICATION_STARTED",
@@ -121,6 +140,13 @@ export async function getOwnedApplication(
   userId: string,
   applicationId: string,
 ): Promise<Application> {
+  const sql = crmPostgresOf(context);
+  if (sql) {
+    const application = await getApplicationPostgres(sql, applicationId);
+    // Another user's application answers exactly like a missing one.
+    if (!application || application.userId !== userId) throw notFound("Application");
+    return application;
+  }
   const item = await context.table.get(`USER#${userId}`, `APP#${applicationId}`);
   if (!item) throw notFound("Application");
   return itemToApplication(item);
@@ -145,7 +171,7 @@ export async function patchDraft(
     ...(patch.stepReached ? { stepReached: patch.stepReached } : {}),
     updatedAt: context.now().toISOString(),
   };
-  await context.table.put(applicationToItem(updatedApplication));
+  await saveApplication(context, updatedApplication);
   if (patch.stepReached && patch.stepReached !== previousStep) {
     await logActivity(
       context,
@@ -179,6 +205,8 @@ export async function listMyApplications(
   context: AppContext,
   userId: string,
 ): Promise<OwnedApplicationListing> {
+  const sql = crmPostgresOf(context);
+  if (sql) return listApplicationsByUserPostgres(sql, userId);
   const items = await context.table.query(`USER#${userId}`, { skPrefix: "APP#" });
   const { records, unreadableRecordIds } = await collectReadableRecords(
     items,
@@ -261,7 +289,7 @@ export async function submitApplication(
     stepReached: "review",
     updatedAt: context.now().toISOString(),
   };
-  await context.table.put(applicationToItem(submittedApplication));
+  await saveApplication(context, submittedApplication);
   await logActivity(
     context,
     "SUBMITTED",
@@ -272,7 +300,8 @@ export async function submitApplication(
       travellerCount: application.travellers.length,
     },
     { actorEmail: userEmail, actorRole: "user" },
-  );  await context.email.send({
+  );
+  await context.email.send({
     toAddress: userEmail,
     subject: `Application received — ${application.countryCode} visa`,
     bodyText: [
