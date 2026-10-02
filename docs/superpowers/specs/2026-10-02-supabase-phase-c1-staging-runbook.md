@@ -16,6 +16,7 @@
 
 > **Freshness contract (read first).** Phase C.1 has **no dual-write** to Dynamo for the catalog. After C.1 code is live, catalog list/resolve/upsert go to Postgres only (`crm_country_products`).  
 > **`backfill:country-catalog-postgres` is a pre-deploy copy only.** Run it **before** deploying C.1 application code (while staging still serves catalog from Dynamo on the pre-C.1 build, or immediately before deploy in the migrate → backfill → deploy order). **Never re-run it after C.1 is live** — it reads staging Dynamo and **overwrites** Postgres rows with stale Dynamo copies, destroying desk catalog edits made on PG since deploy.  
+> **Portal applications, profiles, document metadata, and activity** are not part of C.1 (activity stays Dynamo here); they close via the Phase C.2.1 runbook: `2026-10-02-supabase-phase-c2-1-staging-runbook.md`.  
 > **Do not re-run Phase B.2 `backfill:crm-remaining-postgres`, Phase B.1 `backfill:crm-case-sor-postgres`, or Phase A `backfill:crm-ledger-postgres` either** — same clobber risk on CRM/ledger SoR (see B.2 runbook).  
 > **No in-memory seed SoR after cutover.** With `CRM_STORE=postgres`, an empty `crm_country_products` is a failed migrate or misconfiguration — runtime must **not** fall back to `COUNTRY_PRODUCTS` in memory as the catalog source.
 
@@ -130,6 +131,7 @@ These checks validate **live Postgres** for the catalog, not backfill freshness 
 
 ## Related runbooks
 
+- Phase C.2.1 (portal + activity): `2026-10-02-supabase-phase-c2-1-staging-runbook.md`
 - Phase B.2 (remaining CRM): `2026-10-01-supabase-phase-b2-staging-runbook.md`
 - Phase B.1 (case SoR): `2026-10-01-supabase-phase-b-staging-runbook.md`
 - Phase A (ledger reads): `2026-10-01-supabase-phase-a-staging-runbook.md`

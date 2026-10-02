@@ -3,7 +3,8 @@
 **Date:** 2026-10-02  
 **Status:** approved (implementation plan landed)  
 **Parent:** `2026-10-01-supabase-postgres-migration-design.md`  
-**Prior:** Phase C.1 (`CRM_STORE=postgres` country catalog) + staging runbook
+**Prior:** Phase C.1 (`CRM_STORE=postgres` country catalog) + staging runbook  
+**Runbook:** `2026-10-02-supabase-phase-c2-1-staging-runbook.md`
 
 ---
 
