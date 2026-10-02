@@ -157,7 +157,7 @@ Separate runbook after staging soak. Not day-one of this design.
 | Users SQL | `services/api/src/domain/userProfilesPostgres.ts` (+ `users.ts`) |
 | Activity SQL | `services/api/src/domain/activityPostgres.ts`; `logActivity` in `lib/context.ts` |
 | Documents | `documents.ts` — keep S3; route metadata writes through applications PG |
-| Backfill | `services/migration/src/backfillPortalActivityToPostgres*.ts` (name TBD in plan) |
+| Backfill | `services/migration/src/backfillPortalSoRToPostgres.ts` (+ CLI + `backfill:portal-sor-postgres`) |
 | Runbook | `docs/superpowers/specs/2026-10-02-supabase-phase-c2-1-staging-runbook.md` (with plan) |
 
 Implementation detail and task checkboxes live in the Phase C.2.1 **plan**
