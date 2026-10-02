@@ -1,9 +1,10 @@
 # RGS — Supabase Postgres Phase C.2.2 (leads + notices SoR)
 
 **Date:** 2026-10-02  
-**Status:** draft (awaiting written-spec review)  
+**Status:** approved (implementation plan landed)  
 **Parent:** `2026-10-01-supabase-postgres-migration-design.md`  
 **Prior:** Phase C.2.1 (`CRM_STORE=postgres` portal + activity) + staging cutover  
+**Plan:** `docs/superpowers/plans/2026-10-02-supabase-postgres-phase-c2-2-leads-notices.md`  
 **Runbook:** `2026-10-02-supabase-phase-c2-2-staging-runbook.md` (with plan)
 
 ---
@@ -192,4 +193,4 @@ Implementation detail and task checkboxes live in the Phase C.2.2 **plan**
 Approve this design to unlock
 `docs/superpowers/plans/2026-10-02-supabase-postgres-phase-c2-2-leads-notices.md`.
 
-**Owner sign-off:** _pending_
+**Owner sign-off:** approved 2026-10-02 (chat) — plan next / landed
