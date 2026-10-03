@@ -7,18 +7,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "import": "tsx src/cli.ts",
-    "backfill:summary": "tsx src/backfillCli.ts",
-    "backfill:search-text": "tsx src/backfillSearchTextCli.ts",
-    "backfill:ref-claims": "tsx src/backfillRefClaimsCli.ts",
-    "backfill:case-status-rename": "tsx src/backfillCaseStatusRenameCli.ts",
     "seed:status-email-templates": "tsx src/seedStatusEmailTemplatesCli.ts",
-    "migrate:country-documents-to-products": "tsx src/migrateCountryDocumentsToProductsCli.ts",
-    "backfill:crm-ledger-postgres": "tsx src/backfillCrmLedgerToPostgresCli.ts",
-    "backfill:crm-case-sor-postgres": "tsx src/backfillCrmCaseSorToPostgresCli.ts",
-    "backfill:crm-remaining-postgres": "tsx src/backfillCrmRemainingToPostgresCli.ts",
-    "backfill:country-catalog-postgres": "tsx src/backfillCountryCatalogToPostgresCli.ts",
-    "backfill:portal-sor-postgres": "tsx src/backfillPortalSoRToPostgresCli.ts",
-    "backfill:leads-notices-postgres": "tsx src/backfillLeadsNoticesToPostgresCli.ts"
+    "migrate:country-documents-to-products": "tsx src/migrateCountryDocumentsToProductsCli.ts"
   },
   "dependencies": {
     "@rgs/shared": "workspace:*",
