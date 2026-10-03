@@ -1,5 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { applyMigrations } from "../../src/db/migrate";
 import type { SqlClient } from "../../src/lib/sql";
 import { pgliteAsSqlClient } from "../pgliteSqlClient";
@@ -7,14 +7,16 @@ import { buildCaseExportRows } from "../../src/domain/crm/caseExport";
 import { createCase } from "../../src/domain/crm/cases";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
-import { buildTestContext } from "../helpers";
+import { buildSqlTestContext, closeSqlTestContexts } from "../helpers";
+
+afterEach(closeSqlTestContexts);
 
 /** PGlite boot + migrations + seeding is slow under a loaded full-suite run. */
 const PGLITE_TEST_TIMEOUT_MS = 60_000;
 
 describe("buildCaseExportRows", () => {
   it("returns one row per applicant in the order asked, with partner and traveller names, and lists missing ids", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(context, "rgs", { canonicalName: "Export Tours", partnerType: "AGENCY" }, "desk@rgs.local");
     const firstTraveller = await upsertTraveller(context, "rgs", { fullName: "MEERA IYER", passportNumber: "M1234567" });
     const secondTraveller = await upsertTraveller(context, "rgs", { fullName: "RAJ IYER" });
@@ -80,7 +82,7 @@ describe("buildCaseExportRows", () => {
       transaction: (work) => database.transaction(work),
       end: () => database.end(),
     };
-    const context = { ...buildTestContext(), crmStore: "postgres" as const, sql: observed };
+    const context = { ...await buildSqlTestContext(), crmStore: "postgres" as const, sql: observed };
     const partner = await createPartner(context, "rgs", { canonicalName: "Export Tours" }, "desk@rgs.local");
     const caseIds: string[] = [];
     for (let caseNumber = 0; caseNumber < caseCount; caseNumber += 1) {

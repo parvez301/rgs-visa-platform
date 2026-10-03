@@ -1,12 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { buildTestContext } from "../helpers";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildSqlTestContext, closeSqlTestContexts } from "../helpers";
 import { resolveCaseTravellers } from "../../src/domain/crm/caseTravellers";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
-import { META_SORT_KEY, travellerPartitionKey } from "../../src/domain/crm/keys";
+
+afterEach(closeSqlTestContexts);
 
 describe("resolveCaseTravellers", () => {
   it("maps each applicant's travellerId to the traveller's name and passport", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const asha = await upsertTraveller(context, "rgs", { fullName: "Asha Rao", passportNumber: "Z1" });
     const ravi = await upsertTraveller(context, "rgs", { fullName: "Ravi Rao" });
 
@@ -22,9 +23,12 @@ describe("resolveCaseTravellers", () => {
   });
 
   it("leaves out a traveller that is missing or corrupt rather than failing the read", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const asha = await upsertTraveller(context, "rgs", { fullName: "Asha Rao" });
-    await context.table.put({ PK: travellerPartitionKey("rgs", "trv_corrupt"), SK: META_SORT_KEY, fullName: 42 });
+    await context.sql.query(
+      `insert into crm_travellers (tenant_id, traveller_id, full_name, normalized_name, created_at)
+       values ('rgs', 'trv_corrupt', '   ', 'blank', '2026-07-23T10:00:00.000Z')`,
+    );
 
     const travellers = await resolveCaseTravellers(context, "rgs", [
       { applicantRef: "A1", travellerId: asha.travellerId, custody: "NOT_HELD", outcome: "PENDING" },

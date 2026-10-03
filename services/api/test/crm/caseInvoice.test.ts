@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildTestContext } from "../helpers";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildSqlTestContext, closeSqlTestContexts } from "../helpers";
 import { createCase } from "../../src/domain/crm/cases";
 import { generateCaseInvoice } from "../../src/domain/crm/caseInvoice";
 import { addLineItem } from "../../src/domain/crm/lineItems";
@@ -7,12 +7,14 @@ import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 
+afterEach(closeSqlTestContexts);
+
 const TENANT_ID = "rgs";
 const ACTOR = "ops@rgs.test";
 
 describe("generateCaseInvoice", () => {
   it("refuses a case with no line items", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels" }, ACTOR);
     const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
     const created = await createCase(
@@ -36,7 +38,7 @@ describe("generateCaseInvoice", () => {
   });
 
   it("returns a PDF payload and records INVOICE_GENERATED", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels" }, ACTOR);
     const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
     const created = await createCase(

@@ -79,6 +79,15 @@ export interface SqlTestContext extends AppContext {
   advanceClock(milliseconds: number): void;
 }
 
+const openSqlContexts = new Set<SqlTestContext>();
+
+/** Close every PGlite opened by `buildSqlTestContext`; wire into `afterEach`. */
+export async function closeSqlTestContexts(): Promise<void> {
+  const open = [...openSqlContexts];
+  openSqlContexts.clear();
+  await Promise.all(open.map((context) => context.sql.end().catch(() => undefined)));
+}
+
 export async function buildSqlTestContext(
   options: BuildTestContextOptions = {},
 ): Promise<SqlTestContext> {
@@ -101,6 +110,7 @@ export async function buildSqlTestContext(
     sql,
   };
 
+  openSqlContexts.add(context);
   if (options.seedStatusEmailTemplates !== false) {
     await seedStatusEmailTemplatesIfAbsent(context, "rgs", "seed@rgs.local");
   }

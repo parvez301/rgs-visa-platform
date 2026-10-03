@@ -1,17 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createCase, changeApplicantCustody } from "../../src/domain/crm/cases";
 import { createPartner } from "../../src/domain/crm/partners";
 import { getTravellerOrThrow, upsertTraveller } from "../../src/domain/crm/travellers";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import { addApplicant, removeApplicant, updateApplicantDetails } from "../../src/domain/crm/applicantEdits";
-import { casePartitionKey } from "../../src/domain/crm/keys";
 import { claimNewRefs, readRefClaim } from "../../src/domain/crm/refClaims";
-import { buildTestContext, type TestContext } from "../helpers";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+
+afterEach(closeSqlTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
 
-async function seedFamilyCase(context: TestContext) {
+async function seedFamilyCase(context: SqlTestContext) {
   const partner = await createPartner(context, TENANT_ID, { canonicalName: "Family Tours", partnerType: "AGENCY" }, ACTOR);
   const firstTraveller = await upsertTraveller(context, TENANT_ID, { fullName: "ANIL SHARMA", passportNumber: "P1111111" });
   const secondTraveller = await upsertTraveller(context, TENANT_ID, { fullName: "SITA SHARMA" });
@@ -37,7 +38,7 @@ async function seedFamilyCase(context: TestContext) {
 
 describe("updateApplicantDetails", () => {
   it("renames the traveller, changes passport and REF NO, and records one event", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase, firstTraveller } = await seedFamilyCase(context);
 
     const updatedCase = await updateApplicantDetails(
@@ -60,14 +61,14 @@ describe("updateApplicantDetails", () => {
   });
 
   it("clears a REF NO with null", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase } = await seedFamilyCase(context);
     const updatedCase = await updateApplicantDetails(context, TENANT_ID, crmCase.caseId, "A1", { refNo: null }, ACTOR);
     expect(updatedCase.applicants[0]?.refNo).toBeUndefined();
   });
 
   it("refuses a passport on file for a different traveller", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase } = await seedFamilyCase(context);
     await expect(
       updateApplicantDetails(context, TENANT_ID, crmCase.caseId, "A2", { passportNumber: "P1111111" }, ACTOR),
@@ -75,7 +76,7 @@ describe("updateApplicantDetails", () => {
   });
 
   it("refuses a REF NO another applicant on the same case already has", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase } = await seedFamilyCase(context);
     await expect(
       updateApplicantDetails(context, TENANT_ID, crmCase.caseId, "A2", { refNo: "fam-1-a" }, ACTOR),
@@ -83,24 +84,29 @@ describe("updateApplicantDetails", () => {
   });
 
   it("releases a landed-but-unacked claim when the case write then fails", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase } = await seedFamilyCase(context);
     // The earlier attempt's putIfAbsent landed; its response never came back.
     await claimNewRefs(context, TENANT_ID, crmCase.caseId, undefined, { caseRef: "ORPHAN-1", applicants: [] });
-    const realPut = context.table.put.bind(context.table);
-    vi.spyOn(context.table, "put").mockImplementation(async (item) => {
-      if (item.PK === casePartitionKey(TENANT_ID, crmCase.caseId)) throw new Error("write lost");
-      return realPut(item);
-    });
+    // The case write is one transaction; losing it is what must release the claim.
+    const failingContext: SqlTestContext = {
+      ...context,
+      sql: {
+        ...context.sql,
+        transaction: async () => {
+          throw new Error("write lost");
+        },
+      },
+    };
 
     await expect(
-      updateApplicantDetails(context, TENANT_ID, crmCase.caseId, "A2", { refNo: "ORPHAN-1" }, ACTOR),
+      updateApplicantDetails(failingContext, TENANT_ID, crmCase.caseId, "A2", { refNo: "ORPHAN-1" }, ACTOR),
     ).rejects.toThrow("write lost");
     expect(await readRefClaim(context, TENANT_ID, "ORPHAN-1")).toBeUndefined();
   });
 
   it("leaves the traveller untouched when the case change is refused (duplicate REF NO)", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase, secondTraveller } = await seedFamilyCase(context);
     await expect(
       updateApplicantDetails(
@@ -118,7 +124,7 @@ describe("updateApplicantDetails", () => {
   });
 
   it("leaves the traveller untouched when another case holds the REF (409)", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase, secondTraveller } = await seedFamilyCase(context);
     await claimNewRefs(context, TENANT_ID, "case_other", undefined, { caseRef: "TAKEN-9", applicants: [] });
     await expect(
@@ -137,7 +143,7 @@ describe("updateApplicantDetails", () => {
   });
 
   it("stamps the Ledger search haystack with the NEW name and passport (traveller is written after the case)", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase } = await seedFamilyCase(context);
     await updateApplicantDetails(
       context,
@@ -147,13 +153,16 @@ describe("updateApplicantDetails", () => {
       { fullName: "SITA RENAMED", passportNumber: "P3333333" },
       ACTOR,
     );
-    const caseItem = await context.table.get(casePartitionKey(TENANT_ID, crmCase.caseId), "META");
-    expect(String(caseItem?.searchText)).toMatch(/SITA RENAMED/i);
-    expect(String(caseItem?.searchText)).toMatch(/P3333333/i);
+    const stored = await context.sql.query<{ search_text: string | null }>(
+      `select search_text from crm_cases where tenant_id = $1 and case_id = $2`,
+      [TENANT_ID, crmCase.caseId],
+    );
+    expect(String(stored.rows[0]?.search_text)).toMatch(/SITA RENAMED/i);
+    expect(String(stored.rows[0]?.search_text)).toMatch(/P3333333/i);
   });
 
   it("404s on an unknown applicant", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase } = await seedFamilyCase(context);
     await expect(
       updateApplicantDetails(context, TENANT_ID, crmCase.caseId, "A9", { refNo: "Z" }, ACTOR),
@@ -163,7 +172,7 @@ describe("updateApplicantDetails", () => {
 
 describe("addApplicant / removeApplicant", () => {
   it("adds a person under the next free applicantRef", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase } = await seedFamilyCase(context);
     const newTraveller = await upsertTraveller(context, TENANT_ID, { fullName: "RIYA SHARMA" });
 
@@ -179,7 +188,7 @@ describe("addApplicant / removeApplicant", () => {
   });
 
   it("removes a person, frees their REF NO, and refuses the last one", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase } = await seedFamilyCase(context);
 
     const afterRemoval = await removeApplicant(context, TENANT_ID, crmCase.caseId, "A1", ACTOR);
@@ -191,7 +200,7 @@ describe("addApplicant / removeApplicant", () => {
   });
 
   it("refuses to remove a person whose passport we are holding", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { crmCase } = await seedFamilyCase(context);
     await changeApplicantCustody(context, TENANT_ID, crmCase.caseId, "A2", "WITH_RGS", ACTOR);
     await expect(removeApplicant(context, TENANT_ID, crmCase.caseId, "A2", ACTOR)).rejects.toMatchObject({

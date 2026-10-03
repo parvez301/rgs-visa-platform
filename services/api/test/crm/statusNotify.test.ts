@@ -1,11 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import { buildTestContext, type TestContext } from "../helpers";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 import { changeCaseStatus, createCase, getCase, updateCaseDetails } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
-import { META_SORT_KEY, statusEmailTemplatePartitionKey, travellerPartitionKey } from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertStatusEmailTemplate } from "../../src/domain/crm/statusEmailTemplates";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
+
+afterEach(closeSqlTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "ops@rgs.test";
@@ -21,7 +22,7 @@ interface SeedCaseOptions {
 }
 
 /** One partner, its travellers, and a case -- the create mail fires inside. */
-async function seedCase(context: TestContext, options: SeedCaseOptions) {
+async function seedCase(context: SqlTestContext, options: SeedCaseOptions) {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -60,7 +61,7 @@ async function seedCase(context: TestContext, options: SeedCaseOptions) {
 
 describe("status-change email", () => {
   it("emails the partner with the new status's template when a case status moves", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, { caseRef: "RGS-MAIL-1", partnerContactEmail: "desk@skyline.test" });
     context.email.sentEmails.length = 0;
 
@@ -92,7 +93,7 @@ describe("status-change email", () => {
   });
 
   it("skips email quietly when the partner has no contact email", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, { caseRef: "RGS-MAIL-2" });
 
     await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
@@ -103,7 +104,7 @@ describe("status-change email", () => {
   });
 
   it("titles the email REF – STATUS – NAME – COUNTRY + visa type from the seeded subject", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, { caseRef: "RGS-MAIL-3", partnerContactEmail: "desk@skyline.test" });
 
     await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
@@ -114,7 +115,7 @@ describe("status-change email", () => {
   });
 
   it("names the first applicant only in {{clientName}} when a case carries several and no group name", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, {
       caseRef: "RGS-MAIL-4",
       partnerContactEmail: "desk@skyline.test",
@@ -129,7 +130,7 @@ describe("status-change email", () => {
   });
 
   it("emails the client too when the case carries a clientEmail, and records CLIENT_NOTIFIED", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, {
       caseRef: "RGS-MAIL-5",
       partnerContactEmail: "desk@skyline.test",
@@ -159,7 +160,7 @@ describe("status-change email", () => {
   });
 
   it("emails only the client when the partner has no address, and only the partner when the case has none", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const clientOnly = await seedCase(context, { caseRef: "RGS-MAIL-6", clientEmail: "asha@example.com" });
     context.email.sentEmails.length = 0;
     await changeCaseStatus(context, TENANT_ID, clientOnly.caseId, "DOCS_UNDER_REVIEW", ACTOR);
@@ -177,7 +178,7 @@ describe("status-change email", () => {
   });
 
   it("uses the group name as {{clientName}} in the subject and body when the case has one", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, {
       caseRef: "RGS-2026-0912",
       partnerContactEmail: "desk@skyline.test",
@@ -197,7 +198,7 @@ describe("status-change email", () => {
   });
 
   it("renders {{applicantsBlock}} as REF – name – outcome lines for a group", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, {
       caseRef: "RGS-2026-0912",
       partnerContactEmail: "desk@skyline.test",
@@ -227,7 +228,7 @@ describe("status-change email", () => {
   });
 
   it("leaves the applicants lines out for a single-applicant case", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, { caseRef: "31377", partnerContactEmail: "desk@skyline.test" });
     await upsertStatusEmailTemplate(
       context,
@@ -243,7 +244,7 @@ describe("status-change email", () => {
   });
 
   it("fills the appointment date as DD MMM YYYY when set, without broken 'at' copy from the blank time and centre", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const withDate = await seedCase(context, { caseRef: "RGS-APPT-A", partnerContactEmail: "desk@skyline.test" });
     await updateCaseDetails(context, TENANT_ID, withDate.caseId, { appointmentDate: "2026-10-03" }, ACTOR);
     await changeCaseStatus(context, TENANT_ID, withDate.caseId, "APPOINTMENT_SET", ACTOR);
@@ -259,7 +260,7 @@ describe("status-change email", () => {
   });
 
   it("drops the whole appointment block when no date is set", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const withoutDate = await seedCase(context, { caseRef: "RGS-APPT-B", partnerContactEmail: "desk@skyline.test" });
     await changeCaseStatus(context, TENANT_ID, withoutDate.caseId, "APPOINTMENT_SET", ACTOR);
 
@@ -273,7 +274,7 @@ describe("status-change email", () => {
   });
 
   it("writes Unnamed applicant for a traveller that cannot be read, without failing the send", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, {
       caseRef: "RGS-G-1",
       partnerContactEmail: "desk@skyline.test",
@@ -282,7 +283,10 @@ describe("status-change email", () => {
       applicantNames: ["Rahul Sharma", "Ghost Sharma"],
     });
     const ghostTravellerId = created.applicants[1]!.travellerId;
-    await context.table.delete(travellerPartitionKey(TENANT_ID, ghostTravellerId), META_SORT_KEY);
+    await context.sql.query(`delete from crm_travellers where tenant_id = $1 and traveller_id = $2`, [
+      TENANT_ID,
+      ghostTravellerId,
+    ]);
     await upsertStatusEmailTemplate(
       context,
       TENANT_ID,
@@ -299,7 +303,7 @@ describe("status-change email", () => {
   });
 
   it("sends nothing when the status's template is disabled, but the status still changes", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, {
       caseRef: "RGS-OFF-1",
       partnerContactEmail: "desk@skyline.test",
@@ -328,7 +332,7 @@ describe("status-change email", () => {
   });
 
   it("sends nothing when no template row exists, and never falls back to a generic body", async () => {
-    const context = buildTestContext({ seedStatusEmailTemplates: false });
+    const context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
     const created = await seedCase(context, { caseRef: "RGS-NOROW-1", partnerContactEmail: "desk@skyline.test" });
 
     await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
@@ -338,16 +342,12 @@ describe("status-change email", () => {
   });
 
   it("skips the send when the status's template row is corrupt, and the status change and create still succeed", async () => {
-    const context = buildTestContext();
-    for (const corruptStatus of ["NEW", "DOCS_UNDER_REVIEW"] as const) {
-      await context.table.put({
-        PK: statusEmailTemplatePartitionKey(TENANT_ID, corruptStatus),
-        SK: META_SORT_KEY,
-        tenantId: TENANT_ID,
-        caseStatus: corruptStatus,
-        subject: 42,
-      });
-    }
+    const context = await buildSqlTestContext();
+    // A blank subject no longer satisfies StatusEmailTemplateSchema.
+    await context.sql.query(
+      `update crm_status_email_templates set subject = '' where tenant_id = $1 and case_status in ('NEW', 'DOCS_UNDER_REVIEW')`,
+      [TENANT_ID],
+    );
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     try {
@@ -374,7 +374,7 @@ describe("status-change email", () => {
   });
 
   it("uses an edited template verbatim, subject included", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, { caseRef: "RGS-EDIT-1", partnerContactEmail: "desk@skyline.test" });
     await upsertStatusEmailTemplate(
       context,
@@ -395,7 +395,7 @@ describe("status-change email", () => {
 
 describe("status email on create", () => {
   it("sends the Application Received (NEW) template once when a case is created", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
 
     const created = await seedCase(context, { caseRef: "RGS-NEW-1", partnerContactEmail: "desk@skyline.test" });
 
@@ -418,7 +418,7 @@ describe("status email on create", () => {
   });
 
   it("emails the client on create too, and the later status change sends that status's template, not NEW again", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, {
       caseRef: "RGS-NEW-2",
       partnerContactEmail: "desk@skyline.test",
@@ -441,7 +441,7 @@ describe("status email on create", () => {
   });
 
   it("sends nothing on create when the partner and client have no address", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
 
     const created = await seedCase(context, { caseRef: "RGS-NEW-3" });
 
@@ -452,7 +452,7 @@ describe("status email on create", () => {
   });
 
   it("sends nothing on create when the NEW template is disabled, and still creates the case", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await upsertStatusEmailTemplate(context, TENANT_ID, "NEW", { subject: "s", body: "b", enabled: false }, ACTOR);
 
     const created = await seedCase(context, { caseRef: "RGS-NEW-4", partnerContactEmail: "desk@skyline.test" });

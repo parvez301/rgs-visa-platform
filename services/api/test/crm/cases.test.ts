@@ -1,18 +1,14 @@
 import { crm } from "@rgs/shared";
-import { describe, expect, it, vi } from "vitest";
-import { buildTestContext, type TestContext } from "../helpers";
-import { writeCase } from "../../src/domain/crm/caseStore";
-import {
-  casePartitionKey,
-  caseStatusGsi1Pk,
-  travellerPartitionKey,
-} from "../../src/domain/crm/keys";
-import { addApplicant } from "../../src/domain/crm/applicantEdits";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { readCaseOrThrow, writeCase } from "../../src/domain/crm/caseStore";
+import { casePartitionKey } from "../../src/domain/crm/keys";
+import type { SqlClient } from "../../src/lib/sql";
+import { addApplicant, removeApplicant, updateApplicantDetails } from "../../src/domain/crm/applicantEdits";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { readRefClaim } from "../../src/domain/crm/refClaims";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
-import type { PagedQueryOptions, QueryOptions, QueryPage, TableItem } from "../../src/lib/db";
 import {
   changeApplicantCustody,
   changeApplicantOutcome,
@@ -21,12 +17,15 @@ import {
   countCasesByField,
   createCase,
   getCase,
+  updateCaseDetails,
   listCaseRefsByStatus,
   listCasesByPartner,
   listCasesByStatus,
 } from "../../src/domain/crm/cases";
 
-async function seedPartner(context: TestContext): Promise<string> {
+afterEach(closeSqlTestContexts);
+
+async function seedPartner(context: SqlTestContext): Promise<string> {
   const partner = await createPartner(
     context,
     "rgs",
@@ -37,12 +36,12 @@ async function seedPartner(context: TestContext): Promise<string> {
 }
 
 /** Cases point at travellers on file, so every case fixture needs one first. */
-async function seedTraveller(context: TestContext, fullName: string): Promise<string> {
+async function seedTraveller(context: SqlTestContext, fullName: string): Promise<string> {
   const traveller = await upsertTraveller(context, "rgs", { fullName });
   return traveller.travellerId;
 }
 
-async function seedCase(context: TestContext, partnerId: string, caseRef = "31377") {
+async function seedCase(context: SqlTestContext, partnerId: string, caseRef = "31377") {
   const travellerId = await seedTraveller(context, `Traveller ${caseRef}`);
   return createCase(
     context,
@@ -62,7 +61,7 @@ async function seedCase(context: TestContext, partnerId: string, caseRef = "3137
   );
 }
 
-async function seedTwoApplicantCase(context: TestContext, partnerId: string, caseRef = "31377") {
+async function seedTwoApplicantCase(context: SqlTestContext, partnerId: string, caseRef = "31377") {
   const firstTravellerId = await seedTraveller(context, `Traveller ${caseRef}-1`);
   const secondTravellerId = await seedTraveller(context, `Traveller ${caseRef}-2`);
   return createCase(
@@ -87,7 +86,7 @@ async function seedTwoApplicantCase(context: TestContext, partnerId: string, cas
 }
 
 async function seedThreeApplicantCase(
-  context: TestContext,
+  context: SqlTestContext,
   partnerId: string,
   caseRef = "31377",
 ) {
@@ -118,7 +117,7 @@ async function seedThreeApplicantCase(
 
 describe("crm cases", () => {
   it("creates a case on all three axes at their starting values", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     expect(created.caseStatus).toBe("NEW");
     expect(created.billingStatus).toBe("UNBILLED");
@@ -128,7 +127,7 @@ describe("crm cases", () => {
   });
 
   it("stores an optional collection date and remarks, and still opens New and Unbilled", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const travellerId = await seedTraveller(context, "Asha Rao");
     const created = await createCase(
@@ -156,7 +155,7 @@ describe("crm cases", () => {
   });
 
   it("records a creation event", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const events = await listCaseEvents(context, "rgs", created.caseId);
     expect(events).toHaveLength(1);
@@ -165,14 +164,14 @@ describe("crm cases", () => {
   });
 
   it("rejects a case whose partner does not exist", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(seedCase(context, "no_such_partner")).rejects.toMatchObject({
       statusCode: 404,
     });
   });
 
   it("creates a case for an admin whose token carries no email claim", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const travellerId = await seedTraveller(context, "Umesh Kumar Yadav");
     // router.ts defaults a missing `email` claim to "". Every other admin route
@@ -197,13 +196,13 @@ describe("crm cases", () => {
   });
 
   it("records the caller's email on the case when the claim is present", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     expect(created.createdByEmail).toBe("ops@rgs.test");
   });
 
   it("rejects a case whose traveller does not exist", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await expect(
       createCase(
@@ -224,7 +223,7 @@ describe("crm cases", () => {
   });
 
   it("rejects a case when only the second applicant's traveller is unknown", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const knownTravellerId = await seedTraveller(context, "Umesh Kumar Yadav");
     await expect(
@@ -249,7 +248,7 @@ describe("crm cases", () => {
   });
 
   it("rejects a collection date earlier than the received date", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const travellerId = await seedTraveller(context, "Asha Rao");
     await expect(
@@ -275,7 +274,7 @@ describe("crm cases", () => {
   });
 
   it("rejects a VISA case with no visa type", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     // A real traveller, so the 400 below is the missing visaType and nothing else.
     const travellerId = await seedTraveller(context, "Umesh Kumar Yadav");
@@ -297,7 +296,7 @@ describe("crm cases", () => {
   });
 
   it("allows a non-visa case with no visa type", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const travellerId = await seedTraveller(context, "Aman Kapoor");
     const attestation = await createCase(
@@ -318,7 +317,7 @@ describe("crm cases", () => {
   });
 
   it("moves the case status through a legal transition and logs it", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const moved = await changeCaseStatus(context, "rgs", created.caseId, "DOCS_UNDER_REVIEW", "ops@rgs.test");
     expect(moved.caseStatus).toBe("DOCS_UNDER_REVIEW");
@@ -330,7 +329,7 @@ describe("crm cases", () => {
   });
 
   it("refuses an illegal case-status transition with a 409", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await changeCaseStatus(context, "rgs", created.caseId, "WITHDRAWN", "ops@rgs.test");
     // WITHDRAWN is terminal — nothing may leave it.
@@ -340,7 +339,7 @@ describe("crm cases", () => {
   });
 
   it("moves custody on a single applicant without touching the case status", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     const updated = await changeApplicantCustody(
@@ -357,7 +356,7 @@ describe("crm cases", () => {
   });
 
   it("refuses an illegal custody transition with a 409", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     // NOT_HELD may only go to WITH_RGS.
@@ -367,7 +366,7 @@ describe("crm cases", () => {
   });
 
   it("rejects a custody change for an applicant ref that does not exist", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await expect(
       changeApplicantCustody(
@@ -382,7 +381,7 @@ describe("crm cases", () => {
   });
 
   it("moves billing independently of the other two axes", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const billed = await changeBillingStatus(context, "rgs", created.caseId, "BILL_SENT", "ops@rgs.test");
     expect(billed.billingStatus).toBe("BILL_SENT");
@@ -391,7 +390,7 @@ describe("crm cases", () => {
   });
 
   it("lists cases by status, and the index follows the case when it moves", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const created = await seedCase(context, partnerId);
     expect((await listCasesByStatus(context, "rgs", "NEW")).cases).toHaveLength(1);
@@ -403,7 +402,7 @@ describe("crm cases", () => {
   });
 
   it("lists cases by partner", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     await seedCase(context, partnerId, "31378");
@@ -411,7 +410,7 @@ describe("crm cases", () => {
   });
 
   it("keeps listing the healthy cases when one partition lost its applicants", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const healthyCase = await seedCase(context, partnerId, "31377");
     const corruptedCase = await seedCase(context, partnerId, "31378");
@@ -425,7 +424,7 @@ describe("crm cases", () => {
   });
 
   it("reports the cases it had to skip in the result, not only in a log line", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const healthyCase = await seedCase(context, partnerId, "31377");
     const corruptedCase = await seedCase(context, partnerId, "31378");
@@ -440,7 +439,7 @@ describe("crm cases", () => {
   });
 
   it("reports nothing skipped when every case in the queue is healthy", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     const listed = await listCasesByStatus(context, "rgs", "NEW");
@@ -448,7 +447,7 @@ describe("crm cases", () => {
   });
 
   it("reports the cases it had to skip on the by-partner listing too", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     const corruptedCase = await seedCase(context, partnerId, "31378");
@@ -459,100 +458,8 @@ describe("crm cases", () => {
     expect(listed.unreadableCaseIds).toEqual([corruptedCase.caseId]);
   });
 
-  it("reports a META item that lost its own caseId, instead of dropping it in silence", async () => {
-    const context = buildTestContext();
-    const partnerId = await seedPartner(context);
-    const healthyCase = await seedCase(context, partnerId, "31377");
-    // A META item indexed under the NEW queue whose body has no caseId of its
-    // own. Naming it String(item.caseId) yields the literal id "undefined",
-    // which reads back as no case at all — the row was dropped before the
-    // reporting path ever saw it. The partition key still identifies it.
-    await context.table.put({
-      PK: casePartitionKey("rgs", "case_ghost"),
-      SK: "META",
-      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
-      GSI1SK: "2026-01-02T10:00:00.000Z",
-      tenantId: "rgs",
-      caseRef: "31379",
-    });
-
-    const listed = await listCasesByStatus(context, "rgs", "NEW");
-    expect(listed.cases.map((listedCase) => listedCase.caseId)).toEqual([healthyCase.caseId]);
-    expect(listed.unreadableCaseIds).toEqual(["case_ghost"]);
-  });
-
-  it("reports a status-index entry whose case partition holds nothing", async () => {
-    const context = buildTestContext();
-    const partnerId = await seedPartner(context);
-    await seedCase(context, partnerId, "31377");
-    // The indexed item names a caseId that lives in no partition — readCase
-    // returns undefined for it, which used to fall through the `if (loadedCase)`
-    // check and out of the loop without a word.
-    await context.table.put({
-      PK: casePartitionKey("rgs", "case_stale_index"),
-      SK: "META",
-      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
-      GSI1SK: "2026-01-02T10:00:00.000Z",
-      tenantId: "rgs",
-      caseId: "case_that_was_deleted",
-      caseRef: "31380",
-    });
-
-    const listed = await listCasesByStatus(context, "rgs", "NEW");
-    expect(listed.cases).toHaveLength(1);
-    expect(listed.unreadableCaseIds).toEqual(["case_that_was_deleted"]);
-  });
-
-  // The one shape where nothing names a case: the body has no caseId AND the
-  // partition key is not a case partition either, so the caseId fallback has
-  // nothing to recover. A row hand-repaired into the wrong partition looks
-  // exactly like this. The previous test for it used a real case partition key,
-  // which the fallback resolves — it went down the corrupt-record path instead
-  // and left this guard unexercised.
-  const HAND_REPAIRED_META_PARTITION_KEY = travellerPartitionKey("rgs", "t_hand_repaired");
-
-  async function putUnidentifiableMetaItem(context: TestContext): Promise<void> {
-    await context.table.put({
-      PK: HAND_REPAIRED_META_PARTITION_KEY,
-      SK: "META",
-      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
-      GSI1SK: "2026-01-02T10:00:00.000Z",
-      tenantId: "rgs",
-      caseRef: "31381",
-    });
-  }
-
-  it("reports a META item that neither its body nor its key names a case for", async () => {
-    const context = buildTestContext();
-    const partnerId = await seedPartner(context);
-    const healthyCase = await seedCase(context, partnerId, "31377");
-    await putUnidentifiableMetaItem(context);
-
-    const listed = await listCasesByStatus(context, "rgs", "NEW");
-    expect(listed.cases.map((listedCase) => listedCase.caseId)).toEqual([healthyCase.caseId]);
-    // The storage key is the only handle an operator has on a row like this.
-    expect(listed.unreadableCaseIds).toEqual([HAND_REPAIRED_META_PARTITION_KEY]);
-  });
-
-  it("warns about a META item it could not even name", async () => {
-    const context = buildTestContext();
-    const partnerId = await seedPartner(context);
-    await seedCase(context, partnerId, "31377");
-    await putUnidentifiableMetaItem(context);
-
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    let warnedText = "";
-    try {
-      await listCasesByStatus(context, "rgs", "NEW");
-      warnedText = warnSpy.mock.calls.map((warnArguments) => warnArguments.join(" ")).join("\n");
-    } finally {
-      warnSpy.mockRestore();
-    }
-    expect(warnedText).toContain(HAND_REPAIRED_META_PARTITION_KEY);
-  });
-
   it("warns with the caseId of a case it had to skip", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     const corruptedCase = await seedCase(context, partnerId, "31378");
@@ -571,7 +478,7 @@ describe("crm cases", () => {
   });
 
   it("still surfaces a corrupt case as a typed error on the single-case read", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const corruptedCase = await seedCase(context, partnerId, "31378");
     await writeCase(context, { ...corruptedCase, applicants: [] });
@@ -587,7 +494,7 @@ describe("crm cases", () => {
   // CLOSED, so the file would become impossible to resubmit and would vanish
   // from the queue ops is actively working it from.
   it("keeps the case workable when the embassy sends one of three files back", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const created = await seedThreeApplicantCase(context, partnerId);
     await changeCaseStatus(context, "rgs", created.caseId, "SUBMITTED", "ops@rgs.test");
@@ -640,19 +547,19 @@ describe("crm cases", () => {
   });
 
   it("keeps one tenant's cases out of another's queries", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId);
     expect((await listCasesByStatus(context, "other-tenant", "NEW")).cases).toEqual([]);
   });
 
   it("throws a 404 reading a case that does not exist", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(getCase(context, "rgs", "nope")).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("changes an applicant's outcome and logs the from/to values", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -674,7 +581,7 @@ describe("crm cases", () => {
   });
 
   it("rejects an unknown applicant outcome with a 400", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     await expect(
@@ -690,7 +597,7 @@ describe("crm cases", () => {
   });
 
   it("rejects an outcome change for an applicant ref that does not exist", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await expect(
       changeApplicantOutcome(
@@ -705,7 +612,7 @@ describe("crm cases", () => {
   });
 
   it("refuses to rewrite a decided outcome, an edge the spec never granted", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     await changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "APPROVED", "ops@rgs.test");
@@ -725,7 +632,7 @@ describe("crm cases", () => {
   });
 
   it("logs the from/to values when a returned file is resubmitted", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     await changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "SENT_BACK", "ops@rgs.test");
@@ -750,7 +657,7 @@ describe("crm cases", () => {
   });
 
   it("refuses to un-decide an applicant with a 409, leaving the recorded outcome intact", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     const decided = await changeApplicantOutcome(
@@ -775,7 +682,7 @@ describe("crm cases", () => {
   });
 
   it("derives VISA_REFUSED for a single rejected applicant and logs the transition", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     const refused = await changeApplicantOutcome(
@@ -793,7 +700,7 @@ describe("crm cases", () => {
   });
 
   it("moves a desk-marked DECIDED individual case on to VISA_GRANTED when the applicant is approved", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await changeCaseStatus(context, "rgs", created.caseId, "DECIDED", "ops@rgs.test");
     const granted = await changeApplicantOutcome(
@@ -808,7 +715,7 @@ describe("crm cases", () => {
   });
 
   it("widens an individual VISA_GRANTED case to DECIDED once a second applicant is added and approved", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const granted = await changeApplicantOutcome(
       context,
@@ -850,7 +757,7 @@ describe("crm cases", () => {
   });
 
   it("refuses a no-op outcome change with a 409", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     // PENDING -> PENDING, the same no-op the custody and billing gates refuse.
@@ -862,7 +769,7 @@ describe("crm cases", () => {
   });
 
   it("does not become DECIDED until every applicant is decided, then does", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedTwoApplicantCase(context, await seedPartner(context));
     const [firstApplicant, secondApplicant] = created.applicants;
 
@@ -888,7 +795,7 @@ describe("crm cases", () => {
   });
 
   it("becomes CLOSED once every applicant is returned and billing is paid", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -908,7 +815,7 @@ describe("crm cases", () => {
   });
 
   it("closes via the custody path when billing already reached PAID first", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -939,7 +846,7 @@ describe("crm cases", () => {
   });
 
   it("does not close a case while billing is still unpaid", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -958,7 +865,7 @@ describe("crm cases", () => {
   });
 
   it("does not close a case when billing is UNKNOWN, even with every passport returned", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -982,7 +889,7 @@ describe("crm cases", () => {
   });
 
   it("does not drag a terminal case back into CLOSED by a later derivation", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     await changeCaseStatus(context, "rgs", created.caseId, "WITHDRAWN", "ops@rgs.test");
@@ -997,50 +904,19 @@ describe("crm cases", () => {
 });
 
 describe("listCaseRefsByStatus", () => {
-  it("reads every stored ref straight off the index, without reassembling a case", async () => {
-    const context = buildTestContext();
+  it("reads every stored ref off the case rows, without reassembling a case", async () => {
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     await seedCase(context, partnerId, "31378");
 
-    // No `readCase` at all: one query per status partition, and the ref comes
-    // off the META item the query already returned. Reassembling instead costs
-    // two strongly-consistent round-trips per case (14,312 on the real
-    // workbook) to collect an attribute already in hand.
-    let baseTableReadCount = 0;
-    const countingContext = {
-      ...context,
-      table: {
-        ...context.table,
-        get: (partitionKey: string, sortKey: string) => {
-          baseTableReadCount += 1;
-          return context.table.get(partitionKey, sortKey);
-        },
-        query: (partitionKey: string, options?: QueryOptions) => {
-          baseTableReadCount += 1;
-          return context.table.query(partitionKey, options);
-        },
-        put: (item: TableItem) => context.table.put(item),
-        putIfAbsent: (item: TableItem) => context.table.putIfAbsent(item),
-        delete: (partitionKey: string, sortKey: string) => context.table.delete(partitionKey, sortKey),
-        queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) =>
-          context.table.queryGsi(indexName, partitionKey, options),
-        queryGsiPage: (
-          indexName: "GSI1" | "GSI2" | "GSI3",
-          partitionKey: string,
-          options: PagedQueryOptions,
-        ): Promise<QueryPage> => context.table.queryGsiPage(indexName, partitionKey, options),
-      },
-    };
-
-    const listed = await listCaseRefsByStatus(countingContext, "rgs", "NEW", 1000);
+    const listed = await listCaseRefsByStatus(context, "rgs", "NEW", 1000);
     expect(listed.storedCaseRefs.map((stored) => stored.caseRef).sort()).toEqual(["31377", "31378"]);
     expect(listed.unreadableCaseIds).toEqual([]);
-    expect(baseTableReadCount).toBe(0);
   });
 
   it("still reports the ref of a case that will not reassemble", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     const corruptedCase = await seedCase(context, partnerId, "31378");
     // META with no applicant items — what a non-transactional writeCase leaves
@@ -1053,25 +929,11 @@ describe("listCaseRefsByStatus", () => {
     expect(listed.storedCaseRefs).toEqual([{ caseRef: "31378", caseId: corruptedCase.caseId }]);
   });
 
-  it("names a META item that records no ref rather than dropping it", async () => {
-    const context = buildTestContext();
-    await context.table.put({
-      PK: casePartitionKey("rgs", "case_no_ref"),
-      SK: "META",
-      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
-      GSI1SK: "2026-01-02T10:00:00.000Z",
-      tenantId: "rgs",
-    });
-
-    const listed = await listCaseRefsByStatus(context, "rgs", "NEW", 1000);
-    expect(listed.storedCaseRefs).toEqual([]);
-    expect(listed.unreadableCaseIds).toEqual(["case_no_ref"]);
-  });
 });
 
 describe("countCasesByField", () => {
   it("counts cases by caseStatus without reassembling any of them", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     await seedCase(context, partnerId, "31378");
@@ -1085,7 +947,7 @@ describe("countCasesByField", () => {
   });
 
   it("counts by destinationCountry, billingStatus and partnerId too", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377"); // seedCase's destinationCountry is BH
 
@@ -1094,74 +956,23 @@ describe("countCasesByField", () => {
     expect((await countCasesByField(context, "rgs", "partnerId")).counts).toEqual({ [partnerId]: 1 });
   });
 
-  it("names a case whose META item carries no value for the counted field, instead of dropping it or counting it as 'undefined'", async () => {
-    const context = buildTestContext();
+  it("names a case whose counted field is empty, instead of dropping it or counting it as 'undefined'", async () => {
+    const context = await buildSqlTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
-    // Same corruption shape as "names a META item that records no ref rather
-    // than dropping it" above: indexed under NEW, but the body carries no
-    // caseStatus for countCasesByField to read off it.
-    await context.table.put({
-      PK: casePartitionKey("rgs", "case_no_status"),
-      SK: "META",
-      GSI1PK: caseStatusGsi1Pk("rgs", "NEW"),
-      GSI1SK: "2026-01-02T10:00:00.000Z",
-      tenantId: "rgs",
-      caseId: "case_no_status",
-    });
+    const blank = await seedCase(context, partnerId, "31378");
+    await context.sql.query("update crm_cases set destination_country = '' where case_id = $1", [
+      blank.caseId,
+    ]);
 
-    const counted = await countCasesByField(context, "rgs", "caseStatus");
-    expect(counted.counts).toEqual({ NEW: 1 });
-    expect(counted.total).toBe(1);
-    expect(counted.uncountedCaseIds).toEqual(["case_no_status"]);
-  });
-
-  it("counts every case in the tenant with zero base-table (partition) reads", async () => {
-    const context = buildTestContext();
-    const partnerId = await seedPartner(context);
-    await seedCase(context, partnerId, "31377");
-    await seedCase(context, partnerId, "31378");
-
-    // Same wrapping pattern as listCaseRefsByStatus's cost test above: `get`
-    // and `query` are the base-table, strongly-consistent operations readCase
-    // uses to reassemble a case out of its META item and applicant items.
-    // countCasesByField must never call either -- everything it needs is
-    // already on the META items the GSI1 query per status hands back.
-    let baseTableReadCount = 0;
-    const countingContext = {
-      ...context,
-      table: {
-        ...context.table,
-        get: (partitionKey: string, sortKey: string) => {
-          baseTableReadCount += 1;
-          return context.table.get(partitionKey, sortKey);
-        },
-        query: (partitionKey: string, options?: QueryOptions) => {
-          baseTableReadCount += 1;
-          return context.table.query(partitionKey, options);
-        },
-        put: (item: TableItem) => context.table.put(item),
-        putIfAbsent: (item: TableItem) => context.table.putIfAbsent(item),
-        delete: (partitionKey: string, sortKey: string) => context.table.delete(partitionKey, sortKey),
-        queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) =>
-          context.table.queryGsi(indexName, partitionKey, options),
-        queryGsiPage: (
-          indexName: "GSI1" | "GSI2" | "GSI3",
-          partitionKey: string,
-          options: PagedQueryOptions,
-        ): Promise<QueryPage> => context.table.queryGsiPage(indexName, partitionKey, options),
-      },
-    };
-
-    const counted = await countCasesByField(countingContext, "rgs", "caseStatus");
-    expect(counted.total).toBe(2);
-    expect(baseTableReadCount).toBe(0);
+    const counted = await countCasesByField(context, "rgs", "destinationCountry");
+    expect(counted).toEqual({ counts: { BH: 1 }, total: 1, uncountedCaseIds: [blank.caseId] });
   });
 });
 
 describe("createCase family group fields", () => {
   it("stores groupName, clientEmail and each applicant's refNo", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(context, "rgs", { canonicalName: "Skyline Travels" }, "ops@rgs.test");
     const first = await upsertTraveller(context, "rgs", { fullName: "Rahul Sharma" });
     const second = await upsertTraveller(context, "rgs", { fullName: "Priya Sharma" });
@@ -1196,7 +1007,7 @@ describe("createCase family group fields", () => {
 });
 
 describe("createCase reference uniqueness", () => {
-  async function seedPartnerAndTraveller(context: ReturnType<typeof buildTestContext>) {
+  async function seedPartnerAndTraveller(context: SqlTestContext) {
     const partner = await createPartner(context, "rgs", { canonicalName: "Unique Travels", partnerType: "AGENCY" }, "desk@rgs.local");
     const traveller = await upsertTraveller(context, "rgs", { fullName: "RAVI KUMAR" });
     return { partnerId: partner.partnerId, travellerId: traveller.travellerId };
@@ -1215,7 +1026,7 @@ describe("createCase reference uniqueness", () => {
   }
 
   it("refuses a second case with the same REF, ignoring case and spaces", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const ids = await seedPartnerAndTraveller(context);
     await createCase(context, "rgs", caseInput(ids, "rgs-100"), "desk@rgs.local");
 
@@ -1225,7 +1036,7 @@ describe("createCase reference uniqueness", () => {
   });
 
   it("refuses a REF NO that is another case's REF", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const ids = await seedPartnerAndTraveller(context);
     await createCase(context, "rgs", caseInput(ids, "50001"), "desk@rgs.local");
 
@@ -1235,7 +1046,7 @@ describe("createCase reference uniqueness", () => {
   });
 
   it("lets exactly one of two racing creates win the same REF", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const ids = await seedPartnerAndTraveller(context);
     const outcomes = await Promise.allSettled([
       createCase(context, "rgs", caseInput(ids, "RACE-1"), "desk@rgs.local"),
@@ -1245,19 +1056,634 @@ describe("createCase reference uniqueness", () => {
   });
 
   it("releases its claims when the case write fails, so the REF is not burned", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const ids = await seedPartnerAndTraveller(context);
-    // Fail only the case META write. Claims go through putIfAbsent, so they
-    // still land -- which is exactly the state the rollback must undo.
-    const originalPut = context.table.put.bind(context.table);
-    context.table.put = async (item) => {
-      if (item.SK === "META" && String(item.PK).includes("#CASE#")) throw new Error("dynamo down");
-      return originalPut(item);
+    // Fail only the case write (one transaction). The REF claims are separate
+    // inserts, so they still land -- exactly the state the rollback must undo.
+    const failingContext: SqlTestContext = {
+      ...context,
+      sql: {
+        ...context.sql,
+        transaction: async () => {
+          throw new Error("database down");
+        },
+      },
     };
 
-    await expect(createCase(context, "rgs", caseInput(ids, "BURN-1", "BURN-1-P"), "desk@rgs.local")).rejects.toThrow("dynamo down");
-    context.table.put = originalPut;
+    await expect(
+      createCase(failingContext, "rgs", caseInput(ids, "BURN-1", "BURN-1-P"), "desk@rgs.local"),
+    ).rejects.toThrow("database down");
     expect(await readRefClaim(context, "rgs", "BURN-1")).toBeUndefined();
     expect(await readRefClaim(context, "rgs", "BURN-1-P")).toBeUndefined();
+  });
+});
+
+const TENANT_ID = "rgs";
+const ACTOR = "desk@rgs.local";
+
+/**
+ * Wraps the in-memory Dynamo table so every string argument of every call (the
+ * partition keys, index names and sort keys) is recorded. A mutator that still
+ * touches a case or event partition in Dynamo shows up here, which is a
+ * stronger proof than "the Dynamo table happens to be empty afterwards": a
+ * read that came back empty would not leave a trace in the table.
+ */
+function trackTableAccess(table: SqlTestContext["table"]): { table: SqlTestContext["table"]; touchedKeys: string[] } {
+  const touchedKeys: string[] = [];
+  const tracked = new Proxy(table, {
+    get(target, property, receiver) {
+      const member = Reflect.get(target, property, receiver);
+      if (typeof member !== "function") return member;
+      return (...args: unknown[]) => {
+        for (const arg of args) {
+          if (typeof arg === "string") touchedKeys.push(arg);
+          else if (typeof arg === "object" && arg !== null && typeof (arg as { PK?: unknown }).PK === "string") {
+            touchedKeys.push((arg as { PK: string }).PK);
+          }
+        }
+        return member.apply(target, args);
+      };
+    },
+  });
+  return { table: tracked, touchedKeys };
+}
+
+describe("CRM case mutators on Postgres", () => {
+  let sql: SqlClient;
+  let context: SqlTestContext;
+  let touchedKeys: string[];
+
+  beforeEach(async () => {
+    const baseContext = await buildSqlTestContext();
+    sql = baseContext.sql;
+    const tracking = trackTableAccess(baseContext.table);
+    touchedKeys = tracking.touchedKeys;
+    context = { ...baseContext, table: tracking.table };
+  });
+
+  // Partners, travellers and REF claims live in Postgres too (Task 6): nothing
+  // a case mutator does may reach Dynamo for any of them.
+  async function seedPartnerId(): Promise<string> {
+    const partner = await createPartner(context, TENANT_ID, { canonicalName: "Ozzy Travels" }, ACTOR);
+    return partner.partnerId;
+  }
+
+  async function seedTravellerId(fullName: string): Promise<string> {
+    return (await upsertTraveller(context, TENANT_ID, { fullName })).travellerId;
+  }
+
+  async function seedCase(
+    partnerId: string,
+    caseRef: string,
+    applicantRefs: readonly string[] = [caseRef],
+    overrides: { groupName?: string } = {},
+  ): Promise<crm.CrmCase> {
+    const applicants = [];
+    for (const applicantRef of applicantRefs) {
+      applicants.push({ applicantRef, travellerId: await seedTravellerId(`Traveller ${applicantRef}`) });
+    }
+    const created = await createCase(
+      context,
+      TENANT_ID,
+      {
+        caseRef,
+        caseType: "VISA",
+        partnerId,
+        destinationCountry: "BH",
+        visaType: "EVISA_TOURIST",
+        entryType: "SINGLE",
+        processing: "NORMAL",
+        receivedDate: "2026-01-02",
+        applicants,
+        ...overrides,
+      },
+      ACTOR,
+    );
+    // Events sort by createdAt then eventId (random), so give CASE_CREATED a
+    // tick of its own and every later event a later one.
+    context.advanceClock(1_000);
+    return created;
+  }
+
+  /** Every Dynamo key family a CRM mutator could still reach: case, partner, traveller, REF claim. */
+  const CRM_DYNAMO_KEY_MARKERS = [
+    "#CASE#",
+    "#CASE_STATUS#",
+    "#PARTNER#",
+    "#PARTNERS",
+    "#TRAVELLER#",
+    "#TRAVELLER_NAME#",
+    "#PASSPORT#",
+    "#REF_CLAIM#",
+  ];
+
+  function expectNoDynamoCaseAccess(caseId: string): void {
+    const casePartition = casePartitionKey(TENANT_ID, caseId);
+    expect(touchedKeys.filter((key) => key === casePartition)).toEqual([]);
+    expect(touchedKeys.filter((key) => CRM_DYNAMO_KEY_MARKERS.some((marker) => key.includes(marker)))).toEqual([]);
+  }
+
+  async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
+    const result = await sql.query<{ value: T }>(text, values);
+    return result.rows[0]!.value;
+  }
+
+  it("createCase writes case, applicants and event to Postgres and never touches Dynamo case keys", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377", ["31377-1", "31377-2"]);
+
+    expect(created.caseStatus).toBe("NEW");
+    expect(created.applicants.map((applicant) => applicant.applicantRef)).toEqual(["31377-1", "31377-2"]);
+
+    expect(await scalar<number>("select count(*)::int as value from crm_cases")).toBe(1);
+    expect(await scalar<number>("select count(*)::int as value from crm_applicants")).toBe(2);
+
+    const reread = await readCaseOrThrow(context, TENANT_ID, created.caseId);
+    expect(reread).toEqual(created);
+
+    const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+    expect(events.map((event) => event.eventType)).toEqual(["CASE_CREATED"]);
+    expect(await scalar<number>("select count(*)::int as value from crm_events")).toBe(1);
+
+    // The REF claim is held in crm_ref_claims.
+    expect(await readRefClaim(context, TENANT_ID, "31377")).toBeDefined();
+    expectNoDynamoCaseAccess(created.caseId);
+  });
+
+  it("createCase stamps the Ledger search haystack from crm_travellers into the Postgres row", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "40001");
+    const searchText = await scalar<string | null>("select search_text as value from crm_cases where case_id = $1", [
+      created.caseId,
+    ]);
+    expect(searchText).toContain("traveller 40001");
+  });
+
+  it("createCase for an unknown partner fails before anything is written to Postgres", async () => {
+    const travellerId = await seedTravellerId("Nobody");
+    await expect(
+      createCase(
+        context,
+        TENANT_ID,
+        {
+          caseRef: "50001",
+          caseType: "VISA",
+          partnerId: "partner_missing",
+          destinationCountry: "BH",
+          visaType: "EVISA_TOURIST",
+          receivedDate: "2026-01-02",
+          applicants: [{ applicantRef: "50001", travellerId }],
+        },
+        ACTOR,
+      ),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect(await scalar<number>("select count(*)::int as value from crm_cases")).toBe(0);
+    expect(await scalar<number>("select count(*)::int as value from crm_events")).toBe(0);
+  });
+
+  it("changeCaseStatus moves the Postgres row, records the event and mails the client", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377");
+
+    const moved = await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+
+    expect(moved.caseStatus).toBe("DOCS_UNDER_REVIEW");
+    expect(moved.updatedAt > created.updatedAt).toBe(true);
+    expect(await scalar<string>("select case_status as value from crm_cases where case_id = $1", [created.caseId])).toBe(
+      "DOCS_UNDER_REVIEW",
+    );
+    expect((await readCaseOrThrow(context, TENANT_ID, created.caseId)).caseStatus).toBe("DOCS_UNDER_REVIEW");
+
+    const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+    expect(events.map((event) => event.eventType)).toEqual(["CASE_CREATED", "CASE_STATUS_CHANGED"]);
+    expect(events[1]?.meta).toEqual({ fromStatus: "NEW", toStatus: "DOCS_UNDER_REVIEW" });
+    expectNoDynamoCaseAccess(created.caseId);
+  });
+
+  it("changeCaseStatus refuses an illegal move and leaves the Postgres row alone", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377");
+
+    await expect(changeCaseStatus(context, TENANT_ID, created.caseId, "DECIDED", ACTOR)).resolves.toBeDefined();
+    // DECIDED -> NEW is not a legal edge.
+    await expect(changeCaseStatus(context, TENANT_ID, created.caseId, "NEW", ACTOR)).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect((await readCaseOrThrow(context, TENANT_ID, created.caseId)).caseStatus).toBe("DECIDED");
+    const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+    expect(events.filter((event) => event.eventType === "CASE_STATUS_CHANGED")).toHaveLength(1);
+  });
+
+  it("changeCaseStatus on a case that does not exist is a 404, not a Dynamo fallback", async () => {
+    await expect(changeCaseStatus(context, TENANT_ID, "case_missing", "DOCS_UNDER_REVIEW", ACTOR)).rejects.toMatchObject(
+      { statusCode: 404 },
+    );
+    expectNoDynamoCaseAccess("case_missing");
+  });
+
+  it("updateCaseDetails edits, clears and re-keys fields in Postgres", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377");
+    context.advanceClock(1_000);
+
+    const updated = await updateCaseDetails(
+      context,
+      TENANT_ID,
+      created.caseId,
+      {
+        caseRef: "31377B",
+        destinationCountry: "JP",
+        appointmentDate: "2026-02-01",
+        remarks: "Rush",
+        groupName: "Smith family",
+      },
+      ACTOR,
+    );
+    expect(updated.caseRef).toBe("31377B");
+    expect(updated.destinationCountry).toBe("JP");
+
+    const row = (
+      await sql.query<{ case_ref: string; destination_country: string; appointment_date: string; remarks: string }>(
+        `select case_ref, destination_country, to_char(appointment_date, 'YYYY-MM-DD') as appointment_date, remarks
+           from crm_cases where case_id = $1`,
+        [created.caseId],
+      )
+    ).rows[0];
+    expect(row).toEqual({
+      case_ref: "31377B",
+      destination_country: "JP",
+      appointment_date: "2026-02-01",
+      remarks: "Rush",
+    });
+    // Group name is part of the search haystack too.
+    expect(
+      await scalar<string | null>("select search_text as value from crm_cases where case_id = $1", [created.caseId]),
+    ).toContain("smith family");
+
+    // The REF moved: new one claimed, old one released (in crm_ref_claims).
+    expect(await readRefClaim(context, TENANT_ID, "31377B")).toBeDefined();
+    expect(await readRefClaim(context, TENANT_ID, "31377")).toBeUndefined();
+
+    // null clears the column rather than leaving the old value behind.
+    context.advanceClock(1_000);
+    const cleared = await updateCaseDetails(context, TENANT_ID, created.caseId, { remarks: null }, ACTOR);
+    expect(cleared.remarks).toBeUndefined();
+    expect(await scalar<string | null>("select remarks as value from crm_cases where case_id = $1", [created.caseId])).toBeNull();
+
+    const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+    expect(events.map((event) => event.eventType)).toEqual(["CASE_CREATED", "CASE_UPDATED", "CASE_UPDATED"]);
+    expect(events[1]?.meta["changedFields"]).toBe(
+      "caseRef,destinationCountry,appointmentDate,remarks,groupName",
+    );
+    expectNoDynamoCaseAccess(created.caseId);
+  });
+
+  it("updateCaseDetails with no real change writes nothing new", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377");
+    context.advanceClock(1_000);
+
+    const result = await updateCaseDetails(context, TENANT_ID, created.caseId, { destinationCountry: "BH" }, ACTOR);
+
+    expect(result.updatedAt).toBe(created.updatedAt);
+    expect((await listCaseEvents(context, TENANT_ID, created.caseId)).map((event) => event.eventType)).toEqual([
+      "CASE_CREATED",
+    ]);
+  });
+
+  it("updateCaseDetails collision on a taken REF leaves the Postgres row unchanged", async () => {
+    const partnerId = await seedPartnerId();
+    const first = await seedCase(partnerId, "11111");
+    await seedCase(partnerId, "22222");
+
+    await expect(updateCaseDetails(context, TENANT_ID, first.caseId, { caseRef: "22222" }, ACTOR)).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect((await readCaseOrThrow(context, TENANT_ID, first.caseId)).caseRef).toBe("11111");
+  });
+
+  it("changeBillingStatus persists in Postgres, and PAID plus every passport back closes the case", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377");
+    const applicantRef = created.applicants[0]!.applicantRef;
+
+    // Events sort by createdAt then eventId, so each step gets its own tick.
+    context.advanceClock(1_000);
+    const billed = await changeBillingStatus(context, TENANT_ID, created.caseId, "BILL_SENT", ACTOR);
+    expect(billed.billingStatus).toBe("BILL_SENT");
+    expect(
+      await scalar<string>("select billing_status as value from crm_cases where case_id = $1", [created.caseId]),
+    ).toBe("BILL_SENT");
+
+    context.advanceClock(1_000);
+    await changeApplicantCustody(context, TENANT_ID, created.caseId, applicantRef, "WITH_RGS", ACTOR);
+    context.advanceClock(1_000);
+    await changeApplicantCustody(context, TENANT_ID, created.caseId, applicantRef, "RETURNED", ACTOR);
+    context.advanceClock(1_000);
+    const paid = await changeBillingStatus(context, TENANT_ID, created.caseId, "PAID", ACTOR);
+
+    expect(paid.billingStatus).toBe("PAID");
+    expect(paid.caseStatus).toBe("CLOSED");
+    const stored = await readCaseOrThrow(context, TENANT_ID, created.caseId);
+    expect(stored.caseStatus).toBe("CLOSED");
+    expect(stored.applicants[0]?.custody).toBe("RETURNED");
+    expect(stored.applicants[0]?.custodySince).toBeDefined();
+
+    const eventTypes = (await listCaseEvents(context, TENANT_ID, created.caseId)).map((event) => event.eventType);
+    expect(eventTypes.slice(0, 4)).toEqual(["CASE_CREATED", "BILLING_CHANGED", "CUSTODY_CHANGED", "CUSTODY_CHANGED"]);
+    // The PAID write and the CLOSED it derives share one clock tick, so their
+    // relative order is eventId order (random), as it is on Dynamo.
+    expect(eventTypes.slice(4).sort()).toEqual(["BILLING_CHANGED", "CASE_STATUS_CHANGED"]);
+    expectNoDynamoCaseAccess(created.caseId);
+  });
+
+  it("changeBillingStatus refuses a move the machine does not allow", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377");
+    await expect(changeBillingStatus(context, TENANT_ID, created.caseId, "PAID", ACTOR)).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect((await readCaseOrThrow(context, TENANT_ID, created.caseId)).billingStatus).toBe("UNBILLED");
+  });
+
+  it("changeApplicantOutcome derives DECIDED from applicant outcomes in Postgres", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377");
+    // DECIDED is derived from SUBMITTED onwards.
+    await changeCaseStatus(context, TENANT_ID, created.caseId, "SUBMITTED", ACTOR);
+
+    const decided = await changeApplicantOutcome(
+      context,
+      TENANT_ID,
+      created.caseId,
+      created.applicants[0]!.applicantRef,
+      "APPROVED",
+      ACTOR,
+    );
+
+    expect(decided.applicants[0]?.outcome).toBe("APPROVED");
+    const stored = await readCaseOrThrow(context, TENANT_ID, created.caseId);
+    expect(stored.applicants[0]?.outcome).toBe("APPROVED");
+    expect(stored.caseStatus).toBe(decided.caseStatus);
+    expectNoDynamoCaseAccess(created.caseId);
+  });
+
+  it("addApplicant appends a Postgres applicant row and refreshes the search haystack", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377");
+    const newTravellerId = await seedTravellerId("Priya Nair");
+
+    const updated = await addApplicant(
+      context,
+      TENANT_ID,
+      created.caseId,
+      { travellerId: newTravellerId, passportNumber: "z9999999", refNo: "R-77" },
+      ACTOR,
+    );
+
+    expect(updated.applicants).toHaveLength(2);
+    const added = updated.applicants[1]!;
+    expect(added).toMatchObject({ travellerId: newTravellerId, passportNumber: "Z9999999", refNo: "R-77" });
+    expect(await scalar<number>("select count(*)::int as value from crm_applicants where case_id = $1", [created.caseId])).toBe(2);
+    expect(
+      await scalar<string | null>("select search_text as value from crm_cases where case_id = $1", [created.caseId]),
+    ).toContain("priya nair");
+    expect(await readRefClaim(context, TENANT_ID, "R-77")).toBeDefined();
+
+    const summary = await scalar<{ count: number }>(
+      "select applicant_summary as value from crm_cases where case_id = $1",
+      [created.caseId],
+    );
+    expect(summary.count).toBe(2);
+    expectNoDynamoCaseAccess(created.caseId);
+  });
+
+  it("updateApplicantDetails rewrites the applicant row, the traveller and the search haystack", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377");
+    const applicantRef = created.applicants[0]!.applicantRef;
+
+    const updated = await updateApplicantDetails(
+      context,
+      TENANT_ID,
+      created.caseId,
+      applicantRef,
+      { fullName: "Asha Verma", passportNumber: "n1234567", refNo: "R-1" },
+      ACTOR,
+    );
+
+    expect(updated.applicants[0]).toMatchObject({ passportNumber: "N1234567", refNo: "R-1" });
+    const row = (
+      await sql.query<{ passport_number: string; ref_no: string }>(
+        "select passport_number, ref_no from crm_applicants where case_id = $1 and applicant_ref = $2",
+        [created.caseId, applicantRef],
+      )
+    ).rows[0];
+    expect(row).toEqual({ passport_number: "N1234567", ref_no: "R-1" });
+    // The second writeCase picked up the renamed traveller (crm_travellers) after the edit.
+    const searchText = await scalar<string | null>("select search_text as value from crm_cases where case_id = $1", [
+      created.caseId,
+    ]);
+    expect(searchText).toContain("asha verma");
+    expect(searchText).toContain("n1234567");
+    expect(searchText).not.toContain("traveller 31377");
+
+    const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+    expect(events.at(-1)).toMatchObject({ eventType: "APPLICANT_UPDATED" });
+    expectNoDynamoCaseAccess(created.caseId);
+  });
+
+  it("removeApplicant drops the Postgres applicant row and compacts indexes, and refuses the last one", async () => {
+    const partnerId = await seedPartnerId();
+    const created = await seedCase(partnerId, "31377", ["A1", "A2", "A3"]);
+
+    const updated = await removeApplicant(context, TENANT_ID, created.caseId, "A2", ACTOR);
+
+    expect(updated.applicants.map((applicant) => applicant.applicantRef)).toEqual(["A1", "A3"]);
+    const rows = await sql.query<{ applicant_index: number; applicant_ref: string }>(
+      "select applicant_index, applicant_ref from crm_applicants where case_id = $1 order by applicant_index",
+      [created.caseId],
+    );
+    expect(rows.rows).toEqual([
+      { applicant_index: 0, applicant_ref: "A1" },
+      { applicant_index: 1, applicant_ref: "A3" },
+    ]);
+
+    context.advanceClock(1_000);
+    await removeApplicant(context, TENANT_ID, created.caseId, "A3", ACTOR);
+    await expect(removeApplicant(context, TENANT_ID, created.caseId, "A1", ACTOR)).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect((await readCaseOrThrow(context, TENANT_ID, created.caseId)).applicants).toHaveLength(1);
+
+    const eventTypes = (await listCaseEvents(context, TENANT_ID, created.caseId)).map((event) => event.eventType);
+    expect(eventTypes).toEqual(["CASE_CREATED", "APPLICANT_REMOVED", "APPLICANT_REMOVED"]);
+    expectNoDynamoCaseAccess(created.caseId);
+  });
+});
+
+
+/** A table whose every call throws: proves a Postgres-backed read never reaches Dynamo. */
+function forbidDynamoTable(table: SqlTestContext["table"]): SqlTestContext["table"] {
+  return new Proxy(table, {
+    get(target, property, receiver) {
+      const member = Reflect.get(target, property, receiver);
+      if (typeof member !== "function") return member;
+      return () => {
+        throw new Error(`Dynamo table touched: ${String(property)}`);
+      };
+    },
+  });
+}
+
+describe("CRM case lists / counts / refs on Postgres", () => {
+  let sql: SqlClient;
+  let context: SqlTestContext;
+  let baseContext: SqlTestContext;
+
+  beforeEach(async () => {
+    baseContext = await buildSqlTestContext();
+    sql = baseContext.sql;
+    context = baseContext;
+  });
+
+  async function seedPartnerId(name: string): Promise<string> {
+    return (await createPartner(context, TENANT_ID, { canonicalName: name }, ACTOR)).partnerId;
+  }
+
+  async function seedCase(
+    partnerId: string,
+    caseRef: string,
+    overrides: { destinationCountry?: string; receivedDate?: string } = {},
+  ): Promise<crm.CrmCase> {
+    const travellerId = (await upsertTraveller(context, TENANT_ID, { fullName: `Traveller ${caseRef}` })).travellerId;
+    const created = await createCase(
+      context,
+      TENANT_ID,
+      {
+        caseRef,
+        caseType: "VISA",
+        partnerId,
+        destinationCountry: overrides.destinationCountry ?? "BH",
+        visaType: "EVISA_TOURIST",
+        entryType: "SINGLE",
+        processing: "NORMAL",
+        receivedDate: overrides.receivedDate ?? "2026-01-02",
+        applicants: [{ applicantRef: caseRef, travellerId }],
+      },
+      ACTOR,
+    );
+    context.advanceClock(1_000);
+    return created;
+  }
+
+  /** From here on any Dynamo access is a failure. */
+  function forbidDynamoFromNow(): void {
+    context = { ...context, table: forbidDynamoTable(baseContext.table) };
+  }
+
+  it("listCasesByStatus returns the Postgres cases, newest update first, without touching Dynamo", async () => {
+    const partnerId = await seedPartnerId("Ozzy Travels");
+    const first = await seedCase(partnerId, "10001");
+    const second = await seedCase(partnerId, "10002");
+    const moved = await seedCase(partnerId, "10003");
+    await changeCaseStatus(context, TENANT_ID, moved.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+    forbidDynamoFromNow();
+
+    const listing = await listCasesByStatus(context, TENANT_ID, "NEW");
+
+    expect(listing.unreadableCaseIds).toEqual([]);
+    expect(listing.cases.map((c) => c.caseId)).toEqual([second.caseId, first.caseId]);
+    expect(listing.cases[0]).toEqual(second);
+    const other = await listCasesByStatus(context, TENANT_ID, "DOCS_UNDER_REVIEW");
+    expect(other.cases.map((c) => c.caseId)).toEqual([moved.caseId]);
+  });
+
+  it("listCasesByStatus honours the limit and names an unreadable (applicant-less) row", async () => {
+    const partnerId = await seedPartnerId("Ozzy Travels");
+    const a = await seedCase(partnerId, "10001");
+    const b = await seedCase(partnerId, "10002");
+    const broken = await seedCase(partnerId, "10003");
+    await sql.query("delete from crm_applicants where case_id = $1", [broken.caseId]);
+    forbidDynamoFromNow();
+
+    const limited = await listCasesByStatus(context, TENANT_ID, "NEW", 2);
+    expect(limited.cases.length + limited.unreadableCaseIds.length).toBe(2);
+
+    const all = await listCasesByStatus(context, TENANT_ID, "NEW", 50);
+    expect(all.unreadableCaseIds).toEqual([broken.caseId]);
+    expect(all.cases.map((c) => c.caseId)).toEqual([b.caseId, a.caseId]);
+  });
+
+  it("listCasesByStatus is tenant scoped", async () => {
+    const partnerId = await seedPartnerId("Ozzy Travels");
+    await seedCase(partnerId, "10001");
+    expect((await listCasesByStatus(context, "other-tenant", "NEW")).cases).toEqual([]);
+  });
+
+  it("listCasesByPartner returns that partner's cases, latest received first", async () => {
+    const ozzy = await seedPartnerId("Ozzy Travels");
+    const other = await seedPartnerId("Other Travels");
+    const older = await seedCase(ozzy, "10001", { receivedDate: "2026-01-02" });
+    const newer = await seedCase(ozzy, "10002", { receivedDate: "2026-03-05" });
+    await seedCase(other, "20001");
+    forbidDynamoFromNow();
+
+    const listing = await listCasesByPartner(context, TENANT_ID, ozzy);
+    expect(listing.cases.map((c) => c.caseId)).toEqual([newer.caseId, older.caseId]);
+
+    const limited = await listCasesByPartner(context, TENANT_ID, ozzy, 1);
+    expect(limited.cases.map((c) => c.caseId)).toEqual([newer.caseId]);
+  });
+
+  it("countCasesByField groups by every supported field and totals match", async () => {
+    const ozzy = await seedPartnerId("Ozzy Travels");
+    const other = await seedPartnerId("Other Travels");
+    await seedCase(ozzy, "10001", { destinationCountry: "BH" });
+    await seedCase(ozzy, "10002", { destinationCountry: "JP" });
+    const moved = await seedCase(other, "20001", { destinationCountry: "BH" });
+    await changeCaseStatus(context, TENANT_ID, moved.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+    forbidDynamoFromNow();
+
+    expect(await countCasesByField(context, TENANT_ID, "caseStatus")).toEqual({
+      counts: { NEW: 2, DOCS_UNDER_REVIEW: 1 },
+      total: 3,
+      uncountedCaseIds: [],
+    });
+    expect((await countCasesByField(context, TENANT_ID, "destinationCountry")).counts).toEqual({ BH: 2, JP: 1 });
+    expect((await countCasesByField(context, TENANT_ID, "billingStatus")).counts).toEqual({ UNBILLED: 3 });
+    expect((await countCasesByField(context, TENANT_ID, "partnerId")).counts).toEqual({ [ozzy]: 2, [other]: 1 });
+    expect((await countCasesByField(context, "other-tenant", "caseStatus")).total).toBe(0);
+  });
+
+  it("countCasesByField names a case whose counted field is empty instead of counting it", async () => {
+    const ozzy = await seedPartnerId("Ozzy Travels");
+    await seedCase(ozzy, "10001");
+    const blank = await seedCase(ozzy, "10002");
+    await sql.query("update crm_cases set destination_country = '' where case_id = $1", [blank.caseId]);
+
+    const counted = await countCasesByField(context, TENANT_ID, "destinationCountry");
+    expect(counted).toEqual({ counts: { BH: 1 }, total: 1, uncountedCaseIds: [blank.caseId] });
+  });
+
+  it("listCaseRefsByStatus returns refs without reassembling cases, including applicant-less rows", async () => {
+    const ozzy = await seedPartnerId("Ozzy Travels");
+    const a = await seedCase(ozzy, "10001");
+    const b = await seedCase(ozzy, "10002");
+    // A half-written case (no applicants) still has a ref the importer must know about.
+    await sql.query("delete from crm_applicants where case_id = $1", [b.caseId]);
+    const moved = await seedCase(ozzy, "10003");
+    await changeCaseStatus(context, TENANT_ID, moved.caseId, "DOCS_UNDER_REVIEW", ACTOR);
+    forbidDynamoFromNow();
+
+    const listed = await listCaseRefsByStatus(context, TENANT_ID, "NEW");
+    expect(listed.unreadableCaseIds).toEqual([]);
+    expect(listed.storedCaseRefs).toEqual([
+      { caseRef: "10002", caseId: b.caseId },
+      { caseRef: "10001", caseId: a.caseId },
+    ]);
+
+    const limited = await listCaseRefsByStatus(context, TENANT_ID, "NEW", 1);
+    expect(limited.storedCaseRefs).toEqual([{ caseRef: "10002", caseId: b.caseId }]);
   });
 });

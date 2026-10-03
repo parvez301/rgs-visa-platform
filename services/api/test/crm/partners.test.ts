@@ -1,8 +1,8 @@
 import { crm } from "@rgs/shared";
-import { describe, expect, it, vi } from "vitest";
-import { buildTestContext, type TestContext } from "../helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import type { SqlClient } from "../../src/lib/sql";
 import { CorruptRecordError } from "../../src/lib/errors";
-import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "../../src/domain/crm/keys";
 import {
   createPartner,
   findPartnerByName,
@@ -10,6 +10,8 @@ import {
   listPartners,
   updatePartnerContact,
 } from "../../src/domain/crm/partners";
+
+afterEach(closeSqlTestContexts);
 
 /**
  * Writes a partner item exactly as createPartner does, but without its
@@ -19,59 +21,47 @@ import {
  * recorded first and the partner whose own name it squats came second.
  */
 async function seedPartnerItemDirectly(
-  context: TestContext,
+  context: SqlTestContext,
   tenantId: string,
   canonicalName: string,
   aliases: string[] = [],
 ): Promise<string> {
   const partnerId = `prt_seeded_${canonicalName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
   const canonicalKey = crm.normalizePartnerName(canonicalName).canonicalKey;
-  await context.table.put({
-    PK: partnerPartitionKey(tenantId, partnerId),
-    SK: META_SORT_KEY,
-    GSI1PK: partnerListGsi1Pk(tenantId),
-    GSI1SK: canonicalKey ?? "",
-    tenantId,
-    partnerId,
-    canonicalName,
-    partnerType: "AGENCY",
-    aliases,
-    createdAt: "2026-07-23T10:00:00.000Z",
-  });
+  await context.sql.query(
+    `insert into crm_partners (
+       tenant_id, partner_id, canonical_name, canonical_key, partner_type, aliases,
+       created_at, updated_at
+     ) values ($1, $2, $3, $4, 'AGENCY', $5::jsonb, '2026-07-23T10:00:00.000Z', '2026-07-23T10:00:00.000Z')`,
+    [tenantId, partnerId, canonicalName, canonicalKey ?? null, JSON.stringify(aliases)],
+  );
   return partnerId;
 }
 
 /**
- * Writes a partner row that is indexed exactly like a real one — the list and
- * the name lookup both reach it — but whose body no longer satisfies
- * PartnerSchema: partnerType is gone. createPartner cannot produce this; a
- * half-written row, a hand-repair, or an importer writing an older shape can,
- * and the migration importer is about to create partners from 7,157 rows of
- * free-text spreadsheet names.
+ * Writes a partner row that the list and the name lookup both reach but whose
+ * body no longer satisfies PartnerSchema: partner_type is NULL.
+ * createPartner cannot produce this; a half-written row, a hand-repair, or an
+ * importer writing an older shape can.
  */
 async function seedUnparseablePartnerItem(
-  context: TestContext,
+  context: SqlTestContext,
   tenantId: string,
   canonicalName: string,
   partnerId = "prt_half_written",
 ): Promise<string> {
-  await context.table.put({
-    PK: partnerPartitionKey(tenantId, partnerId),
-    SK: META_SORT_KEY,
-    GSI1PK: partnerListGsi1Pk(tenantId),
-    GSI1SK: crm.normalizePartnerName(canonicalName).canonicalKey ?? "",
-    tenantId,
-    partnerId,
-    canonicalName,
-    aliases: [],
-    createdAt: "2026-07-23T10:00:00.000Z",
-  });
+  await context.sql.query(
+    `insert into crm_partners (
+       tenant_id, partner_id, canonical_name, canonical_key, aliases, created_at, updated_at
+     ) values ($1, $2, $3, $4, '[]'::jsonb, '2026-07-23T10:00:00.000Z', '2026-07-23T10:00:00.000Z')`,
+    [tenantId, partnerId, canonicalName, crm.normalizePartnerName(canonicalName).canonicalKey ?? null],
+  );
   return partnerId;
 }
 
 describe("crm partners", () => {
   it("creates a partner with the type the shared normalizer inferred", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(
       context,
       "rgs",
@@ -87,7 +77,7 @@ describe("crm partners", () => {
   });
 
   it("finds an existing partner through a different spelling", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await createPartner(context, "rgs", { canonicalName: "VWI Mumbai" }, "ops@rgs.test");
     // "VWI BOM" folds to the same canonical key — this is what stops the
     // migration creating one partner per spelling.
@@ -97,7 +87,7 @@ describe("crm partners", () => {
   });
 
   it("refuses a second partner that folds to the same canonical key", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const existing = await createPartner(
       context,
       "rgs",
@@ -123,7 +113,7 @@ describe("crm partners", () => {
   });
 
   it("lets a second tenant use a canonical key the first tenant already holds", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await createPartner(context, "rgs", { canonicalName: "VWI Mumbai" }, "ops@rgs.test");
     const otherTenantPartner = await createPartner(
       context,
@@ -140,7 +130,7 @@ describe("crm partners", () => {
   // "Ozzy". The migration importer resolves partner names across 7,157
   // spreadsheet rows, where collapsing aliases is the entire point.
   it("finds a partner through one of its recorded aliases", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const ozzy = await createPartner(
       context,
       "rgs",
@@ -153,7 +143,7 @@ describe("crm partners", () => {
   });
 
   it("normalizes an alias the same way it normalizes the canonical name", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const ozzy = await createPartner(
       context,
       "rgs",
@@ -168,7 +158,7 @@ describe("crm partners", () => {
   });
 
   it("refuses a new partner whose name collides with an existing alias", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const existing = await createPartner(
       context,
       "rgs",
@@ -193,7 +183,7 @@ describe("crm partners", () => {
   // "VWI" as an alias.
   describe("an exact canonical name always beats another partner's alias", () => {
     it("wins when the alias holder sorts ahead of it in the partner index", async () => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const ozzy = await createPartner(
         context,
         "rgs",
@@ -213,7 +203,7 @@ describe("crm partners", () => {
     });
 
     it("wins when the alias holder sorts behind it in the partner index", async () => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const ozzy = await createPartner(
         context,
         "rgs",
@@ -236,7 +226,7 @@ describe("crm partners", () => {
     });
 
     it("wins even when the alias holder was recorded first", async () => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const aliasSquatter = await createPartner(
         context,
         "rgs",
@@ -253,7 +243,7 @@ describe("crm partners", () => {
     });
 
     it("still falls back to the alias when no partner carries that canonical name", async () => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const aliasSquatter = await createPartner(
         context,
         "rgs",
@@ -268,7 +258,7 @@ describe("crm partners", () => {
   });
 
   it("keeps one tenant's aliases from matching another tenant's lookup", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await createPartner(
       context,
       "rgs",
@@ -279,7 +269,7 @@ describe("crm partners", () => {
   });
 
   it("records the creating admin's email and reads it back", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(
       context,
       "rgs",
@@ -296,7 +286,7 @@ describe("crm partners", () => {
   });
 
   it("omits createdByEmail for an admin token that carries no email claim", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     // router.ts defaults a missing `email` claim to "", and "" is not an author.
     const partner = await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "");
     expect(partner.createdByEmail).toBeUndefined();
@@ -304,12 +294,12 @@ describe("crm partners", () => {
   });
 
   it("returns undefined when no partner matches", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     expect(await findPartnerByName(context, "rgs", "Nobody Travels")).toBeUndefined();
   });
 
   it("lists partners for the tenant", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "ops@rgs.test");
     await createPartner(context, "rgs", { canonicalName: "Luxe Escape" }, "ops@rgs.test");
     const listed = await listPartners(context, "rgs");
@@ -322,7 +312,7 @@ describe("crm partners", () => {
   });
 
   it("keeps one tenant's partners out of another's list", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "ops@rgs.test");
     expect(await listPartners(context, "other-tenant")).toEqual({
       partners: [],
@@ -337,7 +327,7 @@ describe("crm partners", () => {
   // removed here, which is how this class of bug stayed hidden twice already.
   describe("a stored partner record that no longer parses", () => {
     it("surfaces as a typed 409 from the name lookup, naming the bad field", async () => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const partnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
 
       const nameLookup = findPartnerByName(context, "rgs", "Ozzy Travels");
@@ -352,7 +342,7 @@ describe("crm partners", () => {
     });
 
     it("surfaces as a typed 409 from the single-partner read", async () => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const partnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
 
       const singleRead = getPartnerOrThrow(context, "rgs", partnerId);
@@ -365,33 +355,13 @@ describe("crm partners", () => {
         code: "CORRUPT_RECORD",
       });
     });
-
-    it("names an unreadable row by its storage key when the body lost its partnerId", async () => {
-      const context = buildTestContext();
-      const partitionKey = partnerPartitionKey("rgs", "prt_lost_its_id");
-      await context.table.put({
-        PK: partitionKey,
-        SK: META_SORT_KEY,
-        GSI1PK: partnerListGsi1Pk("rgs"),
-        GSI1SK: crm.normalizePartnerName("Ozzy Travels").canonicalKey ?? "",
-        tenantId: "rgs",
-        canonicalName: "Ozzy Travels",
-        createdAt: "2026-07-23T10:00:00.000Z",
-      });
-
-      // String(item.partnerId) would report the literal id "undefined", which
-      // finds no row at all. The storage key is the handle that still works.
-      await expect(
-        getPartnerOrThrow(context, "rgs", "prt_lost_its_id"),
-      ).rejects.toThrow(partitionKey);
-    });
   });
 
   // --- One corrupt partner row must not take the whole list down. ---
   // The same blast radius the case queue was already fixed for: one bad
   // partition 500'd GET /crm/cases?status=NEW for the entire tenant.
   it("still lists the healthy partners when one stored row will not parse", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const healthy = await createPartner(
       context,
       "rgs",
@@ -410,7 +380,7 @@ describe("crm partners", () => {
   });
 
   it("warns with the id of the partner row it had to skip", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await createPartner(context, "rgs", { canonicalName: "Luxe Escape" }, "ops@rgs.test");
     const corruptPartnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
 
@@ -429,7 +399,7 @@ describe("crm partners", () => {
   });
 
   it("keeps listing when every row in the tenant is corrupt", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const firstCorruptId = await seedUnparseablePartnerItem(
       context,
       "rgs",
@@ -453,14 +423,14 @@ describe("crm partners", () => {
   });
 
   it("throws a 404 for a partner that does not exist", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(getPartnerOrThrow(context, "rgs", "nope")).rejects.toMatchObject({
       statusCode: 404,
     });
   });
 
   it("accepts an explicit partner type and aliases", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(
       context,
       "rgs",
@@ -472,7 +442,7 @@ describe("crm partners", () => {
   });
 
   it("stores contact details when they are supplied and reads them back", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(
       context,
       "rgs",
@@ -496,7 +466,7 @@ describe("crm partners", () => {
 
   describe("updatePartnerContact", () => {
     it("sets the contact email on a partner created without one, leaving everything else intact", async () => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const created = await createPartner(context, "rgs", { canonicalName: "Skyline Travels", aliases: ["Skyline"] }, "ops@rgs.test");
 
       const updated = await updatePartnerContact(context, "rgs", created.partnerId, { contactEmail: "desk@skyline.test" });
@@ -510,7 +480,7 @@ describe("crm partners", () => {
     });
 
     it("clears a contact field when given null and leaves an omitted field alone", async () => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const created = await createPartner(
         context,
         "rgs",
@@ -525,10 +495,160 @@ describe("crm partners", () => {
     });
 
     it("404s for a partner that does not exist", async () => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       await expect(
         updatePartnerContact(context, "rgs", "prt_missing", { contactEmail: "x@y.test" }),
       ).rejects.toMatchObject({ statusCode: 404 });
     });
+  });
+});
+
+const TENANT_ID = "rgs";
+const ACTOR = "desk@rgs.local";
+
+describe("partners on Postgres (SQL row assertions)", () => {
+  let context: SqlTestContext;
+  let sql: SqlClient;
+
+  async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
+    const result = await sql.query<{ value: T }>(text, values);
+    return result.rows[0]!.value;
+  }
+
+  beforeEach(async () => {
+    context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    sql = context.sql;
+  });
+
+  it("creates a partner row and reads it back identically, without touching Dynamo", async () => {
+    const created = await createPartner(
+      context,
+      TENANT_ID,
+      { canonicalName: "Ozzy Travels", aliases: ["Ozzy"], notes: "VIP", contactPhone: "+9715550100" },
+      ACTOR,
+    );
+
+    expect(await scalar<number>("select count(*)::int as value from crm_partners")).toBe(1);
+    expect(await scalar<string>("select canonical_key as value from crm_partners")).toBe(
+      "OZZY TRAVELS",
+    );
+    expect(await getPartnerOrThrow(context, TENANT_ID, created.partnerId)).toEqual(created);
+    expect(created).toMatchObject({ aliases: ["Ozzy"], notes: "VIP", createdByEmail: ACTOR });
+  });
+
+  it("refuses a second partner on the same canonical name, or on an existing alias, with 409", async () => {
+    await createPartner(context, TENANT_ID, { canonicalName: "Ozzy Travels", aliases: ["Ozzy"] }, ACTOR);
+
+    await expect(
+      createPartner(context, TENANT_ID, { canonicalName: "OZZY  TRAVELS" }, ACTOR),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await expect(
+      createPartner(context, TENANT_ID, { canonicalName: "Ozzy" }, ACTOR),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(await scalar<number>("select count(*)::int as value from crm_partners")).toBe(1);
+  });
+
+  it("scopes partners to their tenant", async () => {
+    await createPartner(context, "tenant_a", { canonicalName: "Ozzy Travels" }, ACTOR);
+    const other = await createPartner(context, "tenant_b", { canonicalName: "Ozzy Travels" }, ACTOR);
+
+    expect((await listPartners(context, "tenant_b")).partners.map((partner) => partner.partnerId)).toEqual([
+      other.partnerId,
+    ]);
+    expect(await findPartnerByName(context, "tenant_c", "Ozzy Travels")).toBeUndefined();
+  });
+
+  it("lists partners in canonical-name order", async () => {
+    await createPartner(context, TENANT_ID, { canonicalName: "Zeta Tours" }, ACTOR);
+    await createPartner(context, TENANT_ID, { canonicalName: "Alpha Tours" }, ACTOR);
+
+    const listing = await listPartners(context, TENANT_ID);
+    expect(listing.partners.map((partner) => partner.canonicalName)).toEqual(["Alpha Tours", "Zeta Tours"]);
+    expect(listing.unreadablePartnerIds).toEqual([]);
+  });
+
+  it("finds a partner by canonical name or alias, and the real name beats an alias squatter", async () => {
+    const squatter = await createPartner(
+      context,
+      TENANT_ID,
+      { canonicalName: "Aaa Travel", aliases: ["Ozzy Travels"] },
+      ACTOR,
+    );
+    // createPartner refuses the name an alias already holds, so the real
+    // partner is inserted the way an importer-era row would exist.
+    await sql.query(
+      `insert into crm_partners (tenant_id, partner_id, canonical_name, canonical_key, partner_type, created_at, updated_at)
+       values ($1, 'prt_real', 'Ozzy Travels', 'OZZY TRAVELS', 'AGENCY', now(), now())`,
+      [TENANT_ID],
+    );
+
+    expect((await findPartnerByName(context, TENANT_ID, "ozzy travels"))?.partnerId).toBe("prt_real");
+    expect((await findPartnerByName(context, TENANT_ID, "Aaa Travel"))?.partnerId).toBe(squatter.partnerId);
+    expect(await findPartnerByName(context, TENANT_ID, "Nobody Ltd")).toBeUndefined();
+  });
+
+  it("derives the canonical key at match time for rows that have none (Phase A backfill)", async () => {
+    await sql.query(
+      `insert into crm_partners (tenant_id, partner_id, canonical_name, partner_type, updated_at)
+       values ($1, 'prt_legacy', 'Legacy Travel', 'AGENCY', '2026-03-01T08:00:00Z')`,
+      [TENANT_ID],
+    );
+
+    const found = await findPartnerByName(context, TENANT_ID, "LEGACY  travel");
+    expect(found?.partnerId).toBe("prt_legacy");
+    // created_at is absent on such rows: it falls back to updated_at.
+    expect(found?.createdAt).toBe("2026-03-01T08:00:00.000Z");
+  });
+
+  it("names a partner row that will not parse instead of failing the whole list", async () => {
+    await createPartner(context, TENANT_ID, { canonicalName: "Good Travel" }, ACTOR);
+    await sql.query(
+      `insert into crm_partners (tenant_id, partner_id, canonical_name, canonical_key, updated_at)
+       values ($1, 'prt_half_written', 'Half Written', 'HALF WRITTEN', now())`,
+      [TENANT_ID],
+    );
+
+    const listing = await listPartners(context, TENANT_ID);
+    expect(listing.partners.map((partner) => partner.canonicalName)).toEqual(["Good Travel"]);
+    expect(listing.unreadablePartnerIds).toEqual(["prt_half_written"]);
+    await expect(getPartnerOrThrow(context, TENANT_ID, "prt_half_written")).rejects.toMatchObject({
+      statusCode: 409,
+    });
+  });
+
+  it("updates contact fields, clears with null, and leaves name and aliases alone", async () => {
+    const created = await createPartner(
+      context,
+      TENANT_ID,
+      { canonicalName: "Ozzy Travels", aliases: ["Ozzy"], contactPhone: "+9715550100" },
+      ACTOR,
+    );
+    context.advanceClock(60_000);
+
+    const updated = await updatePartnerContact(context, TENANT_ID, created.partnerId, {
+      contactEmail: "ops@ozzy.example",
+      contactPhone: null,
+      contactWhatsapp: "+9715550101",
+    });
+
+    expect(updated).toEqual({
+      ...created,
+      contactEmail: "ops@ozzy.example",
+      contactWhatsapp: "+9715550101",
+      contactPhone: undefined,
+    });
+    expect(await getPartnerOrThrow(context, TENANT_ID, created.partnerId)).toEqual(updated);
+    expect(await scalar<string | null>("select contact_phone as value from crm_partners")).toBeNull();
+    expect((await findPartnerByName(context, TENANT_ID, "Ozzy"))?.partnerId).toBe(created.partnerId);
+    expect(await scalar<boolean>("select updated_at > created_at as value from crm_partners")).toBe(true);
+  });
+
+  it("answers 404 for an unknown partner on read and on contact update", async () => {
+    await expect(getPartnerOrThrow(context, TENANT_ID, "prt_missing")).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(
+      updatePartnerContact(context, TENANT_ID, "prt_missing", { contactEmail: "a@b.example" }),
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 });

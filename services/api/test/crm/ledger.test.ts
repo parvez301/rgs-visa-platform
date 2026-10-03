@@ -1,19 +1,378 @@
 import { crm } from "@rgs/shared";
-import { describe, expect, it } from "vitest";
-import { buildTestContext, type TestContext } from "../helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../src/lib/errors";
+import type { SqlClient } from "../../src/lib/sql";
 import { writeCase } from "../../src/domain/crm/caseStore";
-import {
-  DEFAULT_LEDGER_PAGE_LIMIT,
-  LEDGER_PROJECTED_ATTRIBUTES,
-  listLedgerRows,
-} from "../../src/domain/crm/ledger";
-import { casePartitionKey, META_SORT_KEY } from "../../src/domain/crm/keys";
+import { listLedgerRowsFromPostgres } from "../../src/domain/crm/ledgerPostgres";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 
-const TENANT_ID = "rgs";
+afterEach(closeSqlTestContexts);
+
+const APPLICANT_SUMMARY = { count: 1, custody: { WITH_RGS: 1 }, outcome: { PENDING: 1 } };
+
+interface SeedCase {
+  caseId: string;
+  caseRef?: string;
+  partnerId?: string;
+  destinationCountry?: string;
+  caseType?: string;
+  caseStatus?: string;
+  billingStatus?: string;
+  receivedDate?: string;
+  appointmentDate?: string | null;
+  expectedCollectionDate?: string | null;
+  searchText?: string | null;
+  tenantId?: string;
+}
+
+async function seedCase(sql: SqlClient, seed: SeedCase): Promise<void> {
+  await sql.query(
+    `insert into crm_cases (
+       tenant_id, case_id, case_ref, partner_id, destination_country, case_type,
+       visa_type, group_name, case_status, billing_status, received_date,
+       appointment_date, expected_collection_date, total_inr, updated_at,
+       applicant_summary, search_text
+     ) values ($1,$2,$3,$4,$5,$6,null,null,$7,$8,$9,$10,$11,1500,'2026-03-04T10:00:00.000Z',$12,$13)`,
+    [
+      seed.tenantId ?? "rgs",
+      seed.caseId,
+      seed.caseRef ?? `RGS-${seed.caseId}`,
+      seed.partnerId ?? "partner_1",
+      seed.destinationCountry ?? "AE",
+      seed.caseType ?? "VISA",
+      seed.caseStatus ?? "NEW",
+      seed.billingStatus ?? "UNKNOWN",
+      seed.receivedDate ?? "2026-03-04",
+      seed.appointmentDate ?? null,
+      seed.expectedCollectionDate ?? null,
+      JSON.stringify(APPLICANT_SUMMARY),
+      seed.searchText ?? null,
+    ],
+  );
+}
+
+async function seedPartner(sql: SqlClient, partnerId: string, canonicalName: string): Promise<void> {
+  await sql.query(
+    `insert into crm_partners (tenant_id, partner_id, canonical_name, contact_email, updated_at)
+     values ('rgs', $1, $2, null, '2026-03-01T08:00:00.000Z')`,
+    [partnerId, canonicalName],
+  );
+}
+
+async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the promise to reject");
+}
+
+describe("listLedgerRowsFromPostgres", () => {
+  let context: SqlTestContext;
+  let sql: SqlClient;
+
+  beforeEach(async () => {
+    context = await buildSqlTestContext();
+    sql = context.sql;
+    await seedPartner(sql, "partner_1", "Acme Travel");
+    await seedPartner(sql, "partner_2", "Zenith Visas");
+    await seedCase(sql, {
+      caseId: "case_a",
+      caseRef: "RGS-1001",
+      partnerId: "partner_1",
+      destinationCountry: "AE",
+      caseStatus: "NEW",
+      billingStatus: "UNBILLED",
+      receivedDate: "2026-03-01",
+      appointmentDate: "2026-04-01",
+      searchText: "asha rao m1234567",
+    });
+    await seedCase(sql, {
+      caseId: "case_b",
+      caseRef: "RGS-1002",
+      partnerId: "partner_2",
+      destinationCountry: "GB",
+      caseType: "ATTESTATION",
+      caseStatus: "SUBMITTED",
+      billingStatus: "PAID",
+      receivedDate: "2026-03-02",
+      expectedCollectionDate: "2026-05-10",
+      searchText: "bilal khan k7654321",
+    });
+    await seedCase(sql, {
+      caseId: "case_c",
+      caseRef: "RGS-1003",
+      partnerId: "partner_1",
+      destinationCountry: "GB",
+      caseStatus: "SUBMITTED",
+      billingStatus: "PAID",
+      receivedDate: "2026-03-03",
+    });
+  });
+
+  it("returns every row of the tenant newest first, mapped through LedgerRowSchema", async () => {
+    const page = await listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 10 });
+
+    expect(page.rows.map((row) => row.caseId)).toEqual(["case_c", "case_b", "case_a"]);
+    expect(page.unreadableCaseIds).toEqual([]);
+    expect(page.nextCursor).toBeUndefined();
+    expect(page.rows[2]).toEqual({
+      caseId: "case_a",
+      caseRef: "RGS-1001",
+      partnerId: "partner_1",
+      destinationCountry: "AE",
+      caseType: "VISA",
+      caseStatus: "NEW",
+      billingStatus: "UNBILLED",
+      receivedDate: "2026-03-01",
+      appointmentDate: "2026-04-01",
+      totalInr: 1500,
+      updatedAt: "2026-03-04T10:00:00.000Z",
+      applicantSummary: APPLICANT_SUMMARY,
+      searchText: "asha rao m1234567",
+    });
+  });
+
+  it("does not return another tenant's rows", async () => {
+    await seedCase(sql, { caseId: "other_tenant_case", tenantId: "other" });
+    const page = await listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 10 });
+    expect(page.rows.map((row) => row.caseId)).not.toContain("other_tenant_case");
+  });
+
+  it("combines status, partner and destination country filters", async () => {
+    const page = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: ["SUBMITTED"],
+      partnerId: "partner_1",
+      destinationCountry: "GB",
+      limit: 10,
+    });
+    expect(page.rows.map((row) => row.caseId)).toEqual(["case_c"]);
+  });
+
+  it("combines case type, billing status and date-on filters", async () => {
+    const byType = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: [],
+      caseType: "ATTESTATION",
+      billingStatuses: ["PAID", "PART_PAID"],
+      limit: 10,
+    });
+    expect(byType.rows.map((row) => row.caseId)).toEqual(["case_b"]);
+
+    const byAppointment = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: [],
+      appointmentDateOn: "2026-04-01",
+      limit: 10,
+    });
+    expect(byAppointment.rows.map((row) => row.caseId)).toEqual(["case_a"]);
+
+    const byCollection = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: [],
+      expectedCollectionDateOn: "2026-05-10",
+      limit: 10,
+    });
+    expect(byCollection.rows.map((row) => row.caseId)).toEqual(["case_b"]);
+  });
+
+  it("searches case_ref, search_text and the joined partner canonical_name, case-insensitively", async () => {
+    const searchIds = async (search: string) =>
+      (await listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], search, limit: 10 })).rows.map(
+        (row) => row.caseId,
+      );
+
+    expect(await searchIds("rgs-1002")).toEqual(["case_b"]);
+    expect(await searchIds("M1234567")).toEqual(["case_a"]);
+    expect(await searchIds("zenith")).toEqual(["case_b"]);
+    expect(await searchIds("acme")).toEqual(["case_c", "case_a"]);
+    expect(await searchIds("no-such-thing")).toEqual([]);
+  });
+
+  it("treats LIKE metacharacters in the search literally", async () => {
+    const page = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: [],
+      search: "%",
+      limit: 10,
+    });
+    expect(page.rows).toEqual([]);
+  });
+
+  it("combines search with the other filters", async () => {
+    const page = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: ["NEW"],
+      search: "acme",
+      limit: 10,
+    });
+    expect(page.rows.map((row) => row.caseId)).toEqual(["case_a"]);
+  });
+
+  it("pages with a keyset cursor without skipping or repeating a row", async () => {
+    const firstPage = await listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 2 });
+    expect(firstPage.rows.map((row) => row.caseId)).toEqual(["case_c", "case_b"]);
+    expect(firstPage.nextCursor).toBeDefined();
+
+    const secondPage = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: [],
+      limit: 2,
+      cursor: firstPage.nextCursor!,
+    });
+    expect(secondPage.rows.map((row) => row.caseId)).toEqual(["case_a"]);
+    expect(secondPage.nextCursor).toBeUndefined();
+  });
+
+  it("breaks received_date ties on case_id descending", async () => {
+    await seedCase(sql, { caseId: "case_d", receivedDate: "2026-03-03" });
+    const firstPage = await listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 2 });
+    expect(firstPage.rows.map((row) => row.caseId)).toEqual(["case_d", "case_c"]);
+    const secondPage = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: [],
+      limit: 2,
+      cursor: firstPage.nextCursor!,
+    });
+    expect(secondPage.rows.map((row) => row.caseId)).toEqual(["case_b", "case_a"]);
+  });
+
+  it("accepts the same filters in a different order against one cursor", async () => {
+    const firstPage = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: ["SUBMITTED", "NEW"],
+      limit: 1,
+    });
+    const secondPage = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: ["NEW", "SUBMITTED", "NEW"],
+      limit: 1,
+      cursor: firstPage.nextCursor!,
+    });
+    expect(secondPage.rows.map((row) => row.caseId)).toEqual(["case_b"]);
+  });
+
+  it("refuses an undecodable cursor with a 400", async () => {
+    const error = await rejectionOf(
+      listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 10, cursor: "not-a-cursor" }),
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ statusCode: 400, message: "This ledger cursor could not be read" });
+  });
+
+  it("refuses a cursor issued for a different filter with a 400", async () => {
+    const firstPage = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: ["SUBMITTED"],
+      limit: 1,
+    });
+    const error = await rejectionOf(
+      listLedgerRowsFromPostgres(sql, "rgs", {
+        statuses: ["NEW"],
+        limit: 1,
+        cursor: firstPage.nextCursor!,
+      }),
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/issued for a different filter/),
+    });
+
+    const searchChanged = await rejectionOf(
+      listLedgerRowsFromPostgres(sql, "rgs", {
+        statuses: ["SUBMITTED"],
+        search: "acme",
+        limit: 1,
+        cursor: firstPage.nextCursor!,
+      }),
+    );
+    expect(searchChanged).toMatchObject({ statusCode: 400 });
+  });
+
+  it("names a row that fails LedgerRowSchema instead of dropping or throwing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await seedCase(sql, { caseId: "case_bad", caseType: "BOGUS", receivedDate: "2026-03-05" });
+
+      const page = await listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 10 });
+
+      expect(page.unreadableCaseIds).toEqual(["case_bad"]);
+      expect(page.rows.map((row) => row.caseId)).toEqual(["case_c", "case_b", "case_a"]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not repeat an unreadable last row on the next page", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await seedCase(sql, { caseId: "case_bad", caseType: "BOGUS", receivedDate: "2026-03-05" });
+
+      const firstPage = await listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 2 });
+      expect(firstPage.unreadableCaseIds).toEqual(["case_bad"]);
+      expect(firstPage.rows.map((row) => row.caseId)).toEqual(["case_c"]);
+
+      const secondPage = await listLedgerRowsFromPostgres(sql, "rgs", {
+        statuses: [],
+        limit: 2,
+        cursor: firstPage.nextCursor!,
+      });
+      expect(secondPage.unreadableCaseIds).toEqual([]);
+      expect(secondPage.rows.map((row) => row.caseId)).toEqual(["case_b", "case_a"]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("rejects a non-positive limit and a malformed date filter with a 400", async () => {
+    expect(
+      await rejectionOf(listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 0 })),
+    ).toMatchObject({ statusCode: 400 });
+    expect(
+      await rejectionOf(
+        listLedgerRowsFromPostgres(sql, "rgs", {
+          statuses: [],
+          limit: 10,
+          appointmentDateOn: "04/01/2026",
+        }),
+      ),
+    ).toMatchObject({ statusCode: 400 });
+  });
+
+  it.each(["2026-13-45", "2026-02-30", "2026-00-10", "2026-04-31", "0000-01-01"])(
+    "rejects the impossible date %s with a 400, not a Postgres error",
+    async (impossibleDate) => {
+      for (const filterName of ["appointmentDateOn", "expectedCollectionDateOn"] as const) {
+        const error = await rejectionOf(
+          listLedgerRowsFromPostgres(sql, "rgs", {
+            statuses: [],
+            limit: 10,
+            [filterName]: impossibleDate,
+          }),
+        );
+        expect(error).toBeInstanceOf(ApiError);
+        expect(error).toMatchObject({ statusCode: 400 });
+      }
+    },
+  );
+
+  it("accepts a real leap day", async () => {
+    const page = await listLedgerRowsFromPostgres(sql, "rgs", {
+      statuses: [],
+      limit: 10,
+      appointmentDateOn: "2028-02-29",
+    });
+    expect(page.rows).toEqual([]);
+  });
+
+  it("refuses a well-formed cursor carrying an impossible receivedDate with the unreadable-cursor 400", async () => {
+    const forged = Buffer.from(
+      JSON.stringify({ v: 1, scopeKey: "x", receivedDate: "2026-13-45", caseId: "case_a" }),
+      "utf8",
+    ).toString("base64url");
+    const error = await rejectionOf(
+      listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], limit: 10, cursor: forged }),
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ statusCode: 400, message: "This ledger cursor could not be read" });
+  });
+});
 
 function buildCase(overrides: Partial<crm.CrmCase> & { caseId: string }): crm.CrmCase {
   return crm.CrmCaseSchema.parse({
-    tenantId: TENANT_ID,
+    tenantId: "rgs",
     caseRef: `RGS-${overrides.caseId}`,
     caseType: "VISA",
     visaType: "TOURIST",
@@ -30,36 +389,35 @@ function buildCase(overrides: Partial<crm.CrmCase> & { caseId: string }): crm.Cr
   });
 }
 
-async function seedCases(context: TestContext, cases: crm.CrmCase[]): Promise<void> {
-  for (const crmCase of cases) await writeCase(context, crmCase);
-}
+describe("listLedgerRowsFromPostgres over cases written through writeCase", () => {
+  let context: SqlTestContext;
 
-describe("listLedgerRows", () => {
+  beforeEach(async () => {
+    context = await buildSqlTestContext();
+  });
+
+  async function seedCases(cases: crm.CrmCase[]): Promise<void> {
+    for (const crmCase of cases) await writeCase(context, crmCase);
+  }
+
   it("projects only the Ledger's own columns", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [
+    await seedCases([
       buildCase({ caseId: "case_1", legacyRaw: { STATUS: "the whole original spreadsheet row" } }),
     ]);
 
-    const page = await listLedgerRows(context, TENANT_ID, {
+    const page = await listLedgerRowsFromPostgres(context.sql, "rgs", {
       statuses: [...crm.CASE_STATUSES],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
+      limit: 500,
     });
 
     expect(page.rows).toHaveLength(1);
     expect(page.rows[0]).toMatchObject({ caseRef: "RGS-case_1", caseStatus: "NEW", totalInr: 12000 });
-    // Both halves asserted: the columns are right AND the two heavy
-    // attributes are gone. Checking only the first would pass against a
-    // route that returned whole cases.
     expect(page.rows[0]).not.toHaveProperty("legacyRaw");
     expect(page.rows[0]).not.toHaveProperty("lineItems");
-    expect(LEDGER_PROJECTED_ATTRIBUTES).not.toContain("legacyRaw");
-    expect(LEDGER_PROJECTED_ATTRIBUTES).not.toContain("lineItems");
   });
 
   it("projects expectedCollectionDate when the case carries one", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [
+    await seedCases([
       buildCase({
         caseId: "case_collect",
         expectedCollectionDate: "2026-09-22",
@@ -67,10 +425,7 @@ describe("listLedgerRows", () => {
       }),
     ]);
 
-    const page = await listLedgerRows(context, TENANT_ID, {
-      statuses: [...crm.CASE_STATUSES],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
-    });
+    const page = await listLedgerRowsFromPostgres(context.sql, "rgs", { statuses: [], limit: 500 });
 
     expect(page.rows[0]).toMatchObject({
       caseId: "case_collect",
@@ -79,47 +434,22 @@ describe("listLedgerRows", () => {
     });
   });
 
-  it("projects groupName when the case carries one, and carries no groupName key when it does not (F1)", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [
+  it("projects groupName when the case carries one, and no groupName key when it does not", async () => {
+    await seedCases([
       buildCase({ caseId: "case_grouped", groupName: "Sharma Family" }),
       buildCase({ caseId: "case_solo" }),
     ]);
 
-    const page = await listLedgerRows(context, TENANT_ID, {
-      statuses: [...crm.CASE_STATUSES],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
-    });
+    const page = await listLedgerRowsFromPostgres(context.sql, "rgs", { statuses: [], limit: 500 });
 
-    const groupedCaseRow = page.rows.find((row) => row.caseId === "case_grouped");
-    const solitaryCaseRow = page.rows.find((row) => row.caseId === "case_solo");
-    expect(groupedCaseRow?.groupName).toBe("Sharma Family");
-    expect(solitaryCaseRow).not.toHaveProperty("groupName");
-  });
-
-  it("guards that every LedgerRowSchema field is requested by the DynamoDB projection (F1)", () => {
-    // A field added to LedgerRowSchema without a matching entry in
-    // LEDGER_PROJECTED_ATTRIBUTES is silently dropped by DynamoDB's
-    // ProjectionExpression -- the exact bug this guards against (groupName
-    // shipped on the schema but not the projection). If a future field is
-    // legitimately derived rather than stored on the META item, exclude it
-    // here by name with a comment saying why.
-    const schemaFieldNames = Object.keys(crm.LedgerRowSchema.shape);
-    const projectedFieldNames = new Set(LEDGER_PROJECTED_ATTRIBUTES);
-    const unprojectedFieldNames = schemaFieldNames.filter(
-      (fieldName) => !projectedFieldNames.has(fieldName),
-    );
-
-    expect(
-      unprojectedFieldNames,
-      `Add these LedgerRowSchema fields to LEDGER_PROJECTED_ATTRIBUTES in ` +
-        `services/api/src/domain/crm/ledger.ts: ${unprojectedFieldNames.join(", ")}`,
-    ).toEqual([]);
+    const grouped = page.rows.find((row) => row.caseId === "case_grouped");
+    const solo = page.rows.find((row) => row.caseId === "case_solo");
+    expect(grouped?.groupName).toBe("Sharma Family");
+    expect(solo).not.toHaveProperty("groupName");
   });
 
   it("carries the applicant roll-up through", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [
+    await seedCases([
       buildCase({
         caseId: "case_1",
         applicants: [
@@ -129,10 +459,7 @@ describe("listLedgerRows", () => {
       }),
     ]);
 
-    const page = await listLedgerRows(context, TENANT_ID, {
-      statuses: [...crm.CASE_STATUSES],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
-    });
+    const page = await listLedgerRowsFromPostgres(context.sql, "rgs", { statuses: [], limit: 500 });
 
     expect(page.rows[0]!.applicantSummary).toEqual({
       count: 2,
@@ -141,209 +468,89 @@ describe("listLedgerRows", () => {
     });
   });
 
-  it("reads every requested status, spilling from one partition into the next", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [
+  it("reads every requested status and returns each row once when a status is repeated", async () => {
+    await seedCases([
       buildCase({ caseId: "case_1", caseStatus: "NEW" }),
       buildCase({ caseId: "case_2", caseStatus: "NEW" }),
       buildCase({ caseId: "case_3", caseStatus: "SUBMITTED" }),
+      buildCase({ caseId: "case_4", caseStatus: "CLOSED" }),
     ]);
 
-    const page = await listLedgerRows(context, TENANT_ID, {
-      statuses: ["NEW", "SUBMITTED"],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
+    const page = await listLedgerRowsFromPostgres(context.sql, "rgs", {
+      statuses: ["NEW", "SUBMITTED", "NEW"],
+      limit: 500,
     });
 
     expect(page.rows.map((row) => row.caseId).sort()).toEqual(["case_1", "case_2", "case_3"]);
     expect(page.nextCursor).toBeUndefined();
   });
 
-  it("returns every row exactly once across a cursor walk that crosses a partition boundary", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [
-      buildCase({ caseId: "case_1", caseStatus: "NEW", updatedAt: "2026-03-04T10:00:01.000Z" }),
-      buildCase({ caseId: "case_2", caseStatus: "NEW", updatedAt: "2026-03-04T10:00:02.000Z" }),
-      buildCase({ caseId: "case_3", caseStatus: "SUBMITTED", updatedAt: "2026-03-04T10:00:03.000Z" }),
-      buildCase({ caseId: "case_4", caseStatus: "SUBMITTED", updatedAt: "2026-03-04T10:00:04.000Z" }),
-      buildCase({ caseId: "case_5", caseStatus: "SUBMITTED", updatedAt: "2026-03-04T10:00:05.000Z" }),
+  it("walks every row exactly once across a cursor walk spanning statuses", async () => {
+    await seedCases([
+      buildCase({ caseId: "case_1", caseStatus: "NEW", receivedDate: "2026-03-01" }),
+      buildCase({ caseId: "case_2", caseStatus: "NEW", receivedDate: "2026-03-02" }),
+      buildCase({ caseId: "case_3", caseStatus: "SUBMITTED", receivedDate: "2026-03-03" }),
+      buildCase({ caseId: "case_4", caseStatus: "SUBMITTED", receivedDate: "2026-03-04" }),
+      buildCase({ caseId: "case_5", caseStatus: "SUBMITTED", receivedDate: "2026-03-05" }),
     ]);
 
-    const collectedCaseIds: string[] = [];
+    const collected: string[] = [];
     let cursor: string | undefined;
     let pageCount = 0;
     do {
-      const page = await listLedgerRows(context, TENANT_ID, {
+      const page = await listLedgerRowsFromPostgres(context.sql, "rgs", {
         statuses: ["NEW", "SUBMITTED"],
         limit: 2,
         ...(cursor !== undefined ? { cursor } : {}),
       });
-      collectedCaseIds.push(...page.rows.map((row) => row.caseId));
+      collected.push(...page.rows.map((row) => row.caseId));
       cursor = page.nextCursor;
       pageCount += 1;
       expect(pageCount).toBeLessThan(10);
     } while (cursor !== undefined);
 
-    expect(collectedCaseIds).toHaveLength(5);
-    expect(new Set(collectedCaseIds).size).toBe(5);
+    expect(collected).toHaveLength(5);
+    expect(new Set(collected).size).toBe(5);
   });
 
-  it("refuses a cursor issued for a different filter rather than silently restarting", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [
-      buildCase({ caseId: "case_1", caseStatus: "NEW" }),
-      buildCase({ caseId: "case_2", caseStatus: "NEW" }),
-    ]);
-
-    const firstPage = await listLedgerRows(context, TENANT_ID, { statuses: ["NEW"], limit: 1 });
-    expect(firstPage.nextCursor).toBeDefined();
-
-    await expect(
-      listLedgerRows(context, TENANT_ID, {
-        statuses: ["SUBMITTED"],
-        limit: 1,
-        cursor: firstPage.nextCursor!,
-      }),
-    ).rejects.toMatchObject({ statusCode: 400 });
-  });
-
-  it("refuses a malformed cursor", async () => {
-    const context = buildTestContext();
-
-    await expect(
-      listLedgerRows(context, TENANT_ID, { statuses: ["NEW"], limit: 10, cursor: "not-a-cursor" }),
-    ).rejects.toMatchObject({ statusCode: 400 });
-  });
-
-  it("names a row it could not read instead of dropping it", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [buildCase({ caseId: "case_1" })]);
-    // Corrupt the stored META item the way a hand-repair would: a
-    // destinationCountry that is not a country code at all.
-    const metaItem = await context.table.get(casePartitionKey(TENANT_ID, "case_1"), META_SORT_KEY);
-    await context.table.put({ ...metaItem!, destinationCountry: "United Arab Emirates" });
-
-    const page = await listLedgerRows(context, TENANT_ID, {
-      statuses: [...crm.CASE_STATUSES],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
-    });
-
-    expect(page.rows).toHaveLength(0);
-    expect(page.unreadableCaseIds).toEqual(["case_1"]);
-  });
-
-  it("reads one partner's whole partition when partnerId is given, whatever the statuses say", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [
+  it("reads one partner's cases in partner mode, across statuses, when no status filter is given", async () => {
+    await seedCases([
       buildCase({ caseId: "case_1", partnerId: "partner_a", caseStatus: "NEW" }),
       buildCase({ caseId: "case_2", partnerId: "partner_a", caseStatus: "CLOSED" }),
       buildCase({ caseId: "case_3", partnerId: "partner_b", caseStatus: "NEW" }),
     ]);
 
-    const page = await listLedgerRows(context, TENANT_ID, {
-      statuses: ["NEW"],
+    const page = await listLedgerRowsFromPostgres(context.sql, "rgs", {
+      statuses: [],
       partnerId: "partner_a",
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
+      limit: 500,
     });
 
-    // Both of partner_a's cases, including the CLOSED one the status filter
-    // would have excluded: in partner mode the client filters, and the
-    // alternative is pages that arrive almost empty.
     expect(page.rows.map((row) => row.caseId).sort()).toEqual(["case_1", "case_2"]);
   });
 
-  it("never reassembles a case", async () => {
-    // The whole point of the read model. readCase issues a base-table get plus
-    // a base-table query per case; a Ledger that did that is 14,312
-    // round-trips. Asserted by counting what the table client was asked for.
-    const context = buildTestContext();
-    await seedCases(context, [buildCase({ caseId: "case_1" }), buildCase({ caseId: "case_2" })]);
-    let baseTableReadCount = 0;
-    const countingTable = {
-      ...context.table,
-      get: async (...callArguments: Parameters<typeof context.table.get>) => {
-        baseTableReadCount += 1;
-        return context.table.get(...callArguments);
-      },
-      query: async (...callArguments: Parameters<typeof context.table.query>) => {
-        baseTableReadCount += 1;
-        return context.table.query(...callArguments);
-      },
-      queryGsiPage: context.table.queryGsiPage.bind(context.table),
-      queryGsi: context.table.queryGsi.bind(context.table),
-      put: context.table.put.bind(context.table),
-      putIfAbsent: context.table.putIfAbsent.bind(context.table),
-      delete: context.table.delete.bind(context.table),
-    };
+  it("names a row it could not read instead of dropping it", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await seedCases([buildCase({ caseId: "case_1" })]);
+      await context.sql.query(
+        `update crm_cases set case_type = 'BOGUS' where case_id = 'case_1'`,
+      );
 
-    await listLedgerRows({ ...context, table: countingTable }, TENANT_ID, {
-      statuses: [...crm.CASE_STATUSES],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
-    });
+      const page = await listLedgerRowsFromPostgres(context.sql, "rgs", { statuses: [], limit: 500 });
 
-    expect(baseTableReadCount).toBe(0);
+      expect(page.rows).toHaveLength(0);
+      expect(page.unreadableCaseIds).toEqual(["case_1"]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  // Fix round 1 (review of e6473bd).
+  it("reads a case with no applicant summary as a normal, readable row", async () => {
+    await seedCases([buildCase({ caseId: "case_1" })]);
+    await context.sql.query(`update crm_cases set applicant_summary = null where case_id = 'case_1'`);
 
-  it("returns each row exactly once even when the caller repeats a status (F1)", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [buildCase({ caseId: "case_1", caseStatus: "NEW" })]);
-
-    const page = await listLedgerRows(context, TENANT_ID, {
-      statuses: ["NEW", "NEW"],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
-    });
-
-    // Asserted on the full id list, not just the count: a fix that dropped a
-    // different row instead of deduping the repeated partition read would
-    // still pass a bare `toHaveLength(1)`.
-    expect(page.rows.map((row) => row.caseId)).toEqual(["case_1"]);
-  });
-
-  it("resumes a cursor across the same status set sent in a different order, instead of 400ing or silently skipping a status (F2)", async () => {
-    // This is the test that proves the safe fix for concern 3 is the right
-    // one. Canonicalizing ONLY `scopeKeyFor` (so this cursor stops 400ing)
-    // would leave `partitionIndex` pointing at a partition of a
-    // differently-ordered `partitionKeys` array, silently skipping
-    // SUBMITTED instead of refusing the cursor. Do not "simplify" the
-    // canonicalization in listLedgerRows back to a raw `.join(",")`.
-    const context = buildTestContext();
-    await seedCases(context, [
-      buildCase({ caseId: "case_1", caseStatus: "NEW", updatedAt: "2026-03-04T10:00:01.000Z" }),
-      buildCase({ caseId: "case_2", caseStatus: "SUBMITTED", updatedAt: "2026-03-04T10:00:02.000Z" }),
-    ]);
-
-    const firstPage = await listLedgerRows(context, TENANT_ID, {
-      statuses: ["NEW", "SUBMITTED"],
-      limit: 1,
-    });
-    expect(firstPage.nextCursor).toBeDefined();
-
-    const secondPage = await listLedgerRows(context, TENANT_ID, {
-      statuses: ["SUBMITTED", "NEW"],
-      limit: 1,
-      cursor: firstPage.nextCursor!,
-    });
-
-    const collectedCaseIds = [...firstPage.rows, ...secondPage.rows].map((row) => row.caseId);
-    expect(collectedCaseIds.sort()).toEqual(["case_1", "case_2"]);
-    expect(new Set(collectedCaseIds).size).toBe(2);
-  });
-
-  it("reads a case whose META item predates applicantSummary as a normal, readable row (F3)", async () => {
-    const context = buildTestContext();
-    await seedCases(context, [buildCase({ caseId: "case_1" })]);
-    const metaItem = await context.table.get(casePartitionKey(TENANT_ID, "case_1"), META_SORT_KEY);
-    // Drop the attribute entirely, the way one of the 7,156 cases imported
-    // before writeCase computed a roll-up is actually stored -- not present
-    // as `undefined`, simply absent from the item.
-    const { applicantSummary: _droppedSummary, ...metaItemWithoutSummary } = metaItem!;
-    await context.table.put(metaItemWithoutSummary);
-
-    const page = await listLedgerRows(context, TENANT_ID, {
-      statuses: [...crm.CASE_STATUSES],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
-    });
+    const page = await listLedgerRowsFromPostgres(context.sql, "rgs", { statuses: [], limit: 500 });
 
     expect(page.rows).toHaveLength(1);
     expect(page.rows[0]!.applicantSummary).toBeUndefined();

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildTestContext } from "../helpers";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 import { createCase } from "../../src/domain/crm/cases";
 import { upsertCountryProduct } from "../../src/domain/config";
 import { COUNTRY_PRODUCTS, type CountryProduct } from "@rgs/shared";
@@ -11,12 +11,14 @@ import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 
+afterEach(closeSqlTestContexts);
+
 const TENANT_ID = "rgs";
 const ACTOR = "ops@rgs.test";
 
 /** Seed product for a country, with its checklist replaced by the given labels. */
 async function putProductDocuments(
-  context: ReturnType<typeof buildTestContext>,
+  context: SqlTestContext,
   countryCode: string,
   requiredDocuments: CountryProduct["requiredDocuments"],
   overrides: Partial<CountryProduct> = {},
@@ -30,7 +32,7 @@ async function putProductDocuments(
 }
 
 async function seedPartnerAndTraveller() {
-  const context = buildTestContext();
+  const context = await buildSqlTestContext();
   const partner = await createPartner(
     context,
     TENANT_ID,
