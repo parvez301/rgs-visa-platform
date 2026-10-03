@@ -1,11 +1,16 @@
 import { crm, type Traveller } from "@rgs/shared";
+import { PGlite } from "@electric-sql/pglite";
 import type { AppContext } from "../src/lib/context";
 import { InMemoryTableClient } from "../src/lib/db";
 import { InMemoryDocumentStore } from "../src/lib/documentStore";
 import { InMemoryEmailSender } from "../src/lib/email";
+import type { SqlClient } from "../src/lib/sql";
 import { createDraft, patchDraft } from "../src/domain/applications";
 import { recordDocumentUpload } from "../src/domain/documents";
 import { META_SORT_KEY, statusEmailTemplatePartitionKey } from "../src/domain/crm/keys";
+import { seedStatusEmailTemplatesIfAbsent } from "../src/domain/crm/statusEmailTemplates";
+import { applyMigrations } from "../src/db/migrate";
+import { pgliteAsSqlClient } from "./pgliteSqlClient";
 
 export interface TestContext extends AppContext {
   table: InMemoryTableClient;
@@ -65,6 +70,41 @@ export function buildTestContext(options: BuildTestContextOptions = {}): TestCon
       currentTimeMs += milliseconds;
     },
   };
+}
+
+export interface SqlTestContext extends AppContext {
+  sql: SqlClient;
+  documents: InMemoryDocumentStore;
+  email: InMemoryEmailSender;
+  advanceClock(milliseconds: number): void;
+}
+
+export async function buildSqlTestContext(
+  options: BuildTestContextOptions = {},
+): Promise<SqlTestContext> {
+  const database = new PGlite();
+  const sql = pgliteAsSqlClient(database);
+  await applyMigrations(sql);
+
+  let currentTimeMs = new Date("2026-07-23T10:00:00.000Z").getTime();
+  const context: SqlTestContext = {
+    table: new InMemoryTableClient(),
+    documents: new InMemoryDocumentStore(),
+    email: new InMemoryEmailSender(),
+    adminNotificationAddress: "info@raysglobalservices.com",
+    now: () => new Date(currentTimeMs),
+    advanceClock(milliseconds: number) {
+      currentTimeMs += milliseconds;
+    },
+    crmStore: "postgres",
+    ledgerStore: "postgres",
+    sql,
+  };
+
+  if (options.seedStatusEmailTemplates !== false) {
+    await seedStatusEmailTemplatesIfAbsent(context, "rgs", "seed@rgs.local");
+  }
+  return context;
 }
 
 export const completeTraveller: Traveller = {

@@ -1,0 +1,21 @@
+import { describe, expect, it } from "vitest";
+import { createPartner } from "../src/domain/crm/partners";
+import { buildSqlTestContext } from "./helpers";
+
+describe("buildSqlTestContext", () => {
+  it("migrates PGlite and writes a partner through CRM_STORE=postgres", async () => {
+    const context = await buildSqlTestContext();
+    const partner = await createPartner(
+      context,
+      "rgs",
+      { canonicalName: "Ozzy Travels" },
+      "desk@rgs.local",
+    );
+    expect(partner.partnerId).toMatch(/^prt_/);
+    const listed = await context.sql.query<{ n: string }>(
+      `select count(*)::text as n from crm_partners`,
+    );
+    expect(listed.rows[0]?.n).toBe("1");
+    await context.sql.end();
+  });
+});
