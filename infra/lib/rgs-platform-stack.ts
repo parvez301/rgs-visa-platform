@@ -40,26 +40,25 @@ export class RgsPlatformStack extends cdk.Stack {
     const removalPolicy = isProduction ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
 
     // ---------- Data ----------
-    // Staging RETAIN so a later template that drops this resource orphans
-    // rgs-platform-staging instead of deleting it (Phase D.2).
-    const platformTableRemovalPolicy =
-      stage === "staging" || isProduction ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
-
-    const platformTable = new dynamodb.Table(this, "PlatformTable", {
-      tableName: `rgs-platform-${stage}`,
-      partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
-      sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: platformTableRemovalPolicy,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: isProduction },
-    });
-    for (const indexName of ["GSI1", "GSI2", "GSI3"] as const) {
-      platformTable.addGlobalSecondaryIndex({
-        indexName,
-        partitionKey: { name: `${indexName}PK`, type: dynamodb.AttributeType.STRING },
-        sortKey: { name: `${indexName}SK`, type: dynamodb.AttributeType.STRING },
-        projectionType: dynamodb.ProjectionType.ALL,
+    const ownPlatformTable = stage !== "staging";
+    let platformTable: dynamodb.Table | undefined;
+    if (ownPlatformTable) {
+      platformTable = new dynamodb.Table(this, "PlatformTable", {
+        tableName: `rgs-platform-${stage}`,
+        partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
+        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+        removalPolicy: isProduction ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+        pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: isProduction },
       });
+      for (const indexName of ["GSI1", "GSI2", "GSI3"] as const) {
+        platformTable.addGlobalSecondaryIndex({
+          indexName,
+          partitionKey: { name: `${indexName}PK`, type: dynamodb.AttributeType.STRING },
+          sortKey: { name: `${indexName}SK`, type: dynamodb.AttributeType.STRING },
+          projectionType: dynamodb.ProjectionType.ALL,
+        });
+      }
     }
 
     const documentsBucket = new s3.Bucket(this, "DocumentsBucket", {
@@ -132,6 +131,24 @@ export class RgsPlatformStack extends cdk.Stack {
 
     // ---------- Lambdas ----------
     const apiEntryFile = path.join(__dirname, "../../services/api/src/http/handler.ts");
+    const sharedEnvironment: Record<string, string> = {
+      DOCUMENTS_BUCKET: documentsBucket.bucketName,
+      // From-domain must be SES-verified. raysglobalservices.com is verified
+      // in the cloud account (us-east-1). Lambdas assume SES_ROLE_ARN to send.
+      EMAIL_SENDER: "no-reply@raysglobalservices.com",
+      ADMIN_NOTIFICATION_EMAIL: "info@raysglobalservices.com",
+      SES_REGION: "us-east-1",
+      SES_ROLE_ARN: "arn:aws:iam::781517218736:role/RgsCrmSesSendRole",
+      SES_EXTERNAL_ID: "rgs-crm-ses-send",
+      // Stamped on every send so SES emits delivery/bounce/complaint events
+      // into the RgsSesEvents stack (cloud account). Must match that stack.
+      SES_CONFIGURATION_SET: SES_CONFIGURATION_SET_NAME,
+      NODE_OPTIONS: "--enable-source-maps",
+    };
+    if (platformTable) {
+      sharedEnvironment.TABLE_NAME = `rgs-platform-${stage}`;
+    }
+
     const sharedLambdaProps: Partial<lambdaNodejs.NodejsFunctionProps> = {
       entry: apiEntryFile,
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -139,21 +156,7 @@ export class RgsPlatformStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(15),
       architecture: lambda.Architecture.ARM_64,
       bundling: { minify: true, sourceMap: true, target: "node22" },
-      environment: {
-        TABLE_NAME: platformTable.tableName,
-        DOCUMENTS_BUCKET: documentsBucket.bucketName,
-        // From-domain must be SES-verified. raysglobalservices.com is verified
-        // in the cloud account (us-east-1). Lambdas assume SES_ROLE_ARN to send.
-        EMAIL_SENDER: "no-reply@raysglobalservices.com",
-        ADMIN_NOTIFICATION_EMAIL: "info@raysglobalservices.com",
-        SES_REGION: "us-east-1",
-        SES_ROLE_ARN: "arn:aws:iam::781517218736:role/RgsCrmSesSendRole",
-        SES_EXTERNAL_ID: "rgs-crm-ses-send",
-        // Stamped on every send so SES emits delivery/bounce/complaint events
-        // into the RgsSesEvents stack (cloud account). Must match that stack.
-        SES_CONFIGURATION_SET: SES_CONFIGURATION_SET_NAME,
-        NODE_OPTIONS: "--enable-source-maps",
-      },
+      environment: sharedEnvironment,
     };
 
     const userApiFunction = new lambdaNodejs.NodejsFunction(this, "UserApiFunction", {
@@ -204,7 +207,9 @@ export class RgsPlatformStack extends cdk.Stack {
 
     const sesAssumeRoleArn = "arn:aws:iam::781517218736:role/RgsCrmSesSendRole";
     for (const apiFunction of [userApiFunction, adminApiFunction]) {
-      platformTable.grantReadWriteData(apiFunction);
+      if (platformTable) {
+        platformTable.grantReadWriteData(apiFunction);
+      }
       documentsBucket.grantReadWrite(apiFunction);
       apiFunction.addToRolePolicy(
         new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
@@ -246,7 +251,9 @@ export class RgsPlatformStack extends cdk.Stack {
     if (remindersCrmExplicit || stage === "staging") {
       appointmentRemindersFunction.addEnvironment("CRM_STORE", crmStore);
     }
-    platformTable.grantReadWriteData(appointmentRemindersFunction);
+    if (platformTable) {
+      platformTable.grantReadWriteData(appointmentRemindersFunction);
+    }
     appointmentRemindersFunction.addToRolePolicy(
       new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
     );
@@ -432,7 +439,9 @@ function handler(event) {
     new cdk.CfnOutput(this, "AdminUrl", {
       value: `https://${adminDistribution.distributionDomainName}`,
     });
-    new cdk.CfnOutput(this, "TableName", { value: platformTable.tableName });
+    if (platformTable) {
+      new cdk.CfnOutput(this, "TableName", { value: platformTable.tableName });
+    }
     new cdk.CfnOutput(this, "DocumentsBucketName", { value: documentsBucket.bucketName });
     new cdk.CfnOutput(this, "UsersPoolId", { value: usersPool.userPoolId });
     new cdk.CfnOutput(this, "UsersPoolClientId", { value: usersPoolClient.userPoolClientId });

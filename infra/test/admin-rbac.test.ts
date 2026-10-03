@@ -271,10 +271,23 @@ describe("admin RBAC infrastructure", () => {
     assert.equal(serialized.includes("adminAddUserToGroup"), false);
   });
 
-  it("retains the staging platform Dynamo table on stack delete/orphan", () => {
-    const tables = dynamoTables(synthesizedResourcesForStage("staging"));
+  it("does not own a platform Dynamo table on staging", () => {
+    const resources = synthesizedResourcesForStage("staging");
+    assert.equal(dynamoTables(resources).length, 0);
+    const env = lambdaEnvByName(resources);
+    assert.equal(env["rgs-admin-api-staging"]?.["TABLE_NAME"], undefined);
+    assert.equal(env["rgs-user-api-staging"]?.["TABLE_NAME"], undefined);
+    assert.equal(env["rgs-appointment-reminders-staging"]?.["TABLE_NAME"], undefined);
+  });
+
+  it("still owns a platform Dynamo table on prod", () => {
+    const resources = synthesizedResourcesForStage("prod");
+    const tables = dynamoTables(resources);
     assert.equal(tables.length, 1);
     assert.equal(tables[0]?.DeletionPolicy, "Retain");
+    const env = lambdaEnvByName(resources);
+    assert.equal(env["rgs-admin-api-prod"]?.["TABLE_NAME"], "rgs-platform-prod");
+    assert.equal(env["rgs-user-api-prod"]?.["TABLE_NAME"], "rgs-platform-prod");
   });
 
   it("still destroys the non-prod test platform table by default", () => {

@@ -1,7 +1,7 @@
 # RGS — Supabase Postgres Phase D (Dynamo decommission)
 
 **Date:** 2026-10-02  
-**Status:** approved (D.1 plan unlocked; D.2 plan after D.1 soak)  
+**Status:** approved (D.2 Wave A retain then Wave B orphan)  
 **Parent:** `2026-10-01-supabase-postgres-migration-design.md`  
 **Prior:** Phase C.2.2 (`CRM_STORE=postgres` leads + notices) + staging cutover  
 
@@ -188,8 +188,7 @@ Implementation checkboxes live in separate **D.1** and **D.2** plans
 
 ## 10. Approval
 
-Approve this design to unlock the Phase **D.1** implementation plan
-(`docs/superpowers/plans/2026-10-02-supabase-postgres-phase-d1-staging-defaults.md`).
-D.2 plan follows after D.1 lands / soaks.
+The D.2 implementation plan is
+`docs/superpowers/plans/2026-10-03-supabase-postgres-phase-d2-orphan-staging-table.md`.
 
-**Owner sign-off:** approved 2026-10-02 (chat); D.1 plan follows
+**Owner sign-off:** approved 2026-10-02 (chat)
