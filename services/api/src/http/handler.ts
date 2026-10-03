@@ -70,6 +70,9 @@ function dynamoTableRequired(environment: NodeJS.ProcessEnv): boolean {
  * production wiring rather than assembling a second `AppContext` builder by
  * hand. The migration CLI points at the same real DynamoDB table this
  * Lambda does, so it must be configured (and fail closed) the same way.
+ * When CRM_STORE=postgres and LEDGER_STORE is not dynamo, TABLE_NAME may be
+ * unset; CLIs that still read Dynamo must set TABLE_NAME themselves or they
+ * fail at the first table call.
  */
 export function buildProductionContext(): AppContext {
   const documentsBucket = process.env["DOCUMENTS_BUCKET"];

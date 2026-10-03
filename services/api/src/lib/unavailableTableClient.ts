@@ -1,11 +1,9 @@
 import type { TableClient } from "./db";
 
-const UNAVAILABLE_ERROR = new Error(
-  "DynamoDB is not configured (TABLE_NAME unset)",
-);
-
 function rejectUnavailable(): Promise<never> {
-  return Promise.reject(UNAVAILABLE_ERROR);
+  return Promise.reject(
+    new Error("DynamoDB is not configured (TABLE_NAME unset)"),
+  );
 }
 
 export function unavailableTableClient(): TableClient {
