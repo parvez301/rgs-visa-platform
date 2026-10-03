@@ -135,7 +135,7 @@ describe("admin RBAC infrastructure", () => {
     }
   });
 
-  it("leaves appointment reminders on Dynamo when no CRM Postgres config is set", () => {
+  it("sets appointment reminders CRM_STORE to postgres when no CRM Postgres URL is set", () => {
     const saved = {
       url: process.env["RGS_DATABASE_URL"],
       crm: process.env["RGS_CRM_STORE"],
@@ -150,7 +150,7 @@ describe("admin RBAC infrastructure", () => {
         (reminders?.Properties as { Environment?: { Variables?: Record<string, unknown> } }).Environment
           ?.Variables ?? {};
       assert.equal(variables["DATABASE_URL"], undefined);
-      assert.equal(variables["CRM_STORE"], undefined);
+      assert.equal(variables["CRM_STORE"], "postgres");
     } finally {
       if (saved.url !== undefined) process.env["RGS_DATABASE_URL"] = saved.url;
       if (saved.crm !== undefined) process.env["RGS_CRM_STORE"] = saved.crm;
@@ -183,42 +183,25 @@ describe("admin RBAC infrastructure", () => {
     }
   });
 
-  it("honors explicit RGS_*=dynamo on staging (rollback path)", () => {
+  it("defaults CRM_STORE and LEDGER_STORE to postgres on prod when RGS_* unset", () => {
     const saved = {
+      url: process.env["RGS_DATABASE_URL"],
       crm: process.env["RGS_CRM_STORE"],
       ledger: process.env["RGS_LEDGER_STORE"],
     };
-    process.env["RGS_CRM_STORE"] = "dynamo";
-    process.env["RGS_LEDGER_STORE"] = "dynamo";
-    try {
-      const env = lambdaEnvByName(synthesizedResourcesForStage("staging"));
-      assert.equal(env["rgs-admin-api-staging"]?.["CRM_STORE"], "dynamo");
-      assert.equal(env["rgs-admin-api-staging"]?.["LEDGER_STORE"], "dynamo");
-      assert.equal(env["rgs-user-api-staging"]?.["CRM_STORE"], "dynamo");
-      assert.equal(env["rgs-appointment-reminders-staging"]?.["CRM_STORE"], "dynamo");
-    } finally {
-      if (saved.crm === undefined) delete process.env["RGS_CRM_STORE"];
-      else process.env["RGS_CRM_STORE"] = saved.crm;
-      if (saved.ledger === undefined) delete process.env["RGS_LEDGER_STORE"];
-      else process.env["RGS_LEDGER_STORE"] = saved.ledger;
-    }
-  });
-
-  it("keeps non-staging unset defaults on dynamo", () => {
-    const saved = {
-      crm: process.env["RGS_CRM_STORE"],
-      ledger: process.env["RGS_LEDGER_STORE"],
-    };
+    delete process.env["RGS_DATABASE_URL"];
     delete process.env["RGS_CRM_STORE"];
     delete process.env["RGS_LEDGER_STORE"];
     try {
       const env = lambdaEnvByName(synthesizedResourcesForStage("prod"));
-      assert.equal(env["rgs-admin-api-prod"]?.["CRM_STORE"], "dynamo");
-      assert.equal(env["rgs-admin-api-prod"]?.["LEDGER_STORE"], "dynamo");
-      assert.equal(env["rgs-user-api-prod"]?.["CRM_STORE"], "dynamo");
-      // Reminders still omit CRM_STORE when unset on non-staging (pre-D.1 behavior).
-      assert.equal(env["rgs-appointment-reminders-prod"]?.["CRM_STORE"], undefined);
+      assert.equal(env["rgs-admin-api-prod"]?.["CRM_STORE"], "postgres");
+      assert.equal(env["rgs-admin-api-prod"]?.["LEDGER_STORE"], "postgres");
+      assert.equal(env["rgs-user-api-prod"]?.["CRM_STORE"], "postgres");
+      assert.equal(env["rgs-user-api-prod"]?.["LEDGER_STORE"], undefined);
+      assert.equal(env["rgs-appointment-reminders-prod"]?.["CRM_STORE"], "postgres");
     } finally {
+      if (saved.url === undefined) delete process.env["RGS_DATABASE_URL"];
+      else process.env["RGS_DATABASE_URL"] = saved.url;
       if (saved.crm === undefined) delete process.env["RGS_CRM_STORE"];
       else process.env["RGS_CRM_STORE"] = saved.crm;
       if (saved.ledger === undefined) delete process.env["RGS_LEDGER_STORE"];
@@ -289,9 +272,12 @@ describe("admin RBAC infrastructure", () => {
     assert.equal(env["rgs-appointment-reminders-prod"]?.["TABLE_NAME"], undefined);
   });
 
-  it("still destroys the non-prod test platform table by default", () => {
-    const tables = dynamoTables(synthesizedResources());
-    assert.equal(tables.length, 1);
-    assert.equal(tables[0]?.DeletionPolicy, "Delete");
+  it("does not own a platform Dynamo table on test", () => {
+    const resources = synthesizedResources();
+    assert.equal(dynamoTables(resources).length, 0);
+    const env = lambdaEnvByName(resources);
+    assert.equal(env["rgs-admin-api-test"]?.["TABLE_NAME"], undefined);
+    assert.equal(env["rgs-user-api-test"]?.["TABLE_NAME"], undefined);
+    assert.equal(env["rgs-appointment-reminders-test"]?.["TABLE_NAME"], undefined);
   });
 });

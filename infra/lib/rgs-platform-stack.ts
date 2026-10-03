@@ -9,7 +9,6 @@ import {
   aws_cloudfront as cloudfront,
   aws_cloudfront_origins as cloudfrontOrigins,
   aws_cognito as cognito,
-  aws_dynamodb as dynamodb,
   aws_events as events,
   aws_events_targets as eventsTargets,
   aws_iam as iam,
@@ -20,12 +19,12 @@ import {
 } from "aws-cdk-lib";
 import { SES_CONFIGURATION_SET_NAME } from "./rgs-ses-events-stack";
 
-/** When RGS_* unset/empty: staging → postgres, else dynamo. Non-empty env always wins. */
-function resolveStoreEnv(envValue: string | undefined, stage: string): string {
+/** When RGS_* unset/empty: postgres. Non-empty env is copied through (runtime rejects dynamo). */
+function resolveStoreEnv(envValue: string | undefined): string {
   if (envValue !== undefined && envValue !== "") {
     return envValue;
   }
-  return stage === "staging" ? "postgres" : "dynamo";
+  return "postgres";
 }
 
 export interface RgsPlatformStackProps extends cdk.StackProps {
@@ -40,31 +39,6 @@ export class RgsPlatformStack extends cdk.Stack {
     const removalPolicy = isProduction ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
 
     // ---------- Data ----------
-    // Staging and prod product SoR is Postgres. CDK must not own those
-    // tables or CloudFormation would delete them on the next deploy unless
-    // DeletionPolicy is already Retain (prod) / was Retain then orphaned
-    // (staging). Test stacks still get an ephemeral table.
-    const ownPlatformTable = stage !== "staging" && stage !== "prod";
-    let platformTable: dynamodb.Table | undefined;
-    if (ownPlatformTable) {
-      platformTable = new dynamodb.Table(this, "PlatformTable", {
-        tableName: `rgs-platform-${stage}`,
-        partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
-        sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
-        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-        removalPolicy: isProduction ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-        pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: isProduction },
-      });
-      for (const indexName of ["GSI1", "GSI2", "GSI3"] as const) {
-        platformTable.addGlobalSecondaryIndex({
-          indexName,
-          partitionKey: { name: `${indexName}PK`, type: dynamodb.AttributeType.STRING },
-          sortKey: { name: `${indexName}SK`, type: dynamodb.AttributeType.STRING },
-          projectionType: dynamodb.ProjectionType.ALL,
-        });
-      }
-    }
-
     const documentsBucket = new s3.Bucket(this, "DocumentsBucket", {
       bucketName: `rgs-documents-${stage}-${this.account}`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -149,9 +123,6 @@ export class RgsPlatformStack extends cdk.Stack {
       SES_CONFIGURATION_SET: SES_CONFIGURATION_SET_NAME,
       NODE_OPTIONS: "--enable-source-maps",
     };
-    if (platformTable) {
-      sharedEnvironment.TABLE_NAME = `rgs-platform-${stage}`;
-    }
 
     const sharedLambdaProps: Partial<lambdaNodejs.NodejsFunctionProps> = {
       entry: apiEntryFile,
@@ -184,9 +155,8 @@ export class RgsPlatformStack extends cdk.Stack {
     // the user API), so a bad RGS_LEDGER_STORE value can only fail the admin cold
     // start (buildProductionContext reads these).
     // Set RGS_DATABASE_URL to the Supabase transaction pooler URI (:6543).
-    // Staging unset defaults to postgres; non-staging unset stays dynamo; explicit RGS_* wins.
-    const crmStore = resolveStoreEnv(process.env.RGS_CRM_STORE, stage);
-    const ledgerStore = resolveStoreEnv(process.env.RGS_LEDGER_STORE, stage);
+    const crmStore = resolveStoreEnv(process.env.RGS_CRM_STORE);
+    const ledgerStore = resolveStoreEnv(process.env.RGS_LEDGER_STORE);
 
     for (const crmFunction of [adminApiFunction, userApiFunction]) {
       crmFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL ?? "");
@@ -211,9 +181,6 @@ export class RgsPlatformStack extends cdk.Stack {
 
     const sesAssumeRoleArn = "arn:aws:iam::781517218736:role/RgsCrmSesSendRole";
     for (const apiFunction of [userApiFunction, adminApiFunction]) {
-      if (platformTable) {
-        platformTable.grantReadWriteData(apiFunction);
-      }
       documentsBucket.grantReadWrite(apiFunction);
       apiFunction.addToRolePolicy(
         new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
@@ -242,22 +209,11 @@ export class RgsPlatformStack extends cdk.Stack {
       adminsPool.userPoolId,
     );
     // The reminders job reads and stamps cases through the same CRM store seam
-    // as the admin API, so after RGS_CRM_STORE=postgres it must read Postgres or
-    // it would email partners from the frozen Dynamo copy. It needs only the
-    // case store (not LEDGER_STORE): it queries crm_cases directly. Unset
-    // RGS_* leaves the job on Dynamo on non-staging stages; on staging it
-    // follows the postgres default like the admin API.
+    // as the admin API. It needs only the case store (not LEDGER_STORE).
     if (process.env.RGS_DATABASE_URL !== undefined && process.env.RGS_DATABASE_URL !== "") {
       appointmentRemindersFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL);
     }
-    const remindersCrmExplicit =
-      process.env.RGS_CRM_STORE !== undefined && process.env.RGS_CRM_STORE !== "";
-    if (remindersCrmExplicit || stage === "staging") {
-      appointmentRemindersFunction.addEnvironment("CRM_STORE", crmStore);
-    }
-    if (platformTable) {
-      platformTable.grantReadWriteData(appointmentRemindersFunction);
-    }
+    appointmentRemindersFunction.addEnvironment("CRM_STORE", crmStore);
     appointmentRemindersFunction.addToRolePolicy(
       new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
     );
@@ -443,9 +399,6 @@ function handler(event) {
     new cdk.CfnOutput(this, "AdminUrl", {
       value: `https://${adminDistribution.distributionDomainName}`,
     });
-    if (platformTable) {
-      new cdk.CfnOutput(this, "TableName", { value: platformTable.tableName });
-    }
     new cdk.CfnOutput(this, "DocumentsBucketName", { value: documentsBucket.bucketName });
     new cdk.CfnOutput(this, "UsersPoolId", { value: usersPool.userPoolId });
     new cdk.CfnOutput(this, "UsersPoolClientId", { value: usersPoolClient.userPoolClientId });
