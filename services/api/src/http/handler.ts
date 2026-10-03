@@ -2,7 +2,6 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda
 import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import type { AppContext } from "../lib/context";
 import { AwsCognitoAdmins } from "../lib/cognitoAdmins";
-import type { TableClient } from "../lib/db";
 import { S3DocumentStore } from "../lib/documentStore";
 import { BestEffortEmailSender, SesEmailSender } from "../lib/email";
 import { llmProviderConfigFromEnvironment } from "../agent/providers/config";
@@ -56,7 +55,7 @@ function tryBuildLlmProvider(): LlmProvider | undefined {
   }
 }
 
-function removedDynamoTableClient(): TableClient {
+function removedDynamoTableClient(): AppContext["table"] {
   const reject = (): Promise<never> =>
     Promise.reject(new Error("DynamoDB client removed"));
   return {

@@ -300,6 +300,93 @@ describe("writeRetryDelayMs", () => {
   });
 });
 
+const productionBootEnv = {
+  DOCUMENTS_BUCKET: "rgs-documents",
+  EMAIL_SENDER: "noreply@rgs.test",
+  ADMIN_NOTIFICATION_EMAIL: "info@rgs.test",
+  DATABASE_URL: "postgresql://user:pass@localhost:6543/postgres",
+};
+
+describe("buildProductionContext", () => {
+  // task-11-controller-notes.md §3: llmProviderConfigFromEnvironment
+  // (agent/providers/config.ts) THROWS when LLM_PROVIDER/LLM_MODEL/
+  // LLM_API_KEY is missing -- built eagerly and uncaught here, every
+  // non-agent route (and the migration CLI, which shares this exact
+  // function) would die at cold start in any deployment that has not
+  // configured the agent yet.
+  it("still builds a working context with llm undefined when no LLM environment variables are set", async () => {
+    const savedEnvironment = { ...process.env };
+    Object.assign(process.env, productionBootEnv);
+    delete process.env["LLM_PROVIDER"];
+    delete process.env["LLM_MODEL"];
+    delete process.env["LLM_API_KEY"];
+    try {
+      const { buildProductionContext } = await import("../src/http/handler");
+      const productionContext = buildProductionContext();
+
+      expect(productionContext.llm).toBeUndefined();
+      // The rest of the context must still be fully wired -- a deployment
+      // with no LLM configuration is not a broken deployment.
+      expect(productionContext.adminNotificationAddress).toBe("info@rgs.test");
+      await productionContext.sql?.end();
+    } finally {
+      process.env = savedEnvironment;
+    }
+  });
+
+  // Branch review M1: a misconfigured provider used to be silent and
+  // indistinguishable from "the agent is not enabled here" -- both present to
+  // the owner as every agent turn answering "This request has no LLM provider
+  // configured", with nothing saying why.
+  it("warns, naming the configuration error, when the LLM environment is present but wrong", async () => {
+    const savedEnvironment = { ...process.env };
+    Object.assign(process.env, productionBootEnv);
+    process.env["LLM_PROVIDER"] = "anthropik"; // the typo this exists for
+    process.env["LLM_MODEL"] = "claude-test-model";
+    process.env["LLM_API_KEY"] = "super-secret-key-value";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { buildProductionContext } = await import("../src/http/handler");
+      const productionContext = buildProductionContext();
+
+      // Still lazy: a bad LLM configuration must not take the whole API down
+      // at cold start for every non-agent route (P27).
+      expect(productionContext.llm).toBeUndefined();
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const warnedMessage = String(warnSpy.mock.calls[0]?.[0]);
+      expect(warnedMessage).toContain("anthropik");
+      // The whole reason this is safe to log at all -- the same guarantee
+      // providers.test.ts's two leak tests pin at the source.
+      expect(warnedMessage).not.toContain("super-secret-key-value");
+      await productionContext.sql?.end();
+    } finally {
+      warnSpy.mockRestore();
+      process.env = savedEnvironment;
+    }
+  });
+
+  it("builds a real llm provider when the LLM environment variables are present", async () => {
+    const savedEnvironment = { ...process.env };
+    Object.assign(process.env, productionBootEnv);
+    process.env["LLM_PROVIDER"] = "anthropic";
+    process.env["LLM_MODEL"] = "claude-test-model";
+    process.env["LLM_API_KEY"] = "test-key";
+    delete process.env["LLM_FALLBACK_PROVIDER"];
+    delete process.env["LLM_THINKING"];
+    try {
+      const { buildProductionContext } = await import("../src/http/handler");
+      const productionContext = buildProductionContext();
+
+      expect(productionContext.llm).toBeDefined();
+      expect(productionContext.llm?.name).toBe("anthropic");
+      await productionContext.sql?.end();
+    } finally {
+      process.env = savedEnvironment;
+    }
+  });
+});
+
 describe("writeRetryOptionsFromEnvironment", () => {
   it("defaults when nothing is set", () => {
     expect(writeRetryOptionsFromEnvironment({})).toEqual(DEFAULT_WRITE_RETRY_OPTIONS);
