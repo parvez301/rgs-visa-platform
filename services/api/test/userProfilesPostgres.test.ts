@@ -1,6 +1,4 @@
-import { PGlite } from "@electric-sql/pglite";
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyMigrations } from "../src/db/migrate";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDraft } from "../src/domain/applications";
 import { ensureUserProfile, getUserProfile, listUserProfiles } from "../src/domain/users";
 import {
@@ -10,29 +8,20 @@ import {
 } from "../src/domain/userProfilesPostgres";
 import type { AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
-import { buildTestContext, type TestContext } from "./helpers";
-import { pgliteAsSqlClient } from "./pgliteSqlClient";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
 
-describe("user profiles with CRM_STORE=postgres", () => {
+describe("user profiles", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext();
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext();
+    sql = context.sql;
   });
 
-  async function dynamoProfileItems() {
-    return [
-      await baseContext.table.get("USER#user_1", "PROFILE"),
-      ...(await baseContext.table.queryGsi("GSI1", "USERPROFILE")),
-    ].filter((item) => item !== undefined && item !== null);
-  }
+  afterEach(closeSqlTestContexts);
 
-  it("ensures a profile in Postgres once and leaves Dynamo without a PROFILE row", async () => {
+  it("ensures a profile in Postgres once", async () => {
     const first = await ensureUserProfile(context, "user_1", "priya@example.com", {
       fullName: "Priya Sharma",
       phone: "+919800000000",
@@ -45,7 +34,7 @@ describe("user profiles with CRM_STORE=postgres", () => {
     });
     expect(await getUserProfilePostgres(sql, "user_1")).toEqual(first);
 
-    baseContext.advanceClock(60_000);
+    context.advanceClock(60_000);
     const second = await ensureUserProfile(context, "user_1", "priya@example.com", {
       fullName: "Should Not Overwrite",
     });
@@ -54,7 +43,6 @@ describe("user profiles with CRM_STORE=postgres", () => {
       "select count(*) as n from portal_user_profiles",
     );
     expect(Number(count.rows[0]!.n)).toBe(1);
-    expect(await dynamoProfileItems()).toEqual([]);
   });
 
   it("defaults fullName from the email local-part and keeps phone absent", async () => {
@@ -72,18 +60,16 @@ describe("user profiles with CRM_STORE=postgres", () => {
 
   it("lists profiles from Postgres, oldest first", async () => {
     await ensureUserProfile(context, "user_2", "two@example.com", { fullName: "Two" });
-    baseContext.advanceClock(1000);
+    context.advanceClock(1000);
     await ensureUserProfile(context, "user_1", "one@example.com", { fullName: "One" });
     const listing = await listUserProfiles(context);
     expect(listing.users.map((user) => user.userId)).toEqual(["user_2", "user_1"]);
     expect(listing.unreadableUserIds).toEqual([]);
-    expect(await dynamoProfileItems()).toEqual([]);
   });
 
   it("creates the profile when a draft is started", async () => {
     await createDraft(context, "user_1", "AE", "user_1@example.com");
     expect((await getUserProfile(context, "user_1"))?.email).toBe("user_1@example.com");
-    expect(await dynamoProfileItems()).toEqual([]);
   });
 
   it("skips and names an unreadable profile instead of failing the listing", async () => {
@@ -106,15 +92,5 @@ describe("user profiles with CRM_STORE=postgres", () => {
     expect((await getUserProfilePostgres(sql, "user_1"))?.phone).toBe("+971500000000");
     await upsertUserProfilePostgres(sql, profile);
     expect(await getUserProfilePostgres(sql, "user_1")).toEqual(profile);
-  });
-});
-
-describe("user profiles with the Dynamo store", () => {
-  it("still writes USER#/PROFILE rows and reads them back", async () => {
-    const context = buildTestContext();
-    const profile = await ensureUserProfile(context, "user_1", "one@example.com");
-    expect(await context.table.get("USER#user_1", "PROFILE")).toBeTruthy();
-    expect(await getUserProfile(context, "user_1")).toEqual(profile);
-    expect((await listUserProfiles(context)).users).toEqual([profile]);
   });
 });

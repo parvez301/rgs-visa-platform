@@ -4,14 +4,14 @@ import {
 } from "@aws-sdk/client-cognito-identity-provider";
 import type { AdminRole } from "@rgs/shared";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAdminRouter } from "../../src/http/adminApi";
 import { buildProductionContext } from "../../src/http/handler";
 import {
   AwsCognitoAdmins,
   InMemoryCognitoAdmins,
 } from "../../src/lib/cognitoAdmins";
-import { buildTestContext, type TestContext } from "../helpers";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 
 interface ApiResponse {
   statusCode: number;
@@ -45,11 +45,13 @@ function event(
 }
 
 describe("staff admin routes", () => {
-  let context: TestContext;
+  let context: SqlTestContext;
   let cognitoAdmins: InMemoryCognitoAdmins;
 
-  beforeEach(() => {
-    context = buildTestContext();
+  afterEach(closeSqlTestContexts);
+
+  beforeEach(async () => {
+    context = await buildSqlTestContext();
     cognitoAdmins = new InMemoryCognitoAdmins([
       {
         username: "owner-cognito-username",
@@ -190,16 +192,19 @@ describe("AwsCognitoAdmins.adminCreateUser", () => {
 });
 
 describe("production staff client wiring", () => {
-  it("builds the real Cognito admins client when ADMINS_USER_POOL_ID is present", () => {
+  it("builds the real Cognito admins client when ADMINS_USER_POOL_ID is present", async () => {
     const savedEnvironment = { ...process.env };
-    process.env["TABLE_NAME"] = "rgs-table";
+    // The pg pool connects lazily, so a placeholder URL is enough to boot.
+    process.env["DATABASE_URL"] = "postgresql://user:pass@localhost:6543/postgres";
     process.env["DOCUMENTS_BUCKET"] = "rgs-documents";
     process.env["EMAIL_SENDER"] = "noreply@rgs.test";
     process.env["ADMIN_NOTIFICATION_EMAIL"] = "info@rgs.test";
     process.env["ADMINS_USER_POOL_ID"] = "ap-south-1_test";
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      expect(buildProductionContext().cognitoAdmins).toBeInstanceOf(AwsCognitoAdmins);
+      const productionContext = buildProductionContext();
+      expect(productionContext.cognitoAdmins).toBeInstanceOf(AwsCognitoAdmins);
+      await productionContext.sql?.end();
     } finally {
       warnSpy.mockRestore();
       process.env = savedEnvironment;

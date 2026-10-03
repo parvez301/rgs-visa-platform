@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { MAX_TOOL_ITERATIONS, runAgentTurn } from "../../src/agent/loop";
 import { setUserPrefs } from "../../src/agent/prefs";
 import type { AgentTool } from "../../src/agent/tools/registry";
@@ -20,7 +20,14 @@ import { memoryScope, rememberMemory } from "../../src/domain/crm/memory";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { newId } from "../../src/lib/ids";
-import { buildTestContext, type TestContext } from "../helpers";
+import {
+  buildSqlTestContext,
+  closeSqlTestContexts,
+  interceptSql,
+  type SqlTestContext,
+} from "../helpers";
+
+afterEach(closeSqlTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
@@ -28,7 +35,7 @@ const ACTOR = "desk@rgs.local";
 // Mirrors writeTools.test.ts's / approval.test.ts's own helper: caseRef
 // doubles as the partner's name suffix so two calls in one test do not trip
 // createPartner's one-canonical-name-per-partner rule.
-async function seedOneCase(context: TestContext, caseRef = "80001") {
+async function seedOneCase(context: SqlTestContext, caseRef = "80001") {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -54,12 +61,14 @@ async function seedOneCase(context: TestContext, caseRef = "80001") {
 
 /**
  * ruling P6 (task-10-controller-notes.md §1): neither of these helpers
- * exists anywhere in the codebase -- `buildTestContext()` from `../helpers`
+ * exists anywhere in the codebase -- `await buildSqlTestContext()` from `../helpers`
  * is the only piece task-10-brief.md's pseudocode got right; the rest is
  * written here.
  */
-function buildTestContextWithFakeLlm(scriptedTurns: ScriptedTurn[]): TestContext & { llm: FakeLlmProvider } {
-  const context = buildTestContext();
+async function buildSqlTestContextWithFakeLlm(
+  scriptedTurns: ScriptedTurn[],
+): Promise<SqlTestContext & { llm: FakeLlmProvider }> {
+  const context = await buildSqlTestContext();
   return Object.assign(context, { llm: new FakeLlmProvider(scriptedTurns) });
 }
 
@@ -76,9 +85,9 @@ function buildTestContextWithFakeLlm(scriptedTurns: ScriptedTurn[]): TestContext
 async function contextAtTrustLevel(
   level: 0 | 1 | 2,
   scriptedTurns: ScriptedTurn[],
-  options: { autoApplyOptIn?: boolean; context?: TestContext } = {},
-): Promise<TestContext & { llm: FakeLlmProvider }> {
-  const baseContext = options.context ?? buildTestContext();
+  options: { autoApplyOptIn?: boolean; context?: SqlTestContext } = {},
+): Promise<SqlTestContext & { llm: FakeLlmProvider }> {
+  const baseContext = options.context ?? await buildSqlTestContext();
   const contextWithLlm = Object.assign(baseContext, { llm: new FakeLlmProvider(scriptedTurns) });
   await setUserPrefs(contextWithLlm, TENANT_ID, ACTOR, {
     trustLevel: level,
@@ -89,14 +98,14 @@ async function contextAtTrustLevel(
 
 describe("runAgentTurn", () => {
   it("throws badRequest when the context has no llm provider attached", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(
       runAgentTurn(context, TENANT_ID, { userMessage: "hi", conversation: [], actorEmail: ACTOR }),
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it("runs read tools automatically and stages write tools, in one turn", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, "AGT-01");
     const contextWithLlm = Object.assign(context, {
       llm: new FakeLlmProvider([
@@ -149,7 +158,7 @@ describe("runAgentTurn", () => {
   });
 
   it("stages a high-stakes write even at trust level 2", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "HS-01");
     const context = await contextAtTrustLevel(
       2,
@@ -191,7 +200,7 @@ describe("runAgentTurn", () => {
       { text: "Done.", toolCalls: [] },
     ];
 
-    const baseContextAtTwo = buildTestContext();
+    const baseContextAtTwo = await buildSqlTestContext();
     const caseAtTwo = await seedOneCase(baseContextAtTwo, "LS-02");
     const contextAtTwo = await contextAtTrustLevel(2, scriptFor(caseAtTwo.caseId), { context: baseContextAtTwo });
     const resultAtTwo = await runAgentTurn(contextAtTwo, TENANT_ID, {
@@ -214,7 +223,7 @@ describe("runAgentTurn", () => {
     const caseAtTwoAfterTurn = await getCase(contextAtTwo, TENANT_ID, caseAtTwo.caseId);
     expect(caseAtTwoAfterTurn.processing).toBe("EXPRESS");
 
-    const baseContextAtOne = buildTestContext();
+    const baseContextAtOne = await buildSqlTestContext();
     const caseAtOne = await seedOneCase(baseContextAtOne, "LS-01");
     const contextAtOne = await contextAtTrustLevel(1, scriptFor(caseAtOne.caseId), { context: baseContextAtOne });
     const resultAtOne = await runAgentTurn(contextAtOne, TENANT_ID, {
@@ -238,7 +247,7 @@ describe("runAgentTurn", () => {
   // test proves it), so a demotion from {trustLevel: 2, autoApplyOptIn:
   // true} to {trustLevel: 1} leaves the flag on.
   it("stages at trust level 1 even when the user HAS opted in to auto-apply", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "LVL1-01");
     const context = await contextAtTrustLevel(
       1,
@@ -270,7 +279,7 @@ describe("runAgentTurn", () => {
   // schema, so this is the state every real user starts in even after they
   // have been moved to trustLevel 2 by whatever future screen does that.
   it("stages rather than auto-applies at trust level 2 when the user has not opted in", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "LS-03");
     const context = await contextAtTrustLevel(
       2,
@@ -298,7 +307,7 @@ describe("runAgentTurn", () => {
       text: "",
       toolCalls: [{ toolCallId: "c", toolName: "list_partners", input: {} }],
     }));
-    const context = buildTestContextWithFakeLlm(neverStops);
+    const context = await buildSqlTestContextWithFakeLlm(neverStops);
     const result = await runAgentTurn(context, TENANT_ID, { userMessage: "hi", conversation: [], actorEmail: ACTOR });
     expect(result.toolCallsMade).toHaveLength(MAX_TOOL_ITERATIONS);
     // Branch review M2: the reply here is "" -- the last completion's text
@@ -313,7 +322,7 @@ describe("runAgentTurn", () => {
   // that ended because the model stopped calling tools must report false,
   // whether or not it used any tools at all.
   it("reports stoppedAtIterationCap false for a turn the model ended on its own", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       { text: "", toolCalls: [{ toolCallId: "c1", toolName: "list_partners", input: {} }] },
       { text: "Here are your partners.", toolCalls: [] },
     ]);
@@ -323,13 +332,13 @@ describe("runAgentTurn", () => {
   });
 
   it("reports stoppedAtIterationCap false for a turn that called no tools at all", async () => {
-    const context = buildTestContextWithFakeLlm([{ text: "Nothing to look up.", toolCalls: [] }]);
+    const context = await buildSqlTestContextWithFakeLlm([{ text: "Nothing to look up.", toolCalls: [] }]);
     const result = await runAgentTurn(context, TENANT_ID, { userMessage: "hello", conversation: [], actorEmail: ACTOR });
     expect(result.stoppedAtIterationCap).toBe(false);
   });
 
   it("feeds a failing tool's error back to the model instead of aborting the turn", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       { text: "", toolCalls: [{ toolCallId: "c1", toolName: "get_case", input: { caseId: "nope" } }] },
       { text: "That case doesn't exist.", toolCalls: [] },
     ]);
@@ -343,7 +352,7 @@ describe("runAgentTurn", () => {
   // neither filter is one. Both kinds must come back as an ordinary
   // tool_result, never escape the turn.
   it("feeds back a plain thrown Error the same way, not only an ApiError", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       { text: "", toolCalls: [{ toolCallId: "c1", toolName: "search_cases", input: {} }] },
       { text: "I need a caseStatus or a partnerId to search by.", toolCalls: [] },
     ]);
@@ -363,7 +372,7 @@ describe("runAgentTurn", () => {
   // fake does not care -- so this asserts directly on the constructed
   // message.
   it("carries toolName on every tool_result message it builds, not just toolCallId", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, "TN-01");
     const contextWithLlm = Object.assign(context, {
       llm: new FakeLlmProvider([
@@ -386,7 +395,7 @@ describe("runAgentTurn", () => {
   // matches the tool's inputSchema. The loop is where that guarantee has to
   // come from.
   it("validates a tool call's input before dispatching it -- a malformed argument comes back as a validation message, not a crash", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       { text: "", toolCalls: [{ toolCallId: "c1", toolName: "get_case", input: { caseId: 12345 } }] },
       { text: "caseId needs to be text, not a number.", toolCalls: [] },
     ]);
@@ -487,7 +496,7 @@ describe("runAgentTurn", () => {
   // ladder, and the only assertion here that a fail-open ladder cannot
   // satisfy by some other route.
   it("does not auto-apply create_case at trust level 2 with opt-in, and writes no case row", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const partner = await createPartner(
       baseContext,
       TENANT_ID,
@@ -548,7 +557,7 @@ describe("runAgentTurn", () => {
   // task-10-controller-notes.md §3: an auto-applied change must not read, in
   // the case's own audit trail, as though a human reviewed it.
   it("marks an auto-applied change's PROPOSAL_APPROVED event so it cannot be mistaken for a human approval", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "DIST-01");
 
     const autoContext = await contextAtTrustLevel(
@@ -605,7 +614,7 @@ describe("runAgentTurn", () => {
   // inside it, could be replaced with a string constant and every other
   // test in this file would stay green.
   it("puts the tenant's ORG-scope memories into the system prompt", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, "MEM-ORG-01");
     await rememberMemory(
       context,
@@ -630,7 +639,7 @@ describe("runAgentTurn", () => {
   // would leak one desk user's private memories into another user's prompt,
   // and without this, nothing would go red.
   it("puts the caller's own USER-scope memories into the prompt, and never another user's", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, "MEM-USER-01");
     const OTHER_USER = "other-agent@rgs.local";
     await rememberMemory(
@@ -673,7 +682,7 @@ describe("runAgentTurn", () => {
   // asserting against it). Two turns, non-zero and DIFFERENT from each
   // other, so only a real sum produces the expected total.
   it("sums usage across every model call in the turn", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       {
         text: "",
         toolCalls: [{ toolCallId: "c1", toolName: "list_partners", input: {} }],
@@ -696,7 +705,7 @@ describe("runAgentTurn", () => {
   // controller-notes §5 restates it, but no test called an unknown tool
   // name until now -- a `throw` in its place reddened nothing.
   it("feeds back an unknown tool name as an ordinary tool_result instead of throwing", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       { text: "", toolCalls: [{ toolCallId: "c1", toolName: "no_such_tool", input: {} }] },
       { text: "I don't have that tool.", toolCalls: [] },
     ]);
@@ -732,7 +741,7 @@ describe("runAgentTurn", () => {
   // the same USER-scope leak B3 closed inside `buildSystemPrompt`, one call
   // frame earlier -- nothing previously pinned the identity handed TO it).
   it("reads trust-level prefs and records proposals under the actual caller's identity, not a hardcoded stand-in", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "ID-01");
     const REAL_CALLER = "manager@rgs.local";
     await setUserPrefs(baseContext, TENANT_ID, ACTOR, { trustLevel: 2, autoApplyOptIn: true });
@@ -787,7 +796,7 @@ describe("runAgentTurn", () => {
   // violation the conjunct exists for -- a tool on BOTH lists -- and proves
   // the write still stages.
   it("stages a high-stakes tool even when it has been added to AUTO_APPLIABLE_TOOLS", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "GUARD-01");
     const context = await contextAtTrustLevel(
       2,
@@ -830,7 +839,7 @@ describe("runAgentTurn", () => {
   // other test in this file ever passes a non-empty one, so dropping it
   // reddened nothing.
   it("carries prior conversation into the first request's messages", async () => {
-    const context = buildTestContextWithFakeLlm([{ text: "sure thing", toolCalls: [] }]);
+    const context = await buildSqlTestContextWithFakeLlm([{ text: "sure thing", toolCalls: [] }]);
     const priorConversation: AgentMessage[] = [
       { role: "user", content: "earlier question" },
       { role: "assistant", content: "earlier answer" },
@@ -852,7 +861,7 @@ describe("runAgentTurn", () => {
   // narration from its own next-iteration context if the loop drops it,
   // and nothing would notice.
   it("keeps the assistant's own narration in the transcript across iterations", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, "NARR-01");
     const contextWithLlm = Object.assign(context, {
       llm: new FakeLlmProvider([
@@ -888,7 +897,7 @@ describe("runAgentTurn", () => {
   // staged in storage") are proved separately, and a third: the model is
   // told what actually happened.
   it("names a staged proposal in `proposals` when its auto-apply throws after staging, rather than orphaning it", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "ORPHAN-01");
     const context = await contextAtTrustLevel(
       2,
@@ -942,7 +951,7 @@ describe("runAgentTurn", () => {
   // fault is one table write, chosen by its own `eventType`, so nothing
   // about `update_case` or `applyApprovedChange` is mocked.
   it("reads back what actually happened when apply succeeds but the write after it fails, instead of guessing", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "N1-01");
     const context = await contextAtTrustLevel(
       2,
@@ -965,13 +974,12 @@ describe("runAgentTurn", () => {
     // The only injected fault: the audit-trail write specifically, chosen by
     // its own eventType, so every other write in the turn (including the
     // domain mutation itself) goes through untouched.
-    const realTablePut = context.table.put.bind(context.table);
-    context.table.put = async (item) => {
-      if (item["eventType"] === "PROPOSAL_APPROVED") {
+    interceptSql(context, async ({ text, values }, run) => {
+      if (text.includes("insert into crm_events") && values[3] === "PROPOSAL_APPROVED") {
         throw new Error("audit write blew up");
       }
-      return realTablePut(item);
-    };
+      return run();
+    });
 
     const result = await runAgentTurn(context, TENANT_ID, {
       userMessage: "switch to express",
@@ -1015,7 +1023,7 @@ describe("runAgentTurn", () => {
   // (Task 9's `forget` test already taught this branch that a test pinned
   // by absence is worth much less).
   it("reports indeterminate, naming the proposal, when the read-back itself fails after apply throws", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "N1-INDET-01");
     const context = await contextAtTrustLevel(
       2,
@@ -1040,22 +1048,17 @@ describe("runAgentTurn", () => {
     // throw in the first place) and the catch's own `getProposal`
     // read-back. `stageProposal` itself still succeeds: it only ever
     // `put`s.
-    const realTableGet = context.table.get.bind(context.table);
-    context.table.get = async (partitionKey, sortKey, options) => {
-      if (partitionKey.includes("#PROPOSAL#")) {
-        throw new Error("proposal read blew up");
-      }
-      return realTableGet(partitionKey, sortKey, options);
-    };
     // Captured from the stage write itself -- the one call in this turn
     // that still succeeds -- so the assertion below is pinned to the real,
     // dynamically-minted id rather than a guess at its shape.
     let stagedProposalId: string | undefined;
-    const realTablePut = context.table.put.bind(context.table);
-    context.table.put = async (item) => {
-      if (typeof item.proposalId === "string") stagedProposalId = item.proposalId;
-      return realTablePut(item);
-    };
+    interceptSql(context, async ({ text, values }, run) => {
+      if (/\bfrom\s+crm_proposals\b/i.test(text)) {
+        throw new Error("proposal read blew up");
+      }
+      if (text.includes("insert into crm_proposals")) stagedProposalId = String(values[1]);
+      return run();
+    });
 
     const result = await runAgentTurn(context, TENANT_ID, {
       userMessage: "switch to express",
@@ -1081,7 +1084,7 @@ describe("runAgentTurn", () => {
   });
 
   it("reports indeterminate, naming the proposal, when the row is neither PENDING nor APPROVED", async () => {
-    const baseContext = buildTestContext();
+    const baseContext = await buildSqlTestContext();
     const seededCase = await seedOneCase(baseContext, "N1-INDET-02");
     const context = await contextAtTrustLevel(
       2,
@@ -1107,25 +1110,26 @@ describe("runAgentTurn", () => {
     // throws first (the row genuinely is not PENDING any more), and the
     // status the catch's read-back observes is neither PENDING nor
     // APPROVED -- the exact state the branch this test pins exists for.
-    // GSI1PK is deliberately left saying PENDING (this test never queries
-    // it) -- only the `status` field itself, the one the catch actually
-    // reads, is changed.
+    // Only the `status` column, the one the catch actually reads, differs.
     let stagedProposalId: string | undefined;
-    const realTablePut = context.table.put.bind(context.table);
-    context.table.put = async (item) => {
-      if (item.PK.includes("#PROPOSAL#") && item.status === "PENDING") {
-        stagedProposalId = item.proposalId as string;
-        await realTablePut({
-          ...item,
-          status: "DISCARDED",
-          decidedBy: "someone-else@rgs.local",
-          decidedAt: context.now().toISOString(),
-          discardReason: "raced by another approver",
-        });
-        return;
+    const realSql = context.sql;
+    interceptSql(context, async ({ text, values }, run) => {
+      if (text.includes("insert into crm_proposals") && values[2] === "PENDING") {
+        stagedProposalId = String(values[1]);
+        const staged = await run();
+        // The staged row is already DISCARDED by the time it is read back, as
+        // if another approver won the race.
+        await realSql.query(
+          `update crm_proposals
+              set status = 'DISCARDED', decided_by = 'someone-else@rgs.local',
+                  decided_at = $3::timestamptz, discard_reason = 'raced by another approver'
+            where tenant_id = $1 and proposal_id = $2`,
+          [values[0], values[1], context.now().toISOString()],
+        );
+        return staged;
       }
-      return realTablePut(item);
-    };
+      return run();
+    });
 
     const result = await runAgentTurn(context, TENANT_ID, {
       userMessage: "switch to express",

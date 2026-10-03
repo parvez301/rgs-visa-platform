@@ -1,9 +1,9 @@
 import { ADMIN_ROLES, type AdminRole, type AdminScreen } from "@rgs/shared";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildAdminRouter } from "../../src/http/adminApi";
 import { InMemoryCognitoAdmins } from "../../src/lib/cognitoAdmins";
-import { buildTestContext } from "../helpers";
+import { buildSqlTestContext, closeSqlTestContexts } from "../helpers";
 
 interface RouteAccess {
   method: string;
@@ -130,17 +130,23 @@ function eventFor(route: RouteAccess, role: AdminRole): APIGatewayProxyEventV2 {
 }
 
 describe("admin route access matrix", () => {
-  const context = buildTestContext();
-  context.cognitoAdmins = new InMemoryCognitoAdmins([
-    {
-      username: "x",
-      email: "x@rgs.test",
-      groups: ["Ops"],
-      status: "CONFIRMED",
-      enabled: true,
-    },
-  ]);
-  const router = buildAdminRouter(context);
+  let router: ReturnType<typeof buildAdminRouter>;
+
+  beforeAll(async () => {
+    const context = await buildSqlTestContext();
+    context.cognitoAdmins = new InMemoryCognitoAdmins([
+      {
+        username: "x",
+        email: "x@rgs.test",
+        groups: ["Ops"],
+        status: "CONFIRMED",
+        enabled: true,
+      },
+    ]);
+    router = buildAdminRouter(context);
+  });
+
+  afterAll(closeSqlTestContexts);
 
   it("classifies every registered route exactly once", () => {
     const registeredRouteKeys = router.registeredRoutes.map(routeKey).sort();

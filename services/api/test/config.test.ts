@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { COUNTRY_PRODUCTS, getCountryProduct } from "@rgs/shared";
+import { listRecentActivity } from "../src/domain/activity";
 import { createDraft } from "../src/domain/applications";
 import { presignDocumentUpload } from "../src/domain/documents";
 import {
@@ -8,20 +9,22 @@ import {
   seedCountryConfig,
   upsertCountryProduct,
 } from "../src/domain/config";
-import { buildTestContext } from "./helpers";
+import { buildSqlTestContext, closeSqlTestContexts } from "./helpers";
+
+afterEach(closeSqlTestContexts);
 
 const uaeSeed = getCountryProduct("AE");
 
 describe("listCountryConfig", () => {
-  it("falls back to the static seed catalog when DB is empty", async () => {
-    const context = buildTestContext();
+  it("lists the migrated seed catalog on a fresh database", async () => {
+    const context = await buildSqlTestContext();
     const catalog = (await listCountryConfig(context)).countryProducts;
     expect(catalog).toHaveLength(COUNTRY_PRODUCTS.length);
     expect(catalog.map((product) => product.countryCode)).toContain("AE");
   });
 
   it("returns DB rows once config exists", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [...uaeSeed.requiredDocuments],
@@ -35,7 +38,7 @@ describe("listCountryConfig", () => {
 
 describe("upsertCountryProduct", () => {
   it("seeds the full catalog on first write so nothing vanishes", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [...uaeSeed.requiredDocuments],
@@ -46,7 +49,7 @@ describe("upsertCountryProduct", () => {
   });
 
   it("rejects invalid config (negative fee, unknown doc type)", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(
       upsertCountryProduct(context, "admin_1", "admin@example.com", {
         ...uaeSeed,
@@ -63,49 +66,29 @@ describe("upsertCountryProduct", () => {
   });
 
   it("logs a CONFIG_CHANGED activity event", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [...uaeSeed.requiredDocuments],
       processingDays: 2,
     });
-    const dayEvents = await context.table.query("EVENT#2026-07-23");
-    expect(dayEvents.map((eventItem) => eventItem["eventType"])).toContain("CONFIG_CHANGED");
+    const { events } = await listRecentActivity(context, 2, 50);
+    expect(events.map((event) => event.eventType)).toContain("CONFIG_CHANGED");
   });
 });
 
 describe("seedCountryConfig", () => {
   it("is idempotent", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
+    await context.sql.query("delete from crm_country_products");
     expect(await seedCountryConfig(context)).toBe(COUNTRY_PRODUCTS.length);
     expect(await seedCountryConfig(context)).toBe(0);
   });
 });
 
-describe("schema evolution", () => {
-  it("reads legacy DB rows (pre region/tier) by merging defaults from the code catalog", async () => {
-    const context = buildTestContext();
-    // Simulate a row seeded before the region/tier/officialUrl fields existed,
-    // including an admin-edited fee that must survive the merge.
-    const { region, tier, officialUrl, requiredDocuments, ...legacyShape } = uaeSeed;
-    await context.table.put({
-      PK: "CONFIG#COUNTRY",
-      SK: `${uaeSeed.countryCode}#${uaeSeed.productCode}`,
-      ...legacyShape,
-      requiredDocuments: [...requiredDocuments],
-      governmentFeeInr: 7777,
-    });
-    const catalog = (await listCountryConfig(context)).countryProducts;
-    const uaeFromDb = catalog.find((product) => product.countryCode === "AE");
-    expect(uaeFromDb?.governmentFeeInr).toBe(7777);
-    expect(uaeFromDb?.region).toBe("MIDDLE_EAST");
-    expect(uaeFromDb?.tier).toBe("FULFILLED");
-  });
-});
-
 describe("config drives pricing and document rules", () => {
   it("createDraft prices from the admin-edited config, not the code seed", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [...uaeSeed.requiredDocuments],
@@ -118,7 +101,7 @@ describe("config drives pricing and document rules", () => {
   });
 
   it("document checklist enforcement follows the admin-edited config", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [
@@ -140,7 +123,7 @@ describe("config drives pricing and document rules", () => {
   });
 
   it("resolveCountryProduct throws for unknown countries", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(resolveCountryProduct(context, "XX")).rejects.toThrow(
       /No visa product configured/,
     );

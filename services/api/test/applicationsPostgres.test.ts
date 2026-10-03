@@ -1,6 +1,4 @@
-import { PGlite } from "@electric-sql/pglite";
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyMigrations } from "../src/db/migrate";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   addInternalNote,
   getApplicationById,
@@ -25,42 +23,35 @@ import type { AppContext } from "../src/lib/context";
 import { ApiError, CorruptRecordError } from "../src/lib/errors";
 import type { SqlClient } from "../src/lib/sql";
 import {
-  buildTestContext,
+  buildSqlTestContext,
+  closeSqlTestContexts,
   completeEssentials,
   completeTraveller,
   createSubmittableUaeDraft,
-  type TestContext,
+  type SqlTestContext,
 } from "./helpers";
-import { pgliteAsSqlClient } from "./pgliteSqlClient";
 
 const USER_EMAIL = "user_1@example.com";
 
-describe("portal applications with CRM_STORE=postgres", () => {
+describe("portal applications", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext();
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext();
+    sql = context.sql;
   });
 
-  async function dynamoApplicationItems(userId = "user_1") {
-    return baseContext.table.query(`USER#${userId}`, { skPrefix: "APP#" });
-  }
+  afterEach(closeSqlTestContexts);
 
-  it("creates a draft in Postgres and leaves Dynamo without an APP# row", async () => {
+  it("creates a draft in Postgres", async () => {
     const draft = await createDraft(context, "user_1", "AE", USER_EMAIL);
     expect(await getApplicationPostgres(sql, draft.applicationId)).toEqual(draft);
-    expect(await dynamoApplicationItems()).toEqual([]);
-    expect(await baseContext.table.queryGsi("GSI3", `APP#${draft.applicationId}`)).toEqual([]);
   });
 
   it("lists my applications from Postgres, newest first, scoped to the user", async () => {
     const first = await createDraft(context, "user_1", "AE", USER_EMAIL);
-    baseContext.advanceClock(1000);
+    context.advanceClock(1000);
     const second = await createDraft(context, "user_1", "AE", USER_EMAIL);
     await createDraft(context, "user_2", "AE", "user_2@example.com");
     const listing = await listMyApplications(context, "user_1");
@@ -69,12 +60,11 @@ describe("portal applications with CRM_STORE=postgres", () => {
       first.applicationId,
     ]);
     expect(listing.unreadableApplicationIds).toEqual([]);
-    expect(await dynamoApplicationItems()).toEqual([]);
   });
 
   it("patches a draft and round-trips travellers and essentials", async () => {
     const draft = await createDraft(context, "user_1", "AE", USER_EMAIL);
-    baseContext.advanceClock(5000);
+    context.advanceClock(5000);
     const patched = await patchDraft(
       context,
       "user_1",
@@ -112,7 +102,6 @@ describe("portal applications with CRM_STORE=postgres", () => {
     expect(queue.applications.map((a) => a.applicationId)).toEqual([applicationId]);
     expect(queue.unreadableApplicationIds).toEqual([]);
     expect((await listApplicationsByStatus(context, "DRAFT")).applications).toHaveLength(0);
-    expect(await dynamoApplicationItems()).toEqual([]);
     expect((await getApplicationById(context, applicationId)).status).toBe("SUBMITTED");
     await expect(getApplicationById(context, "app_missing")).rejects.toMatchObject({
       statusCode: 404,
@@ -136,12 +125,11 @@ describe("portal applications with CRM_STORE=postgres", () => {
     await transitionApplication(context, "admin_1", "a@example.com", applicationId, "DOCS_VERIFIED", USER_EMAIL);
     expect((await listApplicationsByStatus(context, "DOCS_VERIFIED")).applications).toHaveLength(1);
     expect((await listApplicationsByStatus(context, "SUBMITTED")).applications).toHaveLength(0);
-    expect(await dynamoApplicationItems()).toEqual([]);
   });
 
   it("admin list sorts newest updated_at first and honours the limit", async () => {
     const older = await createDraft(context, "user_1", "AE", USER_EMAIL);
-    baseContext.advanceClock(1000);
+    context.advanceClock(1000);
     const newer = await createDraft(context, "user_2", "AE", "user_2@example.com");
     const queue = await listApplicationsByStatus(context, "DRAFT");
     expect(queue.applications.map((a) => a.applicationId)).toEqual([
@@ -179,18 +167,5 @@ describe("portal applications with CRM_STORE=postgres", () => {
     expect(reloaded).toEqual(draft);
     expect("visaResultKey" in reloaded!).toBe(false);
     expect("essentials" in reloaded!).toBe(false);
-  });
-});
-
-describe("portal applications with the Dynamo store", () => {
-  it("still writes USER#/APP# rows and reads them back", async () => {
-    const context = buildTestContext();
-    const draft = await createDraft(context, "user_1", "AE", USER_EMAIL);
-    expect(await context.table.query("USER#user_1", { skPrefix: "APP#" })).toHaveLength(1);
-    expect((await listMyApplications(context, "user_1")).applications).toEqual([draft]);
-    expect((await getApplicationById(context, draft.applicationId)).applicationId).toBe(
-      draft.applicationId,
-    );
-    expect((await listApplicationsByStatus(context, "DRAFT")).applications).toHaveLength(1);
   });
 });

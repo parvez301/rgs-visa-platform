@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { IllegalStatusTransitionError } from "@rgs/shared";
 import { submitApplication } from "../src/domain/applications";
 import {
@@ -13,9 +13,17 @@ import {
 } from "../src/domain/admin";
 import { listRecentActivity, listUserActivity } from "../src/domain/activity";
 import { CorruptRecordError } from "../src/lib/errors";
-import { buildTestContext, createSubmittableUaeDraft } from "./helpers";
+import {
+  buildSqlTestContext,
+  closeSqlTestContexts,
+  createSubmittableUaeDraft,
+  type SqlTestContext,
+} from "./helpers";
 
-async function submittedApplication(context = buildTestContext()) {
+afterEach(closeSqlTestContexts);
+
+async function submittedApplication(context?: SqlTestContext) {
+  context ??= await buildSqlTestContext();
   const applicationId = await createSubmittableUaeDraft(context);
   await submitApplication(context, "user_1", applicationId, "asha@example.com");
   return { context, applicationId };
@@ -55,16 +63,15 @@ describe("status queues", () => {
   // --- work queue; one hand-repaired row must not close it for everybody.
   it("skips a malformed application row instead of 500ing the whole queue", async () => {
     const { context, applicationId } = await submittedApplication();
-    // A row the index still names but that no longer satisfies the schema:
-    // `status` is required and absent here.
-    await context.table.put({
-      PK: "USER#user_9",
-      SK: "APP#app_half_written",
-      GSI1PK: "STATUS#SUBMITTED",
-      GSI1SK: "2026-07-23T10:00:00.000Z",
-      applicationId: "app_half_written",
-      userId: "user_9",
-    });
+    // A row that no longer satisfies the schema: an application needs at
+    // least one traveller and this one has none.
+    await context.sql.query(
+      `insert into portal_applications (application_id, user_id, country_code, product_code,
+         status, step_reached, travellers, amounts, payment_status, created_at, updated_at)
+       values ($1, 'user_9', 'AE', 'tourist', 'SUBMITTED', 'travellers', '[]'::jsonb,
+         '{"governmentFeeInr":1,"serviceFeeInr":1,"currency":"INR"}'::jsonb, 'UNPAID', now(), now())`,
+      ["app_half_written"],
+    );
 
     const submittedQueue = await listApplicationsByStatus(context, "SUBMITTED");
     expect(
@@ -76,15 +83,14 @@ describe("status queues", () => {
   });
 
   it("answers a typed 409 rather than a 500 when a single application will not parse", async () => {
-    const context = buildTestContext();
-    await context.table.put({
-      PK: "USER#user_9",
-      SK: "APP#app_half_written",
-      GSI3PK: "APP#app_half_written",
-      GSI3SK: "A",
-      applicationId: "app_half_written",
-      userId: "user_9",
-    });
+    const context = await buildSqlTestContext();
+    await context.sql.query(
+      `insert into portal_applications (application_id, user_id, country_code, product_code,
+         status, step_reached, travellers, amounts, payment_status, created_at, updated_at)
+       values ($1, 'user_9', 'AE', 'tourist', 'SUBMITTED', 'travellers', '[]'::jsonb,
+         '{"governmentFeeInr":1,"serviceFeeInr":1,"currency":"INR"}'::jsonb, 'UNPAID', now(), now())`,
+      ["app_half_written"],
+    );
 
     const read = getApplicationById(context, "app_half_written");
     await expect(read).rejects.toBeInstanceOf(CorruptRecordError);
@@ -92,24 +98,6 @@ describe("status queues", () => {
     // operator to re-create an application that already exists.
     await expect(read).rejects.toMatchObject({ statusCode: 409, code: "CORRUPT_RECORD" });
     await expect(read).rejects.toThrow("app_half_written");
-  });
-
-  it("names an unreadable application by its storage key when the row lost its id", async () => {
-    const context = buildTestContext();
-    await context.table.put({
-      PK: "USER#user_9",
-      SK: "APP#app_lost_its_id",
-      GSI1PK: "STATUS#SUBMITTED",
-      GSI1SK: "2026-07-23T10:00:00.000Z",
-      userId: "user_9",
-    });
-
-    // String(item.applicationId) would report the literal id "undefined",
-    // which finds no row at all. The storage key still names it.
-    const submittedQueue = await listApplicationsByStatus(context, "SUBMITTED");
-    expect(submittedQueue.unreadableApplicationIds).toEqual([
-      "USER#user_9 / APP#app_lost_its_id",
-    ]);
   });
 });
 
@@ -270,21 +258,15 @@ describe("notes and activity", () => {
   // --- C3, the activity half. A bad EVENT# row used to 500 the admin feed
   // --- for every admin until its day bucket aged out of the window, and one
   // --- user's trail forever, because listUserActivity has no window at all.
-  it("skips a malformed event instead of 500ing the feed and the user trail", async () => {
+  it("skips an unparseable event instead of 500ing the feed and the user trail", async () => {
     const { context } = await submittedApplication();
-    const dayBucket = context.now().toISOString().slice(0, 10);
-    // `eventType` is required and absent: the shape a future code path or a
-    // hand-repair in the console leaves behind.
-    await context.table.put({
-      PK: `EVENT#${dayBucket}`,
-      SK: "9999#evt_half_written",
-      GSI2PK: "USER#user_1",
-      GSI2SK: "9999",
-      eventId: "evt_half_written",
-      userId: "user_1",
-      createdAt: "2026-07-23T10:00:00.000Z",
-      meta: {},
-    });
+    // `event_type` is not a known type: the shape a future code path or a
+    // hand-repair leaves behind.
+    await context.sql.query(
+      `insert into activity_events (event_id, event_type, user_id, meta, created_at)
+       values ('evt_half_written', 'NOT_A_TYPE', 'user_1', '{}'::jsonb, $1::timestamptz)`,
+      [context.now().toISOString()],
+    );
 
     const recentFeed = await listRecentActivity(context, 2);
     expect(recentFeed.events.length).toBeGreaterThan(0);

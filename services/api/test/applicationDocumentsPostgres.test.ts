@@ -1,6 +1,4 @@
-import { PGlite } from "@electric-sql/pglite";
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyMigrations } from "../src/db/migrate";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   presignDocumentDownloadForAdmin,
   reviewDocument,
@@ -21,34 +19,29 @@ import { presignOwnedDocumentDownload, recordDocumentUpload } from "../src/domai
 import type { AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
 import {
-  buildTestContext,
+  buildSqlTestContext,
+  closeSqlTestContexts,
   completeEssentials,
   completeTraveller,
   createSubmittableUaeDraft,
-  type TestContext,
+  type SqlTestContext,
 } from "./helpers";
-import { pgliteAsSqlClient } from "./pgliteSqlClient";
 
 const USER_EMAIL = "user_1@example.com";
 const ADMIN_EMAIL = "admin@example.com";
 
-describe("application documents with CRM_STORE=postgres", () => {
+describe("application documents", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext();
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext();
+    sql = context.sql;
   });
 
-  async function dynamoDocumentItems(applicationId: string) {
-    return baseContext.table.query(`APP#${applicationId}`, { skPrefix: "DOC#" });
-  }
+  afterEach(closeSqlTestContexts);
 
-  it("records an upload in Postgres, lists it, and leaves Dynamo DOC# empty", async () => {
+  it("records an upload in Postgres, lists it", async () => {
     const draft = await createDraft(context, "user_1", "AE", USER_EMAIL);
     const recorded = await recordDocumentUpload(
       context,
@@ -63,7 +56,6 @@ describe("application documents with CRM_STORE=postgres", () => {
     expect(await getApplicationDocumentPostgres(sql, draft.applicationId, "PASSPORT_BIO", 0)).toEqual(
       recorded,
     );
-    expect(await dynamoDocumentItems(draft.applicationId)).toEqual([]);
   });
 
   it("re-upload replaces the row and resets review state", async () => {
@@ -111,7 +103,6 @@ describe("application documents with CRM_STORE=postgres", () => {
     );
     const submitted = await submitApplication(context, "user_1", draft.applicationId, USER_EMAIL);
     expect(submitted.status).toBe("SUBMITTED");
-    expect(await dynamoDocumentItems(draft.applicationId)).toEqual([]);
   });
 
   it("admin review persists to Postgres and gates DOCS_VERIFIED", async () => {
@@ -140,7 +131,6 @@ describe("application documents with CRM_STORE=postgres", () => {
       context, "admin_1", ADMIN_EMAIL, applicationId, "DOCS_VERIFIED", USER_EMAIL,
     );
     expect(verified.status).toBe("DOCS_VERIFIED");
-    expect(await dynamoDocumentItems(applicationId)).toEqual([]);
   });
 
   it("review requires a reason to reject and 404s on a missing document", async () => {
@@ -207,19 +197,5 @@ describe("application documents with CRM_STORE=postgres", () => {
     };
     await upsertApplicationDocumentPostgres(sql, document);
     expect(await getApplicationDocumentPostgres(sql, "app_x", "PHOTO", 0)).toEqual(document);
-  });
-});
-
-describe("application documents with the Dynamo store", () => {
-  it("still writes APP#/DOC# rows and reads them back", async () => {
-    const context = buildTestContext();
-    const applicationId = await createSubmittableUaeDraft(context);
-    expect(await context.table.query(`APP#${applicationId}`, { skPrefix: "DOC#" })).toHaveLength(2);
-    expect(await listApplicationDocuments(context, applicationId)).toHaveLength(2);
-    await reviewDocument(
-      context, "admin_1", ADMIN_EMAIL, applicationId, "PHOTO", 0, "APPROVED", USER_EMAIL,
-    );
-    const row = await context.table.get(`APP#${applicationId}`, "DOC#PHOTO#0");
-    expect(row?.reviewStatus).toBe("APPROVED");
   });
 });

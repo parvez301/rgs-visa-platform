@@ -1,15 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { aggregateTool } from "../../src/agent/tools/aggregate";
-import { buildTestContext, type TestContext } from "../helpers";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { createCase } from "../../src/domain/crm/cases";
-import { META_SORT_KEY, casePartitionKey, caseStatusGsi1Pk } from "../../src/domain/crm/keys";
+
+afterEach(closeSqlTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
 
-async function seedCases(context: TestContext, howMany: number) {
+async function seedCases(context: SqlTestContext, howMany: number) {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -38,7 +39,7 @@ async function seedCases(context: TestContext, howMany: number) {
 
 describe("aggregate", () => {
   it("returns counts, never the underlying rows", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await seedCases(context, 3);
 
     const result = await aggregateTool.execute(context, TENANT_ID, { groupBy: "caseStatus" }, ACTOR);
@@ -49,32 +50,29 @@ describe("aggregate", () => {
   });
 
   it("groups by destination country", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await seedCases(context, 2);
     const result = await aggregateTool.execute(context, TENANT_ID, { groupBy: "destinationCountry" }, ACTOR);
     expect(result).toEqual({ groupBy: "destinationCountry", counts: { JP: 2 }, total: 2 });
   });
 
   it("names the unreadable rows it could not count rather than quietly undercounting", async () => {
-    const context = buildTestContext();
-    await seedCases(context, 1);
-    // A META item indexed under NEW whose body carries no caseStatus at all --
-    // built with the same key builders writeCase itself uses, per the ban on
-    // writing a raw CRM key literal outside keys.ts.
-    await context.table.put({
-      PK: casePartitionKey(TENANT_ID, "broken"),
-      SK: META_SORT_KEY,
-      GSI1PK: caseStatusGsi1Pk(TENANT_ID, "NEW"),
-      GSI1SK: "2026-01-02T10:00:00.000Z",
-      tenantId: TENANT_ID,
-      caseId: "broken",
-    });
+    const context = await buildSqlTestContext();
+    await seedCases(context, 2);
+    // One case row whose counted column is blank, so it cannot be counted.
+    const stored = await context.sql.query<{ case_id: string }>(
+      "select case_id from crm_cases where tenant_id = $1 order by case_ref limit 1",
+      [TENANT_ID],
+    );
+    await context.sql.query("update crm_cases set case_status = '' where case_id = $1", [
+      stored.rows[0]!.case_id,
+    ]);
 
     const result = (await aggregateTool.execute(context, TENANT_ID, { groupBy: "caseStatus" }, ACTOR)) as {
       total: number;
       uncountedCaseIds: string[];
     };
     expect(result.total).toBe(1);
-    expect(result.uncountedCaseIds).toHaveLength(1);
+    expect(result.uncountedCaseIds).toEqual([stored.rows[0]!.case_id]);
   });
 });

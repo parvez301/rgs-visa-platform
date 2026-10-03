@@ -1,5 +1,5 @@
 import { crm } from "@rgs/shared";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   AUTO_APPLIABLE_TOOLS,
   HIGH_STAKES_TOOLS,
@@ -13,7 +13,6 @@ import { ToolRegistry } from "../../src/agent/tools/registry";
 import { WRITE_TOOLS } from "../../src/agent/tools/writeTools";
 import { createCase } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
-import { memoryPartitionKey } from "../../src/domain/crm/keys";
 import {
   MEMORY_RECALL_PAGE_LIMIT,
   forgetMemory,
@@ -26,16 +25,16 @@ import {
 } from "../../src/domain/crm/memory";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
-import type { AppContext } from "../../src/lib/context";
-import type { GetOptions } from "../../src/lib/db";
-import { buildTestContext, type TestContext } from "../helpers";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+
+afterEach(closeSqlTestContexts);
 
 const TENANT_ID = "rgs";
 const ALICE = "alice@rgs.local";
 const BOB = "bob@rgs.local";
 
 /** One case, so remember calls have a real sourceCaseId to cite. */
-async function seedOneCase(context: TestContext, actorEmail: string, caseRef = "90001") {
+async function seedOneCase(context: SqlTestContext, actorEmail: string, caseRef = "90001") {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -87,7 +86,7 @@ describe("memoryScope / parseMemoryScope", () => {
 
 describe("rememberMemory / recallMemories round trip", () => {
   it("writes a memory citing the case it learned from, and recall reads it back with real provenance", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
 
     const remembered = await rememberMemory(
@@ -117,7 +116,7 @@ describe("rememberMemory / recallMemories round trip", () => {
   });
 
   it("is idempotent by (scope, memoryKey): re-remembering the same key updates in place, no near-duplicate", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const scope = memoryScope("ORG");
 
@@ -147,7 +146,7 @@ describe("rememberMemory / recallMemories round trip", () => {
   });
 
   it("returns only the scopes asked for, not every scope that exists", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
 
     await rememberMemory(
@@ -184,20 +183,16 @@ describe("rememberMemory / recallMemories round trip", () => {
   });
 
   it("names a corrupt memory row in unreadableMemoryKeys instead of 500ing the recall", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const scope = memoryScope("ORG");
-    // A row DynamoDB could hold but CrmMemorySchema refuses -- no `text`,
-    // no `createdAt`. Written directly, via the builder (keys.ts is the only
-    // file allowed the literal), because rememberMemory itself can never
-    // produce a shape this broken.
-    await context.table.put({
-      PK: memoryPartitionKey(TENANT_ID, scope),
-      SK: "half-written",
-      tenantId: TENANT_ID,
-      scope,
-      memoryKey: "half-written",
-      createdBy: "agent",
-    });
+    // A row the table accepts but CrmMemorySchema refuses on read: an agent
+    // memory with no source case. Written directly, because rememberMemory
+    // itself can never produce a shape this broken.
+    await context.sql.query(
+      `insert into crm_memories (tenant_id, scope, memory_key, text, created_by, created_at)
+       values ($1, $2, 'half-written', 'orphan', 'agent', $3::timestamptz)`,
+      [TENANT_ID, scope, context.now().toISOString()],
+    );
 
     const { memories, unreadableMemoryKeys } = await recallMemories(context, TENANT_ID, [scope]);
     expect(memories).toEqual([]);
@@ -205,7 +200,7 @@ describe("rememberMemory / recallMemories round trip", () => {
   });
 
   it("refuses an agent-authored memory that cites no source case, and writes nothing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const scope = memoryScope("ORG");
 
     // The refinement schemas.ts:153-170 exists for: this call passes
@@ -234,7 +229,7 @@ describe("rememberMemory / recallMemories round trip", () => {
   // blame it on), and no event lands on any case (there is no case to put
   // one on).
   it("writes a human-authored memory with no source case, and records no event anywhere", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const scope = memoryScope("ORG");
 
@@ -276,7 +271,7 @@ describe("rememberMemory / recallMemories round trip", () => {
 
 describe("forgetMemory", () => {
   it("removes a memory recall previously returned", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const scope = memoryScope("ORG");
     await rememberMemory(
@@ -294,7 +289,7 @@ describe("forgetMemory", () => {
   });
 
   it("is idempotent: forgetting a memoryKey nobody ever remembered is not an error", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(
       forgetMemory(context, TENANT_ID, memoryScope("ORG"), "never-remembered", ALICE),
     ).resolves.toBeUndefined();
@@ -306,7 +301,7 @@ describe("forgetMemory", () => {
   // not be able to forget (or, symmetrically, write) another user's
   // USER-scope memory, no matter what scope string reaches the domain layer.
   it("refuses to let one user forget another user's USER-scope memory, and deletes nothing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const aliceScope = memoryScope("USER", ALICE);
     await rememberMemory(
@@ -329,7 +324,7 @@ describe("forgetMemory", () => {
   });
 
   it("refuses to let one user remember a fact into another user's USER-scope memory", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
 
     await expect(
@@ -349,7 +344,7 @@ describe("forgetMemory", () => {
 
 describe("the recall tool", () => {
   it("never returns another user's USER-scope memory, even if the caller tries to name one in the input", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     await rememberMemory(
       context,
@@ -377,7 +372,7 @@ describe("the recall tool", () => {
   });
 
   it("resolves USER scope to whichever actor is actually calling", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     await rememberMemory(
       context,
@@ -399,7 +394,7 @@ describe("the recall tool", () => {
   });
 
   it("requires a partnerId for PARTNER scope", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(
       recallTool.execute(context, TENANT_ID, { scopes: ["PARTNER"] }, ALICE),
     ).rejects.toMatchObject({ statusCode: 400 });
@@ -413,7 +408,7 @@ describe("the recall tool", () => {
 
 describe("the remember tool", () => {
   it("reports (new memory) for a first remember, and the prior text for a re-remember", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const tool = new ToolRegistry(WRITE_TOOLS).get("remember")!;
 
@@ -454,7 +449,7 @@ describe("the remember tool", () => {
   });
 
   it("applies through rememberMemory, and refuses a sourceCaseId-less proposal with nothing written", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const tool = new ToolRegistry(WRITE_TOOLS).get("remember")!;
 
     await expect(
@@ -474,7 +469,7 @@ describe("the remember tool", () => {
 
 describe("the forget tool", () => {
   it("describes the deletion in its diff, and apply removes the row", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const remember = new ToolRegistry(WRITE_TOOLS).get("remember")!;
     const forget = new ToolRegistry(WRITE_TOOLS).get("forget")!;
@@ -521,7 +516,7 @@ describe("the forget tool", () => {
 // merely by absence of ALICE's copy.
 describe("the acting identity, through the real approval gate (fix round 1, Major 1)", () => {
   it("a USER-scope remember lands under the acting identity, never under the one that proposed it", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const rememberTool = new ToolRegistry(WRITE_TOOLS).get("remember")!;
 
@@ -551,7 +546,7 @@ describe("the acting identity, through the real approval gate (fix round 1, Majo
   });
 
   it("a USER-scope forget by the approver only ever touches the approver's own row, never the proposer's", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     // Seeded directly through the domain layer under the SAME memoryKey BOB
     // is about to forget, so a leak shows up as alice's row disappearing --
@@ -593,7 +588,7 @@ describe("the acting identity, through the real approval gate (fix round 1, Majo
 // only the summary needs to be able to tell which scope they are approving.
 describe("the approval card names the scope (fix round 1, Major 3)", () => {
   it("an ORG-scope and a USER-scope remember of identical text produce differing summary fields", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const rememberTool = new ToolRegistry(WRITE_TOOLS).get("remember")!;
 
@@ -618,7 +613,7 @@ describe("the approval card names the scope (fix round 1, Major 3)", () => {
 
 describe("recallMemories dedupes and caps (fix round 1, Minor 1 & 2)", () => {
   it("does not double-return a memory when the same scope appears twice in the request", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const scope = memoryScope("ORG");
     await rememberMemory(
@@ -634,7 +629,7 @@ describe("recallMemories dedupes and caps (fix round 1, Minor 1 & 2)", () => {
   });
 
   it("caps each scope's own query at the default MEMORY_RECALL_PAGE_LIMIT", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const scope = memoryScope("ORG");
     for (let memoryIndex = 0; memoryIndex < MEMORY_RECALL_PAGE_LIMIT + 5; memoryIndex += 1) {
@@ -655,7 +650,7 @@ describe("recallMemories dedupes and caps (fix round 1, Minor 1 & 2)", () => {
   });
 
   it("the recall tool's own limit input is honored and capped at MEMORY_RECALL_PAGE_LIMIT by its schema", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const scope = memoryScope("ORG");
     await rememberMemory(
@@ -691,7 +686,7 @@ describe("recallMemories dedupes and caps (fix round 1, Minor 1 & 2)", () => {
 
 describe("forget's sentinel distinguishes never-remembered from remembered-then-forgotten (fix round 1, Minor 3)", () => {
   it("renders the nothing-to-forget sentinel, not the new-memory sentinel, for a key nobody ever remembered", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const forgetTool = new ToolRegistry(WRITE_TOOLS).get("forget")!;
 
     const proposal = (await forgetTool.execute(
@@ -713,7 +708,7 @@ describe("forget's sentinel distinguishes never-remembered from remembered-then-
 
 describe("rememberMemory records a case-timeline event (fix round 1, Minor 5)", () => {
   it("records a MEMORY_REMEMBERED event on the source case when sourceCaseId is given", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
 
     await rememberMemory(
@@ -740,7 +735,7 @@ describe("rememberMemory records a case-timeline event (fix round 1, Minor 5)", 
   });
 
   it("records nothing when rememberMemory rejects a sourceCaseId-less proposal before ever reaching the write", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
 
     // This call passes authorKind "agent", and the schema refuses "agent"
@@ -763,7 +758,7 @@ describe("rememberMemory records a case-timeline event (fix round 1, Minor 5)", 
   });
 
   it("forgetMemory records no event on any case, regardless of scope", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const scope = memoryScope("ORG");
     await rememberMemory(
@@ -788,7 +783,7 @@ describe("rememberMemory records a case-timeline event (fix round 1, Minor 5)", 
 // readCaseOrThrow call below and confirm the first test here goes red.
 describe("rememberMemory validates sourceCaseId against a real case (fix round 2, item 1)", () => {
   it("rejects a sourceCaseId naming no real case, and writes neither the memory row nor an orphan event", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const scope = memoryScope("ORG");
     const phantomCaseId = "case_does_not_exist";
 
@@ -811,7 +806,7 @@ describe("rememberMemory validates sourceCaseId against a real case (fix round 2
   });
 
   it("still succeeds, and still records its event, when sourceCaseId names a real case", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
     const scope = memoryScope("ORG");
 
@@ -834,7 +829,7 @@ describe("rememberMemory validates sourceCaseId against a real case (fix round 2
 // first test here goes red.
 describe("the approval card names the source case (fix round 2, item 2)", () => {
   it("shows sourceCaseId on the remember card, not only scope and memoryKey", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context, ALICE);
 
     const proposal = (await rememberTool.execute(
@@ -849,7 +844,7 @@ describe("the approval card names the source case (fix round 2, item 2)", () => 
   });
 
   it("says plainly, not blankly, when no sourceCaseId was given at all", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
 
     const proposal = (await rememberTool.execute(
       context,
@@ -887,74 +882,109 @@ describe("remember/forget classification (ruling P46, §5)", () => {
   });
 });
 
-// Branch review I1. Both single-row memory reads take the same strong-read
-// opt-in caseStore.readCase takes (db.ts's GetOptions: "an eventually
-// consistent get can miss an item that was written moments earlier, which
-// reads back as a record that does not exist").
-//
-// Pinned by capturing GetOptions, the way caseRefIndex.test.ts pins its own:
-// InMemoryTableClient is always strongly consistent, so no behavioural test
-// in this suite can tell the two apart -- the flag is the only observable.
-describe("the single-row memory reads are strongly consistent", () => {
-  function watchGetOptions(context: TestContext): {
-    watchingContext: AppContext;
-    lastGetOptions: () => GetOptions | undefined;
-  } {
-    let capturedGetOptions: GetOptions | undefined;
-    const watchingContext: AppContext = {
-      ...context,
-      table: {
-        get: (partitionKey, sortKey, options) => {
-          capturedGetOptions = options;
-          return context.table.get(partitionKey, sortKey, options);
-        },
-        put: (item) => context.table.put(item),
-        putIfAbsent: (item) => context.table.putIfAbsent(item),
-        delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
-        query: (partitionKey, options) => context.table.query(partitionKey, options),
-        queryGsi: (indexName, partitionKey, options) =>
-          context.table.queryGsi(indexName, partitionKey, options),
-        queryGsiPage: (indexName, partitionKey, options) =>
-          context.table.queryGsiPage(indexName, partitionKey, options),
-      },
-    };
-    return { watchingContext, lastGetOptions: () => capturedGetOptions };
+// Single-row reads and row-level storage behaviour, straight against
+// `crm_memories` (folded in from the former test/crm/memory.test.ts).
+describe("the memory store (Postgres rows)", () => {
+  async function memoryRowCount(context: SqlTestContext): Promise<number> {
+    const result = await context.sql.query<{ value: number }>(
+      "select count(*)::int as value from crm_memories",
+    );
+    return result.rows[0]!.value;
   }
 
-  // A stale miss here shows the approver "(new memory)" as the card's `from`
-  // for a key that already holds text -- an overwrite rendered as a creation.
-  it("getMemoryOrUndefined reads consistently, so a write tool's card cannot show a stale prior value", async () => {
-    const context = buildTestContext();
-    const seeded = await seedOneCase(context, ALICE);
-    await rememberMemory(
+  it("remembers a human ORG memory as exactly one row, and every single-row read agrees", async () => {
+    const context = await buildSqlTestContext();
+    const remembered = await rememberMemory(
       context,
       TENANT_ID,
-      { scope: memoryScope("ORG"), memoryKey: "slots", text: "prefers mornings", sourceCaseId: seeded.caseId },
+      { scope: memoryScope("ORG"), memoryKey: "refund-policy", text: "refunds within 7 days" },
       "human",
       ALICE,
     );
-    const { watchingContext, lastGetOptions } = watchGetOptions(context);
+    expect(remembered.createdAt).toBe(context.now().toISOString());
+    expect(remembered.createdByEmail).toBe(ALICE);
+    expect(remembered.sourceCaseId).toBeUndefined();
+    expect(await memoryRowCount(context)).toBe(1);
 
-    await getMemoryOrUndefined(watchingContext, TENANT_ID, memoryScope("ORG"), "slots");
-    expect(lastGetOptions()?.consistentRead).toBe(true);
+    expect(await getMemoryOrUndefined(context, TENANT_ID, "ORG", "refund-policy")).toEqual(remembered);
+    expect(await memoryRowExists(context, TENANT_ID, "ORG", "refund-policy")).toBe(true);
+    expect(await getMemoryOrUndefined(context, TENANT_ID, "ORG", "missing")).toBeUndefined();
+    expect(await memoryRowExists(context, TENANT_ID, "ORG", "missing")).toBe(false);
   });
 
-  // A stale miss here makes the admin DELETE route report `forgotten: false`
-  // for a row it is about to delete -- the exact dishonesty that
-  // read-before-delete exists to prevent.
-  it("memoryRowExists reads consistently, so the DELETE route cannot under-report a real deletion", async () => {
-    const context = buildTestContext();
-    const seeded = await seedOneCase(context, ALICE, "90002");
+  it("re-remembering the same (scope, memoryKey) overwrites in place, in one row", async () => {
+    const context = await buildSqlTestContext();
+    const scope = memoryScope("ORG");
+    await rememberMemory(context, TENANT_ID, { scope, memoryKey: "k", text: "one" }, "human", ALICE);
+    await rememberMemory(context, TENANT_ID, { scope, memoryKey: "k", text: "two" }, "human", ALICE);
+    expect(await memoryRowCount(context)).toBe(1);
+    const { memories } = await recallMemories(context, TENANT_ID, [scope]);
+    expect(memories.map((memory) => memory.text)).toEqual(["two"]);
+  });
+
+  it("recalls several scopes in memoryKey order, deduplicated, honouring the limit", async () => {
+    const context = await buildSqlTestContext();
+    const orgScope = memoryScope("ORG");
+    const userScope = memoryScope("USER", ALICE);
+    for (const memoryKey of ["b", "c", "a"]) {
+      await rememberMemory(context, TENANT_ID, { scope: orgScope, memoryKey, text: memoryKey }, "human", ALICE);
+    }
+    await rememberMemory(context, TENANT_ID, { scope: userScope, memoryKey: "mine", text: "mine" }, "human", ALICE);
     await rememberMemory(
       context,
       TENANT_ID,
-      { scope: memoryScope("ORG"), memoryKey: "slots", text: "prefers mornings", sourceCaseId: seeded.caseId },
+      { scope: memoryScope("USER", BOB), memoryKey: "bobs", text: "bobs" },
       "human",
-      ALICE,
+      BOB,
     );
-    const { watchingContext, lastGetOptions } = watchGetOptions(context);
 
-    await expect(memoryRowExists(watchingContext, TENANT_ID, memoryScope("ORG"), "slots")).resolves.toBe(true);
-    expect(lastGetOptions()?.consistentRead).toBe(true);
+    const all = await recallMemories(context, TENANT_ID, [orgScope, userScope, orgScope]);
+    expect(all.memories.map((memory) => memory.memoryKey)).toEqual(["a", "b", "c", "mine"]);
+
+    const limited = await recallMemories(context, TENANT_ID, [orgScope], 2);
+    expect(limited.memories.map((memory) => memory.memoryKey)).toEqual(["a", "b"]);
+  });
+
+  it("forgetting deletes the row, and forgetting a missing key is a no-op", async () => {
+    const context = await buildSqlTestContext();
+    const scope = memoryScope("ORG");
+    await rememberMemory(context, TENANT_ID, { scope, memoryKey: "k", text: "x" }, "human", ALICE);
+    await forgetMemory(context, TENANT_ID, scope, "k", ALICE);
+    expect(await memoryRowCount(context)).toBe(0);
+    expect(await memoryRowExists(context, TENANT_ID, scope, "k")).toBe(false);
+    await expect(forgetMemory(context, TENANT_ID, scope, "k", ALICE)).resolves.toBeUndefined();
+  });
+
+  it("refuses an unknown source case with 404 and writes nothing", async () => {
+    const context = await buildSqlTestContext();
+    await expect(
+      rememberMemory(
+        context,
+        TENANT_ID,
+        { scope: memoryScope("ORG"), memoryKey: "ghost", text: "x", sourceCaseId: "case_missing" },
+        "agent",
+        ALICE,
+      ),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect(await memoryRowCount(context)).toBe(0);
+  });
+
+  it("can still delete a row that will not parse", async () => {
+    const context = await buildSqlTestContext();
+    await context.sql.query(
+      `insert into crm_memories (tenant_id, scope, memory_key, text, created_by, created_at)
+       values ($1, 'ORG', 'bad', 'orphan', 'agent', $2::timestamptz)`,
+      [TENANT_ID, context.now().toISOString()],
+    );
+    expect(await memoryRowExists(context, TENANT_ID, "ORG", "bad")).toBe(true);
+    await forgetMemory(context, TENANT_ID, "ORG", "bad", ALICE);
+    expect(await memoryRowExists(context, TENANT_ID, "ORG", "bad")).toBe(false);
+  });
+
+  it("isolates tenants", async () => {
+    const context = await buildSqlTestContext();
+    await rememberMemory(context, TENANT_ID, { scope: "ORG", memoryKey: "k", text: "x" }, "human", ALICE);
+    const other = await recallMemories(context, "other", ["ORG"]);
+    expect(other.memories).toEqual([]);
   });
 });

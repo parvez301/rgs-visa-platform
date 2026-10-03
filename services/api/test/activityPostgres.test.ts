@@ -1,6 +1,4 @@
-import { PGlite } from "@electric-sql/pglite";
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyMigrations } from "../src/db/migrate";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listRecentActivity, listUserActivity } from "../src/domain/activity";
 import {
   insertActivityEventPostgres,
@@ -9,24 +7,22 @@ import {
 } from "../src/domain/activityPostgres";
 import { logActivity, type AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
-import { buildTestContext, type TestContext } from "./helpers";
-import { pgliteAsSqlClient } from "./pgliteSqlClient";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-describe("activity with CRM_STORE=postgres", () => {
+describe("activity", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext();
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext();
+    sql = context.sql;
   });
 
-  it("logs into activity_events and writes no EVENT# or USER# GSI2 row to Dynamo", async () => {
+  afterEach(closeSqlTestContexts);
+
+  it("logs into activity_events", async () => {
     const logged = await logActivity(
       context,
       "STATUS_CHANGED",
@@ -44,8 +40,6 @@ describe("activity with CRM_STORE=postgres", () => {
     });
     const stored = await listUserActivityPostgres(sql, "user_1", 10);
     expect(stored).toEqual({ events: [logged], unreadableEventIds: [] });
-    expect(await baseContext.table.query("EVENT#2026-07-23")).toEqual([]);
-    expect(await baseContext.table.queryGsi("GSI2", "USER#user_1")).toEqual([]);
   });
 
   it("omits absent optional fields and round-trips empty meta", async () => {
@@ -60,11 +54,11 @@ describe("activity with CRM_STORE=postgres", () => {
 
   it("lists recent activity newest first inside the window only, honouring limit", async () => {
     await logActivity(context, "SIGNED_UP", "user_old", undefined);
-    baseContext.advanceClock(3 * DAY_MS);
+    context.advanceClock(3 * DAY_MS);
     const inside1 = await logActivity(context, "SIGNED_UP", "user_a", undefined);
-    baseContext.advanceClock(60_000);
+    context.advanceClock(60_000);
     const inside2 = await logActivity(context, "APPLICATION_STARTED", "user_b", "app_2");
-    baseContext.advanceClock(60_000);
+    context.advanceClock(60_000);
     const inside3 = await logActivity(context, "SUBMITTED", "user_a", "app_1");
 
     const all = await listRecentActivity(context, 2, 100);
@@ -85,9 +79,9 @@ describe("activity with CRM_STORE=postgres", () => {
   it("window is an exact time cut-off, not a day bucket", async () => {
     // Event 47h ago is in a 2-day window; one 49h ago is out, even on the same UTC day bucket edge.
     await logActivity(context, "SIGNED_UP", "user_out", undefined);
-    baseContext.advanceClock(1 * DAY_MS);
+    context.advanceClock(1 * DAY_MS);
     const kept = await logActivity(context, "SIGNED_UP", "user_in", undefined);
-    baseContext.advanceClock(DAY_MS + 60 * 60 * 1000);
+    context.advanceClock(DAY_MS + 60 * 60 * 1000);
     const result = await listRecentActivity(context, 1, 100);
     expect(result.events).toEqual([]);
     const wider = await listRecentActivity(context, 2, 100);
@@ -96,9 +90,9 @@ describe("activity with CRM_STORE=postgres", () => {
 
   it("lists one user's trail newest first, ignoring other users", async () => {
     const first = await logActivity(context, "SIGNED_UP", "user_a", undefined);
-    baseContext.advanceClock(1000);
+    context.advanceClock(1000);
     await logActivity(context, "SIGNED_UP", "user_b", undefined);
-    baseContext.advanceClock(1000);
+    context.advanceClock(1000);
     const last = await logActivity(context, "SUBMITTED", "user_a", "app_1");
     const trail = await listUserActivity(context, "user_a", 100);
     expect(trail.events.map((event) => event.eventId)).toEqual([last.eventId, first.eventId]);
@@ -111,7 +105,7 @@ describe("activity with CRM_STORE=postgres", () => {
     await sql.query(
       `insert into activity_events (event_id, event_type, user_id, meta, created_at)
        values ('evt_bad', 'NOT_A_TYPE', 'user_a', '{}'::jsonb, $1::timestamptz)`,
-      [baseContext.now().toISOString()],
+      [context.now().toISOString()],
     );
     const recent = await listRecentActivity(context, 2, 100);
     expect(recent.events).toEqual([good]);
@@ -136,24 +130,10 @@ describe("activity with CRM_STORE=postgres", () => {
   });
 
   it("fails loudly when postgres is selected without a SQL client", async () => {
-    const withoutSql: AppContext = { ...baseContext, crmStore: "postgres" };
+    const { sql: _removed, ...withoutSql }: AppContext = context;
+    void _removed;
     await expect(logActivity(withoutSql, "SIGNED_UP", "user_1", undefined)).rejects.toThrow(
       "CRM_STORE=postgres requires context.sql",
     );
-  });
-});
-
-describe("activity with the Dynamo store", () => {
-  it("still writes EVENT# day buckets and lists across them", async () => {
-    const context = buildTestContext();
-    const first = await logActivity(context, "SIGNED_UP", "user_1", undefined);
-    context.advanceClock(DAY_MS);
-    const second = await logActivity(context, "SUBMITTED", "user_1", "app_1");
-    expect(await context.table.query("EVENT#2026-07-23")).toHaveLength(1);
-    expect(await context.table.query("EVENT#2026-07-24")).toHaveLength(1);
-    const recent = await listRecentActivity(context, 2, 100);
-    expect(recent.events.map((event) => event.eventId)).toEqual([second.eventId, first.eventId]);
-    const trail = await listUserActivity(context, "user_1", 100);
-    expect(trail.events.map((event) => event.eventId)).toEqual([second.eventId, first.eventId]);
   });
 });

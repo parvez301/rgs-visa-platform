@@ -1,5 +1,5 @@
 import { crm } from "@rgs/shared";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ToolRegistry } from "../../src/agent/tools/registry";
 import { WRITE_TOOLS } from "../../src/agent/tools/writeTools";
 import {
@@ -15,16 +15,17 @@ import {
 import { changeBillingStatus, createCase, getCase, updateCaseDetails } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import { memoryScope, recallMemories, rememberMemory } from "../../src/domain/crm/memory";
-import {
-  PROPOSAL_SORT_KEY,
-  caseIdFromPartitionKey,
-  proposalPartitionKey,
-  proposalStatusGsi1Pk,
-} from "../../src/domain/crm/keys";
+import { getProposalPostgres } from "../../src/domain/crm/proposalsPostgres";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
-import type { AppContext } from "../../src/lib/context";
-import { buildTestContext, type TestContext } from "../helpers";
+import {
+  buildSqlTestContext,
+  closeSqlTestContexts,
+  contextRefusingCaseWrites,
+  type SqlTestContext,
+} from "../helpers";
+
+afterEach(closeSqlTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
@@ -33,7 +34,7 @@ const ACTOR = "desk@rgs.local";
 // independent cases in one context (two calls to this helper) does not trip
 // createPartner's one-canonical-name-per-partner rule. Mirrors
 // writeTools.test.ts's own helper -- same shape, different file under test.
-async function seedOneCase(context: TestContext, caseRef = "80001") {
+async function seedOneCase(context: SqlTestContext, caseRef = "80001") {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -55,53 +56,6 @@ async function seedOneCase(context: TestContext, caseRef = "80001") {
     },
     ACTOR,
   );
-}
-
-/**
- * Wraps a real context's table so any write to a CASE-partition key throws
- * immediately -- while staging a proposal (a legitimate write to the
- * PROPOSAL partition) passes through untouched. Delegates explicitly rather
- * than spreading `context.table`: `get`/`query`/`queryGsi` live on
- * `InMemoryTableClient`'s prototype and a spread silently drops them
- * (task-8-controller-notes.md P44); mirrors `tableRecordingWrites` in
- * services/migration/src/importCli.ts, which polices the same seam by
- * observation instead of by throwing.
- *
- * Uses `caseIdFromPartitionKey`, keys.ts's own inverse of `casePartitionKey`,
- * rather than a hand-rolled substring literal -- keys.ts is the only file
- * allowed to know the shape of a CRM key.
- */
-function tableThatRefusesCaseWrites(context: TestContext, toolNameForMessage: string): AppContext {
-  const refuseIfCaseKey = (partitionKey: string, verb: string): void => {
-    if (caseIdFromPartitionKey(partitionKey) !== undefined) {
-      throw new Error(
-        `INVARIANT VIOLATED: write tool "${toolNameForMessage}" ${verb} a case before approval (PK=${partitionKey})`,
-      );
-    }
-  };
-  return {
-    ...context,
-    table: {
-      get: (partitionKey, sortKey, options) => context.table.get(partitionKey, sortKey, options),
-      query: (partitionKey, options) => context.table.query(partitionKey, options),
-      queryGsi: (indexName, partitionKey, options) =>
-        context.table.queryGsi(indexName, partitionKey, options),
-      queryGsiPage: (indexName, partitionKey, options) =>
-        context.table.queryGsiPage(indexName, partitionKey, options),
-      put: (item) => {
-        refuseIfCaseKey(item.PK, "wrote");
-        return context.table.put(item);
-      },
-      putIfAbsent: (item) => {
-        refuseIfCaseKey(item.PK, "wrote");
-        return context.table.putIfAbsent(item);
-      },
-      delete: (partitionKey, sortKey) => {
-        refuseIfCaseKey(partitionKey, "deleted");
-        return context.table.delete(partitionKey, sortKey);
-      },
-    },
-  };
 }
 
 /**
@@ -238,7 +192,7 @@ function expectMutationVisible(toolName: WriteToolName, storedCase: crm.CrmCase)
  * (SAMPLE_MEMORY_KEY).
  */
 async function expectMemoryMutationDurable(
-  context: TestContext,
+  context: SqlTestContext,
   toolName: "remember" | "forget",
 ): Promise<void> {
   const { memories } = await recallMemories(context, TENANT_ID, [memoryScope("ORG")]);
@@ -260,7 +214,7 @@ describe("an approved change is the only thing that writes", () => {
   it.each(WRITE_TOOLS)(
     "$name: the case is untouched until applyApprovedChange runs it, then the write is durable",
     async (writeTool) => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const partner = await createPartner(
         context,
         TENANT_ID,
@@ -303,7 +257,7 @@ describe("an approved change is the only thing that writes", () => {
       }
 
       const input = sampleInputFor(writeTool.name as WriteToolName, seededCase, partner.partnerId, traveller.travellerId);
-      const guardedContext = tableThatRefusesCaseWrites(context, writeTool.name);
+      const guardedContext = contextRefusingCaseWrites(context, writeTool.name);
 
       const proposal = (await writeTool.execute(guardedContext, TENANT_ID, input, ACTOR)) as ProposedChange;
       const staged = await stageProposal(guardedContext, TENANT_ID, proposal);
@@ -321,12 +275,8 @@ describe("an approved change is the only thing that writes", () => {
       const { proposals: pendingAfterApproval } = await listPendingProposals(context, TENANT_ID);
       expect(pendingAfterApproval.map((pending) => pending.proposalId)).not.toContain(staged.proposalId);
 
-      const storedProposal = await context.table.get(
-        proposalPartitionKey(TENANT_ID, staged.proposalId),
-        PROPOSAL_SORT_KEY,
-      );
+      const storedProposal = await getProposalPostgres(context.sql, TENANT_ID, staged.proposalId);
       expect(storedProposal?.status, `${writeTool.name}'s proposal did not move to APPROVED`).toBe("APPROVED");
-      expect(storedProposal?.GSI1PK).toBe(proposalStatusGsi1Pk(TENANT_ID, "APPROVED"));
       // Major 5: who decided, and when -- the two fields that make the
       // transition auditable, not just its end state.
       expect(storedProposal?.decidedBy, `${writeTool.name}'s proposal has no decidedBy`).toBe(ACTOR);
@@ -360,7 +310,7 @@ describe("an approved change is the only thing that writes", () => {
 
 describe("stageProposal", () => {
   it("refuses to stage a proposal that does not arrive PENDING", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seededCase = await seedOneCase(context);
     const notPending: ProposedChange = {
       proposalId: "prop_hand_rolled",
@@ -378,7 +328,7 @@ describe("stageProposal", () => {
 
 describe("applyApprovedChange", () => {
   it("invokes the tool's apply, marks the proposal APPROVED, and records a non-edited approval", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     expect(seeded.billingStatus).toBe("UNBILLED");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
@@ -400,10 +350,7 @@ describe("applyApprovedChange", () => {
     const { proposals } = await listPendingProposals(context, TENANT_ID);
     expect(proposals.find((pending) => pending.proposalId === staged.proposalId)).toBeUndefined();
 
-    const storedProposal = await context.table.get(
-      proposalPartitionKey(TENANT_ID, staged.proposalId),
-      PROPOSAL_SORT_KEY,
-    );
+    const storedProposal = await getProposalPostgres(context.sql, TENANT_ID, staged.proposalId);
     expect(storedProposal?.decidedBy).toBe(ACTOR);
     expect(storedProposal?.decidedAt).toBe(context.now().toISOString());
     expect(storedProposal?.decidedAt).not.toBe(staged.proposedAt);
@@ -427,7 +374,7 @@ describe("applyApprovedChange", () => {
   // itself throws, the domain change never happened, and no row -- not even
   // a corrupted one -- was written.
   it("refuses to approve with a blank actor, before the domain mutation ever runs, and writes nothing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     expect(seeded.billingStatus).toBe("UNBILLED");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
@@ -456,7 +403,7 @@ describe("applyApprovedChange", () => {
   });
 
   it("refuses an unknown proposal id", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(applyApprovedChange(context, TENANT_ID, "prop_does_not_exist", ACTOR)).rejects.toMatchObject({
       statusCode: 404,
     });
@@ -470,7 +417,7 @@ describe("applyApprovedChange", () => {
   // applyApprovedChange's own PENDING guard stands between a double-approval
   // and a genuine double-charge on the bill.
   it("refuses to apply the same proposal twice (a double-approved line item is a double-charge)", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("add_line_item")!;
     const proposal = (await tool.execute(
@@ -496,7 +443,7 @@ describe("applyApprovedChange", () => {
   });
 
   it("refuses to apply a proposal that was already discarded", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -518,7 +465,7 @@ describe("applyApprovedChange", () => {
   // TOOL NAME on it that is bogus, which is a corrupt record, not a missing
   // one (Minor 5 ruling). The two must not collide on the same status code.
   it("refuses a proposal naming a tool that is not registered, distinctly from a missing proposal", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const proposal: ProposedChange = {
       proposalId: "prop_phantom_tool",
@@ -537,7 +484,7 @@ describe("applyApprovedChange", () => {
   });
 
   it("applies the human's edit, not the model's original input", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     // The model's original input must be a LEGAL alternative
@@ -579,7 +526,7 @@ describe("applyApprovedChange", () => {
   // Storing an EMPTY summary instead reddened 0 of 629: nothing anywhere
   // observed the stored card at all.
   it("rebuilds an edited approval's stored summary from the edit, so the card cannot understate the money", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("add_line_item")!;
     const proposal = (await tool.execute(
@@ -619,7 +566,7 @@ describe("applyApprovedChange", () => {
   // quietly change the record of a change nobody edited -- the same class of
   // silent overwrite P56 refused for `input`.
   it("leaves a non-edited approval's stored summary byte-identical to what was staged", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context, "80009");
     const tool = new ToolRegistry(WRITE_TOOLS).get("add_line_item")!;
     const proposal = (await tool.execute(
@@ -643,7 +590,7 @@ describe("applyApprovedChange", () => {
   // succeed), and the card must say plainly that it could not be rebuilt
   // rather than keeping the stale one.
   it("marks the card as unrebuildable rather than keeping a stale one, when the edit is one execute refuses", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context, "80010");
     const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
     const proposal = (await tool.execute(
@@ -667,7 +614,7 @@ describe("applyApprovedChange", () => {
   });
 
   it("refuses an edit that fails the tool's own schema, and writes nothing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     // Move billingStatus off its UNBILLED default first -- the "unchanged"
     // snapshot comparison below would otherwise pass even if a tool that
@@ -714,7 +661,7 @@ describe("applyApprovedChange", () => {
   // message must say "Input", not "Edited input" -- nobody edited anything,
   // the model's own original proposal was the one Zod rejected.
   it("refuses the model's own original input when it fails the tool's schema, distinctly from an edit failing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const proposal: ProposedChange = {
       proposalId: "prop_bad_original",
@@ -743,7 +690,7 @@ describe("applyApprovedChange", () => {
   // domain call, but wrong for an audit trail: at 8055851, a non-edited
   // approval stored `proposal.input` verbatim, extras included.
   it("leaves a non-edited approval's stored input byte-identical to what was staged, extras included", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const proposal: ProposedChange = {
       proposalId: "prop_with_extra_field",
@@ -763,15 +710,12 @@ describe("applyApprovedChange", () => {
 
     await applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR);
 
-    const storedProposal = await context.table.get(
-      proposalPartitionKey(TENANT_ID, staged.proposalId),
-      PROPOSAL_SORT_KEY,
-    );
+    const storedProposal = await getProposalPostgres(context.sql, TENANT_ID, staged.proposalId);
     expect(storedProposal?.input).toEqual(proposal.input);
   });
 
   it("records PROPOSAL_APPROVED against the case's own event list for create_case, though caseId is unknown at stage time", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(
       context,
       TENANT_ID,
@@ -803,7 +747,7 @@ describe("applyApprovedChange", () => {
   });
 
   it("marks a no-op update_case approval as unchanged, not as an applied change (P53)", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     // Move appointmentDate off its (unset) default first -- re-supplying the
     // SAME already-stored value is what proves the "unchanged" branch, not
@@ -847,7 +791,7 @@ describe("applyApprovedChange", () => {
   });
 
   it("marks a real update_case approval as changed", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     expect(seeded.appointmentDate).toBeUndefined();
 
@@ -876,7 +820,7 @@ describe("applyApprovedChange", () => {
 
 describe("discardProposal", () => {
   it("records a reason on the event, leaves the PENDING partition, and never invokes the tool's apply", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -905,12 +849,8 @@ describe("discardProposal", () => {
     // forever -- the exact bug reviewQueue.ts:201-210 documents.
     const { proposals: pendingAfterDiscard } = await listPendingProposals(context, TENANT_ID);
     expect(pendingAfterDiscard.map((pending) => pending.proposalId)).not.toContain(staged.proposalId);
-    const storedProposal = await context.table.get(
-      proposalPartitionKey(TENANT_ID, staged.proposalId),
-      PROPOSAL_SORT_KEY,
-    );
+    const storedProposal = await getProposalPostgres(context.sql, TENANT_ID, staged.proposalId);
     expect(storedProposal?.status).toBe("DISCARDED");
-    expect(storedProposal?.GSI1PK).toBe(proposalStatusGsi1Pk(TENANT_ID, "DISCARDED"));
 
     // Major 5: decidedBy/decidedAt on the discard path too, and genuinely
     // distinct from proposedAt.
@@ -933,7 +873,7 @@ describe("discardProposal", () => {
   });
 
   it("refuses an empty reason", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -955,7 +895,7 @@ describe("discardProposal", () => {
   // must ALSO mean no PROPOSAL_DISCARDED event was ever recorded, not only
   // that the row stayed PENDING.
   it("refuses to discard with a blank actor, and leaves the proposal PENDING with no event recorded", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -978,7 +918,7 @@ describe("discardProposal", () => {
   });
 
   it("refuses to discard a proposal that was already approved", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -996,7 +936,7 @@ describe("discardProposal", () => {
   });
 
   it("refuses to discard the same proposal twice", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -1016,7 +956,7 @@ describe("discardProposal", () => {
 
 describe("listPendingProposals", () => {
   it("reports a stored proposal that will not parse, instead of dropping it silently", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -1027,19 +967,15 @@ describe("listPendingProposals", () => {
     )) as ProposedChange;
     const healthy = await stageProposal(context, TENANT_ID, proposal);
 
-    // A PENDING-indexed row whose body has lost `proposedBy` -- required by
+    // A PENDING row whose body has lost `proposedBy` -- required by
     // ProposedChangeSchema, so this row cannot reassemble.
-    await context.table.put({
-      PK: proposalPartitionKey(TENANT_ID, "prop_ghost"),
-      SK: PROPOSAL_SORT_KEY,
-      GSI1PK: proposalStatusGsi1Pk(TENANT_ID, "PENDING"),
-      GSI1SK: "2026-01-02T10:00:00.000Z",
-      proposalId: "prop_ghost",
-      toolName: "set_billing",
-      input: {},
-      summary: [],
-      status: "PENDING",
-    });
+    await context.sql.query(
+      `insert into crm_proposals
+         (tenant_id, proposal_id, status, tool_name, proposed_by, proposed_at, input, summary)
+       values ($1, 'prop_ghost', 'PENDING', 'set_billing', '', $2::timestamptz,
+               '{}'::jsonb, '[]'::jsonb)`,
+      [TENANT_ID, "2026-01-02T10:00:00.000Z"],
+    );
 
     const { proposals, unreadableProposalIds } = await listPendingProposals(context, TENANT_ID);
     expect(proposals.map((pending) => pending.proposalId)).toEqual([healthy.proposalId]);
@@ -1047,7 +983,7 @@ describe("listPendingProposals", () => {
   });
 
   it("reports nothing unreadable when every staged proposal is healthy", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -1069,7 +1005,7 @@ describe("listPendingProposals", () => {
 // at ANY status -- that is the entire point of it.
 describe("getProposal", () => {
   it("reads a proposal back at whatever status it is actually stored at", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
     const proposal = (await tool.execute(
@@ -1087,57 +1023,8 @@ describe("getProposal", () => {
   });
 
   it("returns undefined for a proposal id nothing was ever staged under, rather than throwing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(getProposal(context, TENANT_ID, "prop_never_existed")).resolves.toBeUndefined();
-  });
-
-  // Branch review I1. Every proposal read in the system goes through this
-  // function -- readProposalOrThrow, and so approve and discard. On DynamoDB
-  // an eventually consistent get can miss an item written moments earlier
-  // (db.ts's GetOptions says so in as many words), and stageProposal hands
-  // the user a proposalId the instant the row is written: a human clicking
-  // Approve inside the replication window would get a 404 for a proposal
-  // that exists, and the trust ladder's stage-then-approve-in-one-breath
-  // path would fall into its indeterminate arm for a row that was simply
-  // read too soon.
-  //
-  // Pinned the way caseRefIndex.test.ts pins its own -- by capturing
-  // GetOptions -- because InMemoryTableClient is always strongly consistent
-  // (db.ts) and therefore CANNOT show the difference. The flag itself is the
-  // only observable thing here.
-  it("reads a proposal strongly consistently, never from a stale copy", async () => {
-    const context = buildTestContext();
-    const seeded = await seedOneCase(context);
-    const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
-    const proposal = (await tool.execute(
-      context,
-      TENANT_ID,
-      { caseId: seeded.caseId, processing: "EXPRESS" },
-      ACTOR,
-    )) as ProposedChange;
-    const staged = await stageProposal(context, TENANT_ID, proposal);
-
-    let consistentReadRequested: boolean | undefined;
-    const watchingContext: AppContext = {
-      ...context,
-      table: {
-        get: (partitionKey, sortKey, options) => {
-          consistentReadRequested = options?.consistentRead;
-          return context.table.get(partitionKey, sortKey, options);
-        },
-        put: (item) => context.table.put(item),
-        putIfAbsent: (item) => context.table.putIfAbsent(item),
-        delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
-        query: (partitionKey, options) => context.table.query(partitionKey, options),
-        queryGsi: (indexName, partitionKey, options) =>
-          context.table.queryGsi(indexName, partitionKey, options),
-        queryGsiPage: (indexName, partitionKey, options) =>
-          context.table.queryGsiPage(indexName, partitionKey, options),
-      },
-    };
-
-    await getProposal(watchingContext, TENANT_ID, staged.proposalId);
-    expect(consistentReadRequested).toBe(true);
   });
 
   // fix-round-1 M3's schema-level backstop: ProposedChangeSchema's
@@ -1147,7 +1034,7 @@ describe("getProposal", () => {
   // actually prevents this row from ever being written; this is what catches
   // it a second time, on read, if some future call site forgets.
   it("throws for a stored row whose decidedBy is an empty string, instead of reading back a proposal 'decided' by nobody", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -1162,16 +1049,12 @@ describe("getProposal", () => {
     // agentApi.ts's requireAdminEmail not refused it first -- written
     // directly, because applyApprovedChange/discardProposal can no longer
     // produce a decidedBy this empty.
-    await context.table.put({
-      PK: proposalPartitionKey(TENANT_ID, staged.proposalId),
-      SK: PROPOSAL_SORT_KEY,
-      GSI1PK: proposalStatusGsi1Pk(TENANT_ID, "APPROVED"),
-      GSI1SK: staged.proposedAt,
-      ...staged,
-      status: "APPROVED",
-      decidedBy: "",
-      decidedAt: context.now().toISOString(),
-    });
+    await context.sql.query(
+      `update crm_proposals
+          set status = 'APPROVED', decided_by = '', decided_at = $3::timestamptz
+        where tenant_id = $1 and proposal_id = $2`,
+      [TENANT_ID, staged.proposalId, context.now().toISOString()],
+    );
 
     await expect(getProposal(context, TENANT_ID, staged.proposalId)).rejects.toMatchObject({ statusCode: 409 });
   });
@@ -1185,7 +1068,7 @@ describe("getProposal", () => {
 // be worst.
 describe("tenant isolation", () => {
   it("keeps a proposal invisible to, and inapplicable/undiscardable by, a different tenant", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const seeded = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -1246,5 +1129,54 @@ describe("HIGH_STAKES_TOOLS / AUTO_APPLIABLE_TOOLS", () => {
   it("leaves create_case out of both sets, on purpose", () => {
     expect(HIGH_STAKES_TOOLS.has("create_case")).toBe(false);
     expect(AUTO_APPLIABLE_TOOLS.has("create_case")).toBe(false);
+  });
+});
+
+// Row-level storage behaviour, straight against `crm_proposals` (folded in
+// from the former test/crm/proposals.test.ts).
+describe("proposal storage (Postgres rows)", () => {
+  function storedProposal(proposalId: string, overrides: Partial<ProposedChange> = {}): ProposedChange {
+    return {
+      proposalId,
+      toolName: "set_billing",
+      input: { caseId: "case_1", billingStatus: "BILL_SENT", extra: { nested: [1, 2] } },
+      summary: [{ field: "billingStatus", from: "UNBILLED", to: "BILL_SENT" }],
+      caseId: "case_1",
+      proposedBy: ACTOR,
+      proposedAt: "2026-07-23T10:00:00.000Z",
+      status: "PENDING",
+      ...overrides,
+    };
+  }
+
+  it("stages a PENDING proposal as one row with jsonb input and summary", async () => {
+    const context = await buildSqlTestContext();
+    const staged = await stageProposal(context, TENANT_ID, storedProposal("prop_1"));
+
+    const shape = await context.sql.query<{ rows: number; kinds: string }>(
+      `select count(*)::int as rows, min(jsonb_typeof(input) || '/' || jsonb_typeof(summary)) as kinds
+         from crm_proposals`,
+    );
+    expect(shape.rows[0]).toEqual({ rows: 1, kinds: "object/array" });
+    expect(await getProposal(context, TENANT_ID, "prop_1")).toEqual(staged);
+  });
+
+  it("returns undefined for an absent proposal and keeps tenants apart", async () => {
+    const context = await buildSqlTestContext();
+    await stageProposal(context, TENANT_ID, storedProposal("prop_1"));
+    expect(await getProposal(context, TENANT_ID, "prop_missing")).toBeUndefined();
+    expect(await getProposal(context, "other-tenant", "prop_1")).toBeUndefined();
+  });
+
+  it("lists only PENDING proposals, oldest first", async () => {
+    const context = await buildSqlTestContext();
+    await stageProposal(context, TENANT_ID, storedProposal("prop_b", { proposedAt: "2026-07-23T10:00:02.000Z" }));
+    await stageProposal(context, TENANT_ID, storedProposal("prop_a", { proposedAt: "2026-07-23T10:00:01.000Z" }));
+    await stageProposal(context, TENANT_ID, storedProposal("prop_c"));
+    await discardProposal(context, TENANT_ID, "prop_c", ACTOR, "wrong case");
+
+    const listing = await listPendingProposals(context, TENANT_ID);
+    expect(listing.proposals.map((pending) => pending.proposalId)).toEqual(["prop_a", "prop_b"]);
+    expect(listing.unreadableProposalIds).toEqual([]);
   });
 });

@@ -1,7 +1,5 @@
-import { PGlite } from "@electric-sql/pglite";
 import { COUNTRY_PRODUCTS, UnknownCountryProductError, getCountryProduct } from "@rgs/shared";
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyMigrations } from "../src/db/migrate";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   listActiveCountryConfig,
   listCountryConfig,
@@ -15,28 +13,25 @@ import {
 } from "../src/domain/configCountryProductsPostgres";
 import type { AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
-import { buildTestContext, type TestContext } from "./helpers";
-import { pgliteAsSqlClient } from "./pgliteSqlClient";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
 
 const uaeSeed = getCountryProduct("AE");
 
-describe("country catalog with CRM_STORE=postgres", () => {
+describe("country catalog", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext();
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext();
+    sql = context.sql;
   });
 
-  it("lists the migrated seed catalog without touching Dynamo", async () => {
+  afterEach(closeSqlTestContexts);
+
+  it("lists the migrated seed catalog", async () => {
     const listing = await listCountryConfig(context);
     expect(listing.countryProducts).toHaveLength(COUNTRY_PRODUCTS.length);
     expect(listing.unreadableCountryProductIds).toEqual([]);
-    expect(await baseContext.table.query("CONFIG#COUNTRY")).toEqual([]);
     const seededUae = listing.countryProducts.find((p) => p.productCode === uaeSeed.productCode);
     expect(seededUae).toEqual(uaeSeed);
   });
@@ -49,7 +44,7 @@ describe("country catalog with CRM_STORE=postgres", () => {
     });
   });
 
-  it("upsert writes Postgres, shows in list, and leaves Dynamo empty", async () => {
+  it("upsert writes Postgres, shows in list", async () => {
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [...uaeSeed.requiredDocuments],
@@ -60,7 +55,6 @@ describe("country catalog with CRM_STORE=postgres", () => {
     expect(
       listing.countryProducts.find((p) => p.productCode === uaeSeed.productCode)?.governmentFeeInr,
     ).toBe(7200);
-    expect(await baseContext.table.query("CONFIG#COUNTRY")).toEqual([]);
   });
 
   it("upsert inserts a brand-new product", async () => {
@@ -122,9 +116,8 @@ describe("country catalog with CRM_STORE=postgres", () => {
     expect(listing.countryProducts.find((p) => p.productCode === uaeSeed.productCode)?.serviceFeeInr).toBe(2);
   });
 
-  it("seedCountryConfig returns 0 when migration already seeded, and never touches Dynamo", async () => {
+  it("seedCountryConfig returns 0 when migration already seeded", async () => {
     expect(await seedCountryConfig(context)).toBe(0);
-    expect(await baseContext.table.query("CONFIG#COUNTRY")).toEqual([]);
   });
 
   it("seedCountryConfig re-inserts only a deleted row and keeps desk edits", async () => {
@@ -147,12 +140,5 @@ describe("country catalog with CRM_STORE=postgres", () => {
     expect(
       listing.countryProducts.find((p) => p.productCode === uaeSeed.productCode)?.governmentFeeInr,
     ).toBe(7200);
-    expect(await baseContext.table.query("CONFIG#COUNTRY")).toEqual([]);
-  });
-
-  it("with crmStore=dynamo an empty table still returns the in-memory seed", async () => {
-    const dynamoContext = buildTestContext();
-    const listing = await listCountryConfig(dynamoContext);
-    expect(listing.countryProducts).toHaveLength(COUNTRY_PRODUCTS.length);
   });
 });

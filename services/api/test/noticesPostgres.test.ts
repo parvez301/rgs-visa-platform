@@ -1,7 +1,5 @@
-import { PGlite } from "@electric-sql/pglite";
 import { NOTICE_CATEGORIES, NOTICE_SEVERITIES, NOTICE_STATUSES } from "@rgs/shared";
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyMigrations } from "../src/db/migrate";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   deleteNotice,
   listNotices,
@@ -12,8 +10,7 @@ import { listUserActivityPostgres } from "../src/domain/activityPostgres";
 import { getNoticePostgres } from "../src/domain/noticesPostgres";
 import type { AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
-import { buildTestContext, type TestContext } from "./helpers";
-import { pgliteAsSqlClient } from "./pgliteSqlClient";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
 
 const BASE_INPUT = {
   title: "UAE fee change notice",
@@ -22,24 +19,23 @@ const BASE_INPUT = {
   severity: NOTICE_SEVERITIES[0],
 };
 
-describe("notices with CRM_STORE=postgres", () => {
+describe("notices", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext();
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext();
+    sql = context.sql;
   });
 
-  it("upserts a draft then publishes; Dynamo NOTICE partition stays empty", async () => {
+  afterEach(closeSqlTestContexts);
+
+  it("upserts a draft then publishes", async () => {
     const draft = await upsertNotice(context, "admin@example.com", {
       ...BASE_INPUT,
       status: NOTICE_STATUSES[0],
     });
-    baseContext.advanceClock(60_000);
+    context.advanceClock(60_000);
     const published = await upsertNotice(context, "admin@example.com", {
       noticeId: draft.noticeId,
       title: draft.title,
@@ -51,7 +47,6 @@ describe("notices with CRM_STORE=postgres", () => {
     expect(published.publishedAt).toBeTruthy();
     expect(published.createdAt).toBe(draft.createdAt);
     expect(published.updatedAt).not.toBe(draft.updatedAt);
-    expect(await baseContext.table.query("NOTICE")).toHaveLength(0);
 
     const stored = await getNoticePostgres(sql, draft.noticeId);
     expect(stored).toEqual(published);
@@ -140,8 +135,9 @@ describe("notices with CRM_STORE=postgres", () => {
     });
   });
 
-  it("throws rather than falling back to Dynamo when sql is missing", async () => {
-    const withoutSql = { ...baseContext, crmStore: "postgres" } as AppContext;
+  it("throws when sql is missing", async () => {
+    const { sql: _removed, ...withoutSql }: AppContext = context;
+    void _removed;
     await expect(listNotices(withoutSql)).rejects.toThrow(
       "CRM_STORE=postgres requires context.sql",
     );
@@ -151,19 +147,5 @@ describe("notices with CRM_STORE=postgres", () => {
     await expect(deleteNotice(withoutSql, "ntc_x")).rejects.toThrow(
       "CRM_STORE=postgres requires context.sql",
     );
-    expect(await baseContext.table.query("NOTICE")).toHaveLength(0);
-  });
-});
-
-describe("notices with the Dynamo store", () => {
-  it("keeps the Dynamo path when CRM_STORE is not postgres", async () => {
-    const dynamoContext = buildTestContext();
-    const notice = await upsertNotice(dynamoContext, "admin@example.com", BASE_INPUT);
-    expect(await dynamoContext.table.query("NOTICE")).toHaveLength(1);
-    expect((await listNotices(dynamoContext)).notices.map((n) => n.noticeId)).toEqual([
-      notice.noticeId,
-    ]);
-    await deleteNotice(dynamoContext, notice.noticeId);
-    expect(await dynamoContext.table.query("NOTICE")).toHaveLength(0);
   });
 });

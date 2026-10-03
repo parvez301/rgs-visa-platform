@@ -1,12 +1,9 @@
-import { PGlite } from "@electric-sql/pglite";
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyMigrations } from "../src/db/migrate";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLead, listNewLeads } from "../src/domain/leads";
 import { insertLeadPostgres, listNewLeadsPostgres } from "../src/domain/leadsPostgres";
 import type { AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
-import { buildTestContext, type TestContext } from "./helpers";
-import { pgliteAsSqlClient } from "./pgliteSqlClient";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
 
 const LEAD_INPUT = {
   fullName: "Smoke Lead",
@@ -15,38 +12,34 @@ const LEAD_INPUT = {
   message: "hello",
 };
 
-describe("leads with CRM_STORE=postgres", () => {
+describe("leads", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext();
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext();
+    sql = context.sql;
   });
 
-  it("creates a lead in Postgres and leaves Dynamo without LEAD# / STATUS#LEAD_NEW", async () => {
+  afterEach(closeSqlTestContexts);
+
+  it("creates a lead in Postgres", async () => {
     const lead = await createLead(context, LEAD_INPUT);
 
     expect(await listNewLeadsPostgres(sql, 50)).toEqual([lead]);
-    expect(await baseContext.table.get(`LEAD#${lead.leadId}`, "PROFILE")).toBeUndefined();
-    const gsi = await baseContext.table.queryGsi("GSI1", "STATUS#LEAD_NEW");
-    expect(gsi.filter((item) => item["leadId"] === lead.leadId)).toHaveLength(0);
   });
 
   it("still logs the activity and sends the admin email", async () => {
     await createLead(context, LEAD_INPUT);
-    expect(baseContext.email.sentEmails).toHaveLength(1);
-    expect(baseContext.email.sentEmails[0]!.subject).toContain("UAE visa");
+    expect(context.email.sentEmails).toHaveLength(1);
+    expect(context.email.sentEmails[0]!.subject).toContain("UAE visa");
   });
 
   it("lists newest first with limit", async () => {
     const first = await createLead(context, { ...LEAD_INPUT, fullName: "First" });
-    baseContext.advanceClock(1000);
+    context.advanceClock(1000);
     const second = await createLead(context, { ...LEAD_INPUT, fullName: "Second" });
-    baseContext.advanceClock(1000);
+    context.advanceClock(1000);
     const third = await createLead(context, { ...LEAD_INPUT, fullName: "Third" });
 
     const listed = await listNewLeads(context, 2);
@@ -67,22 +60,14 @@ describe("leads with CRM_STORE=postgres", () => {
     expect(listed[0]!.topic).toBe("Changed");
   });
 
-  it("throws rather than falling back to Dynamo when sql is missing", async () => {
-    const withoutSql = { ...baseContext, crmStore: "postgres" } as AppContext;
+  it("throws when sql is missing", async () => {
+    const { sql: _removed, ...withoutSql }: AppContext = context;
+    void _removed;
     await expect(createLead(withoutSql, LEAD_INPUT)).rejects.toThrow(
       "CRM_STORE=postgres requires context.sql",
     );
     await expect(listNewLeads(withoutSql)).rejects.toThrow(
       "CRM_STORE=postgres requires context.sql",
     );
-  });
-});
-
-describe("leads with the Dynamo store", () => {
-  it("keeps the Dynamo path when CRM_STORE is not postgres", async () => {
-    const dynamoContext = buildTestContext();
-    const lead = await createLead(dynamoContext, LEAD_INPUT);
-    expect(await dynamoContext.table.get(`LEAD#${lead.leadId}`, "PROFILE")).toBeTruthy();
-    expect(await listNewLeads(dynamoContext)).toEqual([lead]);
   });
 });

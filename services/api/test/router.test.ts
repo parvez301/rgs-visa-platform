@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from "aws-lambda";
 import { buildUserRouter } from "../src/http/userApi";
 import { buildAdminRouter } from "../src/http/adminApi";
-import { buildTestContext } from "./helpers";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
+
+afterEach(closeSqlTestContexts);
 
 function makeEvent(
   method: string,
@@ -56,7 +58,7 @@ function parseResult(result: unknown): { statusCode: number; payload: unknown } 
 
 describe("user API routing", () => {
   it("creates a draft through the HTTP layer", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const router = buildUserRouter(context);
     const result = parseResult(
       await router.dispatch(
@@ -72,7 +74,7 @@ describe("user API routing", () => {
   });
 
   it("returns 403 without authentication", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const router = buildUserRouter(context);
     const result = parseResult(
       await router.dispatch(
@@ -83,7 +85,7 @@ describe("user API routing", () => {
   });
 
   it("maps validation failures to 400 with a helpful message", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const router = buildUserRouter(context);
     const result = parseResult(
       await router.dispatch(
@@ -98,7 +100,7 @@ describe("user API routing", () => {
   });
 
   it("accepts anonymous leads", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const router = buildUserRouter(context);
     const result = parseResult(
       await router.dispatch(
@@ -117,7 +119,7 @@ describe("user API routing", () => {
   });
 
   it("404s unknown routes", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const router = buildUserRouter(context);
     const result = parseResult(await router.dispatch(makeEvent("GET", "/api/v1/nope")));
     expect(result.statusCode).toBe(404);
@@ -147,26 +149,19 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
     status: "PUBLISHED" as const,
   };
 
-  /** A NOTICE# row whose title is a number: stored, indexed, unparseable. */
-  async function seedMalformedNoticeRow(context: ReturnType<typeof buildTestContext>) {
-    await context.table.put({
-      PK: "NOTICE",
-      SK: "2026-07-23T09:00:00.000Z#ntc_broken",
-      noticeId: "ntc_broken",
-      title: 42,
-      body: "Body is fine; the title is not a string.",
-      category: "RULE_CHANGE",
-      severity: "INFO",
-      status: "PUBLISHED",
-      pinned: false,
-      createdAt: "2026-07-23T09:00:00.000Z",
-      updatedAt: "2026-07-23T09:00:00.000Z",
-    });
+  /** A notice row whose title is empty: stored, indexed, unparseable. */
+  async function seedMalformedNoticeRow(context: SqlTestContext) {
+    await context.sql.query(
+      `insert into portal_notices (notice_id, title, body, category, severity, pinned, status,
+         published_at, created_at, updated_at)
+       values ('ntc_broken', '', 'Body is fine; the title is empty.', 'RULE_CHANGE', 'INFO', false,
+         'PUBLISHED', '2026-07-23T09:00:00Z', '2026-07-23T09:00:00Z', '2026-07-23T09:00:00Z')`,
+    );
     return "ntc_broken";
   }
 
   it("serves the PUBLIC notice feed with the bad row named, not a 500", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const userRouter = buildUserRouter(context);
     const adminRouter = buildAdminRouter(context);
     const published = parseResult(
@@ -193,7 +188,7 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
   });
 
   it("serves the admin notice list with the bad row named, not a 500", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const adminRouter = buildAdminRouter(context);
     const published = parseResult(
       await adminRouter.dispatch(
@@ -221,7 +216,7 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
   });
 
   it("serves the admin user list with the bad row named, not a 500", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const userRouter = buildUserRouter(context);
     await userRouter.dispatch(
       makeEvent("POST", "/api/v1/me", {
@@ -232,16 +227,10 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
     );
     // A profile whose email is no longer an email address: the schema refuses
     // it, and every name lookup on the activity screens used to 500 with it.
-    await context.table.put({
-      PK: "USER#user_broken",
-      SK: "PROFILE",
-      GSI1PK: "USERPROFILE",
-      GSI1SK: "2026-07-23T09:00:00.000Z",
-      userId: "user_broken",
-      email: "not-an-email",
-      fullName: "Broken Row",
-      createdAt: "2026-07-23T09:00:00.000Z",
-    });
+    await context.sql.query(
+      `insert into portal_user_profiles (user_id, email, full_name, created_at)
+       values ('user_broken', 'not-an-email', 'Broken Row', '2026-07-23T09:00:00Z')`,
+    );
 
     const adminRouter = buildAdminRouter(context);
     const result = parseResult(
@@ -259,7 +248,7 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
   });
 
   it("serves an applicant's own list with the bad row named, not a whole-page failure", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const userRouter = buildUserRouter(context);
     const draft = parseResult(
       await userRouter.dispatch(
@@ -273,13 +262,12 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
     // A half-written draft in the same partition. This path threw
     // CorruptRecordError for the WHOLE listing, so one bad row cost the
     // applicant every application they had.
-    await context.table.put({
-      PK: "USER#user_1",
-      SK: "APP#app_broken",
-      applicationId: "app_broken",
-      userId: "user_1",
-      countryCode: "AE",
-    });
+    await context.sql.query(
+      `insert into portal_applications (application_id, user_id, country_code, product_code,
+         status, step_reached, travellers, amounts, payment_status, created_at, updated_at)
+       values ('app_broken', 'user_1', 'AE', 'tourist', 'DRAFT', 'travellers', '[]'::jsonb,
+         '{"governmentFeeInr":1,"serviceFeeInr":1,"currency":"INR"}'::jsonb, 'UNPAID', now(), now())`,
+    );
 
     const result = parseResult(
       await userRouter.dispatch(
@@ -304,20 +292,18 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
    * stored value is the problem.
    */
   async function seedCatalogWithOneBrokenRow(
-    context: ReturnType<typeof buildTestContext>,
+    context: SqlTestContext,
   ): Promise<string> {
-    const adminRouter = buildAdminRouter(context);
-    await adminRouter.dispatch(
-      makeEvent("POST", "/api/v1/admin/config/seed", { sub: "admin_1", email: "a@example.com" }),
+    // The migration already seeded the catalog; corrupt one row in place.
+    await context.sql.query(
+      `update crm_country_products set visa_type = 'BOGUS' where product_code = $1`,
+      ["AE_TOURIST_30D_SINGLE"],
     );
-    const seededItems = await context.table.query("CONFIG#COUNTRY");
-    const rowToBreak = seededItems.find((item) => item["productCode"] === "AE_TOURIST_30D_SINGLE")!;
-    await context.table.put({ ...rowToBreak, governmentFeeInr: "free" });
     return "AE_TOURIST_30D_SINGLE";
   }
 
   it("serves the PUBLIC country catalog with the bad row named, not a 500", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const brokenProductCode = await seedCatalogWithOneBrokenRow(context);
 
     const result = parseResult(
@@ -332,11 +318,11 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
     expect(
       listing.countryProducts.some((product) => product.productCode === brokenProductCode),
     ).toBe(false);
-    expect(listing.unreadableCountryProductIds).toEqual([brokenProductCode]);
+    expect(listing.unreadableCountryProductIds).toEqual([`AE#${brokenProductCode}`]);
   });
 
   it("serves the admin country catalog with the bad row named, not a 500", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const brokenProductCode = await seedCatalogWithOneBrokenRow(context);
 
     const result = parseResult(
@@ -353,7 +339,7 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
       unreadableCountryProductIds: string[];
     };
     expect(listing.countryProducts.length).toBeGreaterThan(0);
-    expect(listing.unreadableCountryProductIds).toEqual([brokenProductCode]);
+    expect(listing.unreadableCountryProductIds).toEqual([`AE#${brokenProductCode}`]);
   });
 
   // The other half of C3: a query parameter is caller input, so a bad one is a
@@ -361,7 +347,7 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
   // ApiError -- so they answered 500 "Internal error" to a caller who had
   // simply mistyped a word.
   it("400s a bad ?countryCode= on the PUBLIC notice feed rather than 500ing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const result = parseResult(
       await buildUserRouter(context).dispatch(
         makeEvent("GET", "/api/v1/notices", { query: { countryCode: "xx" } }),
@@ -372,7 +358,7 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
   });
 
   it("400s a bad ?docType= on the applicant document download rather than 500ing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const result = parseResult(
       await buildUserRouter(context).dispatch(
         makeEvent("GET", "/api/v1/applications/app_1/documents/download", {
@@ -389,7 +375,7 @@ describe("C3 — one malformed stored row never takes a listing down", () => {
 
 describe("admin API routing", () => {
   it("serves the queue with a status filter", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const adminRouter = buildAdminRouter(context);
     const result = parseResult(
       await adminRouter.dispatch(
@@ -409,7 +395,7 @@ describe("admin API routing", () => {
   // a bare `.parse()` these threw a ZodError, which router.ts does not map --
   // so a typo answered 500 "Internal error" and told the operator nothing.
   it("400s a mistyped ?status= rather than 500ing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const adminRouter = buildAdminRouter(context);
     const result = parseResult(
       await adminRouter.dispatch(
@@ -424,7 +410,7 @@ describe("admin API routing", () => {
   });
 
   it("400s a missing ?docType= on the document download rather than 500ing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const adminRouter = buildAdminRouter(context);
     const result = parseResult(
       await adminRouter.dispatch(
@@ -438,7 +424,7 @@ describe("admin API routing", () => {
   });
 
   it("lists user profiles for activity name resolution", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const userRouter = buildUserRouter(context);
     await userRouter.dispatch(
       makeEvent("POST", "/api/v1/me", {
@@ -472,7 +458,7 @@ describe("admin API routing", () => {
   });
 
   it("rejects unauthenticated admin calls", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const adminRouter = buildAdminRouter(context);
     const result = parseResult(
       await adminRouter.dispatch(makeEvent("GET", "/api/v1/admin/activity")),

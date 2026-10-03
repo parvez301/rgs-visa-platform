@@ -6,8 +6,11 @@ import { crm } from "@rgs/shared";
 import { extractIntake, type IntakeDraft } from "../src/agent/intake";
 import { llmProviderConfigFromEnvironment } from "../src/agent/providers/config";
 import { createLlmProvider } from "../src/agent/providers/index";
+import { PGlite } from "@electric-sql/pglite";
+import { applyMigrations } from "../src/db/migrate";
 import type { AppContext } from "../src/lib/context";
-import { InMemoryTableClient } from "../src/lib/db";
+import type { SqlClient } from "../src/lib/sql";
+import { pgliteAsSqlClient } from "../test/pgliteSqlClient";
 import { InMemoryDocumentStore } from "../src/lib/documentStore";
 import { InMemoryEmailSender } from "../src/lib/email";
 import { createPartner, getPartnerOrThrow } from "../src/domain/crm/partners";
@@ -519,14 +522,18 @@ export async function derivePerfectModelCoverage(cases: EvalCase[]): Promise<num
     text: JSON.stringify(deriveFaithfulExtraction(evalCase)),
     toolCalls: [],
   }));
-  const context = buildEvalContext(new FakeLlmProvider(scriptedTurns));
-  await seedFixtures(context, cases);
+  const context = await buildEvalContext(new FakeLlmProvider(scriptedTurns));
+  try {
+    await seedFixtures(context, cases);
 
-  const caseResults: CaseResult[] = [];
-  for (const evalCase of cases) {
-    caseResults.push(await scoreCase(context, evalCase));
+    const caseResults: CaseResult[] = [];
+    for (const evalCase of cases) {
+      caseResults.push(await scoreCase(context, evalCase));
+    }
+    return summarize(caseResults).coverage;
+  } finally {
+    await closeEvalContext(context);
   }
-  return summarize(caseResults).coverage;
 }
 
 export interface CoverageThreshold {
@@ -610,15 +617,46 @@ export function evaluateThreshold(scorecard: ProviderScorecard, coverageThreshol
   return { passed: failedChecks.length === 0, failedChecks };
 }
 
-export function buildEvalContext(llmProvider: ReturnType<typeof createLlmProvider>): AppContext {
+/** The eval reads and writes the CRM through Postgres only; DynamoDB is gone. */
+function removedTableClient(): AppContext["table"] {
+  const reject = (): Promise<never> => Promise.reject(new Error("DynamoDB client removed"));
   return {
-    table: new InMemoryTableClient(),
+    get: reject,
+    put: reject,
+    putIfAbsent: reject,
+    delete: reject,
+    query: reject,
+    queryGsi: reject,
+    queryGsiPage: reject,
+  };
+}
+
+/**
+ * A fresh in-process Postgres (PGlite) with every migration applied, behind
+ * the same `SqlClient` seam production uses -- so the eval seeds and resolves
+ * travellers and partners through the real `crmStore: "postgres"` domain path.
+ * Call `closeEvalContext` when done.
+ */
+export async function buildEvalContext(
+  llmProvider: ReturnType<typeof createLlmProvider>,
+): Promise<AppContext & { sql: SqlClient }> {
+  const sql = pgliteAsSqlClient(new PGlite());
+  await applyMigrations(sql);
+  return {
+    table: removedTableClient(),
     documents: new InMemoryDocumentStore(),
     email: new InMemoryEmailSender(),
     adminNotificationAddress: "info@raysglobalservices.com",
     now: () => new Date(),
     llm: llmProvider,
+    sql,
+    crmStore: "postgres",
+    ledgerStore: "postgres",
   };
+}
+
+export async function closeEvalContext(context: { sql: SqlClient }): Promise<void> {
+  await context.sql.end();
 }
 
 /**
@@ -774,14 +812,17 @@ async function main(): Promise<void> {
   await printPreSpendBanner(providerConfig.providerName, providerConfig.model, cases.length);
 
   const llmProvider = createLlmProvider(providerConfig);
-  const context = buildEvalContext(llmProvider);
-  await seedFixtures(context, cases);
-
+  const context = await buildEvalContext(llmProvider);
   const caseResults: CaseResult[] = [];
-  for (const evalCase of cases) {
-    console.log(`  running ${evalCase.id}...`);
-    const caseResult = await scoreCase(context, evalCase);
-    caseResults.push(caseResult);
+  try {
+    await seedFixtures(context, cases);
+    for (const evalCase of cases) {
+      console.log(`  running ${evalCase.id}...`);
+      const caseResult = await scoreCase(context, evalCase);
+      caseResults.push(caseResult);
+    }
+  } finally {
+    await closeEvalContext(context);
   }
 
   const scorecard = summarize(caseResults);

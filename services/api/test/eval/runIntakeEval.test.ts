@@ -5,6 +5,7 @@ import {
   applyTrapFidelity,
   assertProviderMatches,
   buildEvalContext,
+  closeEvalContext,
   COUNTRY_NAME_BY_CODE,
   deriveCoverageThreshold,
   deriveFaithfulExtraction,
@@ -158,7 +159,7 @@ describe("scoreTravellerResolution (task-12-review.md m2)", () => {
   // while the eval itself went back to never scoring traveller resolution at
   // all (task-12-review.md m2's original defect).
   it("scoreCase includes a travellerResolution field score in its output", async () => {
-    const seedContext = buildEvalContext(
+    const seedContext = await buildEvalContext(
       new FakeLlmProvider([
         {
           text: JSON.stringify({
@@ -185,14 +186,18 @@ describe("scoreTravellerResolution (task-12-review.md m2)", () => {
         applicantCount: 1,
       },
     };
-    await seedFixtures(seedContext, [evalCase]);
+    try {
+      await seedFixtures(seedContext, [evalCase]);
 
-    const caseResult = await scoreCase(seedContext, evalCase);
-    const travellerResolutionScore = caseResult.fieldScores.find(
-      (fieldScore) => fieldScore.field === "travellerResolution",
-    );
-    expect(travellerResolutionScore).toBeDefined();
-    expect(travellerResolutionScore?.correct).toBe(true);
+      const caseResult = await scoreCase(seedContext, evalCase);
+      const travellerResolutionScore = caseResult.fieldScores.find(
+        (fieldScore) => fieldScore.field === "travellerResolution",
+      );
+      expect(travellerResolutionScore).toBeDefined();
+      expect(travellerResolutionScore?.correct).toBe(true);
+    } finally {
+      await closeEvalContext(seedContext);
+    }
   });
 });
 
@@ -602,14 +607,18 @@ async function runStrategy(
     text: JSON.stringify(deriveExtraction(evalCase)),
     toolCalls: [],
   }));
-  const context = buildEvalContext(new FakeLlmProvider(scriptedTurns));
-  await seedFixtures(context, cases);
+  const context = await buildEvalContext(new FakeLlmProvider(scriptedTurns));
+  try {
+    await seedFixtures(context, cases);
 
-  const caseResults: CaseResult[] = [];
-  for (const evalCase of cases) {
-    caseResults.push(await scoreCase(context, evalCase));
+    const caseResults: CaseResult[] = [];
+    for (const evalCase of cases) {
+      caseResults.push(await scoreCase(context, evalCase));
+    }
+    return { scorecard: summarize(caseResults), caseResults };
+  } finally {
+    await closeEvalContext(context);
   }
-  return { scorecard: summarize(caseResults), caseResults };
 }
 
 describe("the five-strategy scorecard (task-12-review.md A3/M2 -- the review's own methodology, reused as a test)", () => {

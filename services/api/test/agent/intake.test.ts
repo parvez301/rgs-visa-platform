@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { extractIntake, INTAKE_EXTRACTION_RESPONSE_SCHEMA, type IntakeDraft } from "../../src/agent/intake";
 import { FakeLlmProvider, type ScriptedTurn } from "../../src/agent/providers/fake";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
-import type { AppContext } from "../../src/lib/context";
-import { buildTestContext, type TestContext } from "../helpers";
+import {
+  buildSqlTestContext,
+  closeSqlTestContexts,
+  contextRefusingWrites,
+  type SqlTestContext,
+} from "../helpers";
+
+afterEach(closeSqlTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
@@ -35,53 +41,23 @@ function scriptedExtraction(overrides: RawExtractionOverrides = {}): ScriptedTur
   };
 }
 
-function buildTestContextWithFakeLlm(scriptedTurns: ScriptedTurn[]): TestContext & { llm: FakeLlmProvider } {
-  const context = buildTestContext();
+async function buildSqlTestContextWithFakeLlm(
+  scriptedTurns: ScriptedTurn[],
+): Promise<SqlTestContext & { llm: FakeLlmProvider }> {
+  const context = await buildSqlTestContext();
   return Object.assign(context, { llm: new FakeLlmProvider(scriptedTurns) });
-}
-
-/**
- * Wraps a real context's table so a read still works -- extractIntake reads
- * the traveller/partner stores to resolve what the model extracted -- but any
- * put/delete throws immediately. Mirrors `refuseWrites` in
- * writeTools.test.ts, which polices the identical property (execute never
- * reaches the table) for every write tool; this is the same proof for
- * extractIntake, which controller-notes §3 requires explicitly: "intake is a
- * read-and-propose path with no exceptions."
- */
-function refuseWrites(context: TestContext & { llm: FakeLlmProvider }): AppContext & { llm: FakeLlmProvider } {
-  return {
-    ...context,
-    table: {
-      get: (partitionKey, sortKey, options) => context.table.get(partitionKey, sortKey, options),
-      query: (partitionKey, options) => context.table.query(partitionKey, options),
-      queryGsi: (indexName, partitionKey, options) =>
-        context.table.queryGsi(indexName, partitionKey, options),
-      queryGsiPage: (indexName, partitionKey, options) =>
-        context.table.queryGsiPage(indexName, partitionKey, options),
-      put: () => {
-        throw new Error("extractIntake reached table.put() -- intake must never write");
-      },
-      putIfAbsent: () => {
-        throw new Error("extractIntake reached table.putIfAbsent() -- intake must never write");
-      },
-      delete: () => {
-        throw new Error("extractIntake reached table.delete() -- intake must never write");
-      },
-    },
-  };
 }
 
 describe("extractIntake", () => {
   it("throws badRequest (400) when the context has no LLM provider wired in, without touching it", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(extractIntake(context, TENANT_ID, "2 pax for japan", ACTOR)).rejects.toMatchObject({
       statusCode: 400,
     });
   });
 
   it("resolves a known passport to the existing travellerId, and carries the raw name alongside it", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({
         travellerFullName: "Ashok Kumar",
         passportNumber: "N1234567",
@@ -106,7 +82,7 @@ describe("extractIntake", () => {
   });
 
   it("surfaces a passport that matches no traveller as an empty applicants list, never a minted traveller", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ travellerFullName: "New Client", passportNumber: "Z9999999", applicantCount: 1 }),
     ]);
 
@@ -118,7 +94,7 @@ describe("extractIntake", () => {
   });
 
   it("resolves a known partner name to its partnerId", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ partnerNameRaw: "Ozzy Travels", applicantCount: 1 }),
     ]);
     const partner = await createPartner(
@@ -140,7 +116,7 @@ describe("extractIntake", () => {
   // AMBIGUOUS_ACCOUNT_KEYS), but that is a migration-time decision made once
   // by a human; extractIntake must not silently repeat it as a live write.
   it("an unknown partner name surfaces as unresolvedPartnerName, never a new partner", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ partnerNameRaw: "SAMMY A/C", applicantCount: 1 }),
     ]);
 
@@ -151,7 +127,7 @@ describe("extractIntake", () => {
   });
 
   it("resolves a plainly-spelled destination country to its ISO-3166 alpha-2 code", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ destinationCountryRaw: "Thailand", applicantCount: 1 }),
     ]);
 
@@ -166,7 +142,7 @@ describe("extractIntake", () => {
   // come out unresolved -- confidently mapping it to a destination is
   // exactly the failure controller-notes §2 scores as worse than a refusal.
   it("a service line in the destination position surfaces as unresolvedCountry, never a guessed country", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ destinationCountryRaw: "PASSPORT NEW", applicantCount: 1 }),
     ]);
 
@@ -184,7 +160,7 @@ describe("extractIntake", () => {
   // not a hallucination; only a genuinely ambiguous or not-a-country string
   // (PASSPORT NEW, TANZANIA/KENYA, SAMMY A/C) should stay unresolved.
   it("resolves an unambiguous misspelling of a real country (Myannmar -> Myanmar) rather than refusing it", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ destinationCountryRaw: "Myannmar", applicantCount: 1 }),
     ]);
 
@@ -199,7 +175,7 @@ describe("extractIntake", () => {
   // unresolved rather than the pipeline picking one destination and
   // silently discarding the other.
   it("a multi-country destination surfaces as unresolvedCountry rather than picking one", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ destinationCountryRaw: "TANZANIA/KENYA", applicantCount: 2 }),
     ]);
 
@@ -210,7 +186,7 @@ describe("extractIntake", () => {
   });
 
   it("never invents a value for a field the text did not state -- everything stays absent, not defaulted", async () => {
-    const context = buildTestContextWithFakeLlm([scriptedExtraction()]);
+    const context = await buildSqlTestContextWithFakeLlm([scriptedExtraction()]);
 
     const draft = await extractIntake(context, TENANT_ID, "no useful information here", ACTOR);
 
@@ -233,7 +209,7 @@ describe("extractIntake", () => {
   // that carries a hint (LK + E_VISA) -- a model that copies it verbatim
   // must see that hint survive onto the draft.
   it("carries a visa-type hint through from the country map when the destination spelling names a specific product", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ destinationCountryRaw: "Sri Lanka ETA", applicantCount: 1 }),
     ]);
 
@@ -250,7 +226,7 @@ describe("extractIntake", () => {
   });
 
   it("does not set a visa-type hint (or a caseType) for a plain destination spelling that carries neither", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ destinationCountryRaw: "Thailand", applicantCount: 1 }),
     ]);
 
@@ -271,7 +247,7 @@ describe("extractIntake", () => {
     { description: "an unresolved destination", destinationCountryRaw: "PASSPORT NEW" },
     { description: "no destination stated at all", destinationCountryRaw: "" },
   ])("caseType and visaType are both present or both absent ($description)", async ({ destinationCountryRaw }) => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ destinationCountryRaw, applicantCount: 1 }),
     ]);
 
@@ -281,7 +257,7 @@ describe("extractIntake", () => {
   });
 
   it("carries missingDocuments straight through from the extraction", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ applicantCount: 1, missingDocuments: ["passport copy", "photo"] }),
     ]);
 
@@ -291,7 +267,7 @@ describe("extractIntake", () => {
   });
 
   it("throws badRequest (400) when the model's reply is not valid JSON", async () => {
-    const context = buildTestContextWithFakeLlm([{ text: "not json at all", toolCalls: [] }]);
+    const context = await buildSqlTestContextWithFakeLlm([{ text: "not json at all", toolCalls: [] }]);
 
     await expect(extractIntake(context, TENANT_ID, "irrelevant", ACTOR)).rejects.toMatchObject({
       statusCode: 400,
@@ -299,7 +275,7 @@ describe("extractIntake", () => {
   });
 
   it("throws badRequest (400), not a raw ZodError, when the model's JSON does not match the extraction shape", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       { text: JSON.stringify({ unexpected: "shape" }), toolCalls: [] },
     ]);
 
@@ -309,7 +285,7 @@ describe("extractIntake", () => {
   });
 
   it("calls the provider with tools: [] and a responseSchema, never through runAgentTurn's tool-bearing path", async () => {
-    const context = buildTestContextWithFakeLlm([
+    const context = await buildSqlTestContextWithFakeLlm([
       scriptedExtraction({ travellerFullName: "Asha Rao", applicantCount: 1 }),
     ]);
 
@@ -359,7 +335,7 @@ describe("extractIntake", () => {
     it.each(resolutionCombinations)(
       "$description",
       async ({ passportShouldResolve, partnerShouldResolve }) => {
-        const seedContext = buildTestContext();
+        const seedContext = await buildSqlTestContext();
 
         let seededTravellerId: string | undefined;
         if (passportShouldResolve) {
@@ -396,7 +372,7 @@ describe("extractIntake", () => {
             }),
           ]),
         });
-        const writeRefusingContext = refuseWrites(contextWithLlm);
+        const writeRefusingContext = contextRefusingWrites(contextWithLlm, "extractIntake");
 
         const draft = await extractIntake(writeRefusingContext, TENANT_ID, "irrelevant", ACTOR);
 

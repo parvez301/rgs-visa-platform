@@ -1,82 +1,43 @@
 import { crm, getCountryProduct } from "@rgs/shared";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { READ_TOOLS } from "../../src/agent/tools/readTools";
 import { ToolRegistry } from "../../src/agent/tools/registry";
-import { buildTestContext, type TestContext } from "../helpers";
+import {
+  buildSqlTestContext,
+  closeSqlTestContexts,
+  contextRefusingWrites,
+  type SqlTestContext,
+} from "../helpers";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { CASE_COUNT_GROUP_BY_FIELDS, createCase } from "../../src/domain/crm/cases";
 import { writeCase } from "../../src/domain/crm/caseStore";
 import { upsertCountryProduct } from "../../src/domain/config";
-import {
-  META_SORT_KEY,
-  countryChecklistPartitionKey,
-  partnerListGsi1Pk,
-  partnerPartitionKey,
-} from "../../src/domain/crm/keys";
-import type { AppContext } from "../../src/lib/context";
+
+afterEach(closeSqlTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
 
 /**
- * Writes a partner row indexed exactly like a real one -- listPartners' GSI1
- * query reaches it -- but whose body no longer satisfies PartnerSchema:
- * partnerType is gone. Mirrors the identical helper in
- * services/api/test/crm/partners.test.ts, which exists because createPartner
- * itself cannot produce this shape; only a half-written row or an older
- * importer format can.
+ * Writes a partner row that listPartners reaches but whose body no longer
+ * satisfies PartnerSchema: partnerType is gone. Mirrors the identical row in
+ * test/crm/crmApi.test.ts, which exists because createPartner itself cannot
+ * produce this shape; only a half-written row or an older importer format can.
  */
 async function seedUnparseablePartnerItem(
-  context: TestContext,
+  context: SqlTestContext,
   tenantId: string,
   canonicalName: string,
   partnerId: string,
 ): Promise<string> {
-  await context.table.put({
-    PK: partnerPartitionKey(tenantId, partnerId),
-    SK: META_SORT_KEY,
-    GSI1PK: partnerListGsi1Pk(tenantId),
-    GSI1SK: crm.normalizePartnerName(canonicalName).canonicalKey ?? "",
-    tenantId,
-    partnerId,
-    canonicalName,
-    aliases: [],
-    createdAt: "2026-07-23T10:00:00.000Z",
-  });
+  await context.sql.query(
+    `insert into crm_partners (
+       tenant_id, partner_id, canonical_name, canonical_key, aliases, created_at, updated_at
+     ) values ($1, $2, $3, $4, '[]'::jsonb, '2026-07-23T10:00:00.000Z', '2026-07-23T10:00:00.000Z')`,
+    [tenantId, partnerId, canonicalName, crm.normalizePartnerName(canonicalName).canonicalKey ?? ""],
+  );
   return partnerId;
-}
-
-/**
- * Wraps a real context's table so a read still works but any put/delete
- * throws immediately. Identical in shape to the helper of the same name in
- * writeTools.test.ts -- duplicated rather than imported because that file
- * exports nothing, and a read tool reaching a write is exactly the bug this
- * counterpart property test exists to catch (P49): a read tool has no
- * `apply`, so the only seam an accidental write could ever occur on is
- * inside `execute` itself.
- */
-function refuseWrites(context: TestContext, toolNameForMessage: string): AppContext {
-  return {
-    ...context,
-    table: {
-      get: (partitionKey, sortKey, options) => context.table.get(partitionKey, sortKey, options),
-      query: (partitionKey, options) => context.table.query(partitionKey, options),
-      queryGsi: (indexName, partitionKey, options) =>
-        context.table.queryGsi(indexName, partitionKey, options),
-      queryGsiPage: (indexName, partitionKey, options) =>
-        context.table.queryGsiPage(indexName, partitionKey, options),
-      put: () => {
-        throw new Error(`read tool "${toolNameForMessage}"'s execute reached put()`);
-      },
-      putIfAbsent: () => {
-        throw new Error(`read tool "${toolNameForMessage}"'s execute reached putIfAbsent()`);
-      },
-      delete: () => {
-        throw new Error(`read tool "${toolNameForMessage}"'s execute reached delete()`);
-      },
-    },
-  };
 }
 
 /** What the property test below seeds before it drives a tool. */
@@ -204,11 +165,11 @@ describe("the read tool registry", () => {
 // now: a read tool that slipped a put/delete into its execute would pass
 // every other test in this file, because none of them run against a
 // write-refusing context.
-describe("every READ_TOOLS tool resolves without ever reaching the table's write side", () => {
+describe("every READ_TOOLS tool resolves without ever issuing a write", () => {
   it.each(READ_TOOL_INPUT_CASES)(
-    "$tool.name / $label: execute resolves without reaching put() or delete()",
+    "$tool.name / $label: execute resolves without issuing a write",
     async ({ tool, build }) => {
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const partner = await createPartner(
         context,
         TENANT_ID,
@@ -242,7 +203,7 @@ describe("every READ_TOOLS tool resolves without ever reaching the table's write
         travellerFullName: "ASHA RAO",
         travellerPassportNumber: "P7654321",
       });
-      const writeRefusingContext = refuseWrites(context, tool.name);
+      const writeRefusingContext = contextRefusingWrites(context, tool.name);
 
       await expect(tool.execute(writeRefusingContext, TENANT_ID, input, ACTOR)).resolves.toBeDefined();
     },
@@ -251,7 +212,7 @@ describe("every READ_TOOLS tool resolves without ever reaching the table's write
 
 describe("get_case", () => {
   it("returns the stored case", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(context, TENANT_ID, { canonicalName: "Ozzy Travels", partnerType: "AGENCY" }, ACTOR);
     const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "ASHA RAO" });
     const createdCase = await createCase(context, TENANT_ID, {
@@ -273,7 +234,7 @@ describe("get_case", () => {
 
 describe("find_traveller", () => {
   it("finds by passport when one is given, and by name otherwise", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await upsertTraveller(context, TENANT_ID, { fullName: "RAVI KUMAR", passportNumber: "Z1234567" });
 
     const tool = new ToolRegistry(READ_TOOLS).get("find_traveller");
@@ -293,7 +254,7 @@ describe("get_country_checklist", () => {
   const tool = () => new ToolRegistry(READ_TOOLS).get("get_country_checklist")!;
 
   it("answers from the Config checklist the desk edits, free-text rows included", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await upsertCountryProduct(context, "admin_1", ACTOR, {
       ...getCountryProduct("AE"),
       requiredDocuments: [
@@ -307,26 +268,9 @@ describe("get_country_checklist", () => {
     );
   });
 
-  it("ignores a leftover CRM checklist row for the same country", async () => {
-    const context = buildTestContext();
-    await context.table.put({
-      PK: countryChecklistPartitionKey(TENANT_ID, "AE"),
-      SK: META_SORT_KEY,
-      countryCode: "AE",
-      requiredDocuments: ["Should never surface"],
-      updatedAt: context.now().toISOString(),
-      updatedBy: ACTOR,
-    });
-
-    const result = await tool().execute(context, TENANT_ID, { countryCode: "AE" }, ACTOR);
-    expect((result as { requiredDocuments: string[] }).requiredDocuments).not.toContain(
-      "Should never surface",
-    );
-  });
-
   it("returns an empty list for a country with nothing configured", async () => {
     await expect(
-      tool().execute(buildTestContext(), TENANT_ID, { countryCode: "ZZ" }, ACTOR),
+      tool().execute(await buildSqlTestContext(), TENANT_ID, { countryCode: "ZZ" }, ACTOR),
     ).resolves.toEqual({ countryCode: "ZZ", requiredDocuments: [] });
   });
 });
@@ -340,7 +284,7 @@ describe("get_country_checklist", () => {
 // desk operator downstream. These two tests exist to keep that from happening.
 describe("search_cases", () => {
   it("surfaces unreadableCaseIds instead of dropping the row that would not parse", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(context, TENANT_ID, { canonicalName: "Ozzy Travels", partnerType: "AGENCY" }, ACTOR);
     const healthyTraveller = await upsertTraveller(context, TENANT_ID, { fullName: "HEALTHY TRAVELLER" });
     const healthyCase = await createCase(context, TENANT_ID, {
@@ -373,7 +317,7 @@ describe("search_cases", () => {
 
 describe("list_partners", () => {
   it("surfaces unreadablePartnerIds instead of dropping the row that would not parse", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const healthyPartner = await createPartner(
       context,
       TENANT_ID,

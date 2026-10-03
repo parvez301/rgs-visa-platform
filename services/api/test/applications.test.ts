@@ -1,21 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createDraft,
   listMyApplications,
   patchDraft,
   submitApplication,
 } from "../src/domain/applications";
+import { listUserActivity } from "../src/domain/activity";
 import { ApiError } from "../src/lib/errors";
-import {
-  buildTestContext,
-  completeEssentials,
-  completeTraveller,
-  createSubmittableUaeDraft,
-} from "./helpers";
+import { buildSqlTestContext, closeSqlTestContexts, completeEssentials, completeTraveller, createSubmittableUaeDraft } from "./helpers";
+
+afterEach(closeSqlTestContexts);
 
 describe("createDraft", () => {
   it("prices the draft from the country catalog and logs activity", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     expect(draft.status).toBe("DRAFT");
     expect(draft.amounts).toEqual({
@@ -23,21 +21,19 @@ describe("createDraft", () => {
       serviceFeeInr: 1500,
       currency: "INR",
     });
-    const dayEvents = await context.table.query("EVENT#2026-07-23");
-    expect(dayEvents.map((eventItem) => eventItem["eventType"])).toContain(
-      "APPLICATION_STARTED",
-    );
+    const { events } = await listUserActivity(context, "user_1", 50);
+    expect(events.map((event) => event.eventType)).toContain("APPLICATION_STARTED");
   });
 
   it("rejects unknown countries", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(createDraft(context, "user_1", "XX", "user_1@example.com")).rejects.toThrow(
       "No visa product configured for country XX",
     );
   });
 
   it("rejects info-only / inactive countries with a helpful message", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await expect(createDraft(context, "user_1", "TH", "user_1@example.com")).rejects.toThrow(
       /aren't available online yet/,
     );
@@ -46,7 +42,7 @@ describe("createDraft", () => {
 
 describe("patchDraft", () => {
   it("updates travellers and logs step completion once per step change", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     const patched = await patchDraft(context, "user_1", draft.applicationId, {
       travellers: [completeTraveller],
@@ -57,7 +53,7 @@ describe("patchDraft", () => {
   });
 
   it("refuses edits to another user's application", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await expect(
       patchDraft(context, "user_2", draft.applicationId, { stepReached: "docs" }, "user_2@example.com"),
@@ -65,7 +61,7 @@ describe("patchDraft", () => {
   });
 
   it("refuses edits after submission", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const applicationId = await createSubmittableUaeDraft(context);
     await submitApplication(context, "user_1", applicationId, "asha@example.com");
     await expect(
@@ -76,7 +72,7 @@ describe("patchDraft", () => {
 
 describe("submitApplication", () => {
   it("submits a complete draft: status, activity, receipt email", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const applicationId = await createSubmittableUaeDraft(context);
     const submitted = await submitApplication(
       context,
@@ -91,7 +87,7 @@ describe("submitApplication", () => {
   });
 
   it("blocks submission without essentials", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await patchDraft(context, "user_1", draft.applicationId, {
       travellers: [completeTraveller],
@@ -102,7 +98,7 @@ describe("submitApplication", () => {
   });
 
   it("blocks submission with placeholder traveller details", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await patchDraft(context, "user_1", draft.applicationId, {
       essentials: completeEssentials,
@@ -113,7 +109,7 @@ describe("submitApplication", () => {
   });
 
   it("blocks submission listing each missing document", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const draft = await createDraft(context, "user_1", "AE", "user_1@example.com");
     await patchDraft(context, "user_1", draft.applicationId, {
       travellers: [completeTraveller],
@@ -132,7 +128,7 @@ describe("submitApplication", () => {
 
 describe("listMyApplications", () => {
   it("returns only the caller's applications", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await createDraft(context, "user_1", "AE", "user_1@example.com");
     context.advanceClock(1000);
     await createDraft(context, "user_1", "TZ", "user_1@example.com");

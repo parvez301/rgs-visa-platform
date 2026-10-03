@@ -98,6 +98,37 @@ describe("CRM user prefs", () => {
     expect(await scalar<number>("select count(*)::int as value from crm_user_prefs")).toBe(0);
   });
 
+  it("recordConfirmedWithoutEdit increments an existing count rather than resetting it", async () => {
+    await setUserPrefs(context, TENANT_ID, ALICE, { confirmedWithoutEditCount: 4 });
+    await recordConfirmedWithoutEdit(context, TENANT_ID, ALICE);
+    expect((await readUserPrefs(context, TENANT_ID, ALICE)).confirmedWithoutEditCount).toBe(5);
+  });
+
+  // Advancement by confirmed-without-edit count PROPOSES level 2, it never
+  // silently switches it on: crossing any threshold must not, on its own,
+  // change trustLevel or autoApplyOptIn.
+  it("never moves trustLevel or autoApplyOptIn no matter how high the count climbs", async () => {
+    for (let confirmation = 0; confirmation < 25; confirmation += 1) {
+      await recordConfirmedWithoutEdit(context, TENANT_ID, ALICE);
+    }
+    const userPrefs = await readUserPrefs(context, TENANT_ID, ALICE);
+    expect(userPrefs.confirmedWithoutEditCount).toBe(25);
+    expect(userPrefs.trustLevel).toBe(0);
+    expect(userPrefs.autoApplyOptIn).toBe(false);
+  });
+
+  it("readTrustLevel returns the stored level once one exists, not just the default", async () => {
+    await setUserPrefs(context, TENANT_ID, ALICE, { trustLevel: 2 });
+    expect(await readTrustLevel(context, TENANT_ID, ALICE)).toBe(2);
+  });
+
+  it("a rejected out-of-range trustLevel leaves the user at the safe default", async () => {
+    await expect(
+      setUserPrefs(context, TENANT_ID, ALICE, { trustLevel: 5 as never }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect((await readUserPrefs(context, TENANT_ID, ALICE)).trustLevel).toBe(0);
+  });
+
   it("keeps users and tenants apart", async () => {
     await setUserPrefs(context, TENANT_ID, ALICE, { trustLevel: 2 });
     expect(await readTrustLevel(context, TENANT_ID, BOB)).toBe(0);
