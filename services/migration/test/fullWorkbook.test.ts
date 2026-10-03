@@ -1,8 +1,7 @@
 import { existsSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { crm } from "@rgs/shared";
-import { buildTestContext } from "@rgs/api/test/helpers";
-import { caseStatusGsi1Pk } from "@rgs/api/src/domain/crm/keys";
+import { buildSqlTestContext, closeSqlTestContexts } from "@rgs/api/test/helpers";
 import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
 import { readWorkbook } from "../src/readWorkbook";
 import { mapRow } from "../src/mapRow";
@@ -22,6 +21,8 @@ import { runImport } from "../src/importRun";
  * passing" figure quoted in the ledger was reproducible on exactly one
  * machine.
  */
+afterEach(closeSqlTestContexts);
+
 const DEFAULT_WORKBOOK_PATH = "/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx";
 const WORKBOOK_PATH = process.env["RGS_WORKBOOK_PATH"] ?? DEFAULT_WORKBOOK_PATH;
 const workbookIsPresent = existsSync(WORKBOOK_PATH);
@@ -157,7 +158,7 @@ describe.skipIf(!workbookIsPresent)(
     it("is idempotent end to end: a second full-sheet run creates nothing", async () => {
       const extract = await readWorkbook(WORKBOOK_PATH);
       const mappedRows = extract.miniCrmRows.map(mapRow);
-      const context = buildTestContext();
+      const context = await buildSqlTestContext();
       const importInput = {
         mappedRows,
         contactDetails: joinPhones(mappedRows, extract.yearRows),
@@ -220,16 +221,13 @@ describe.skipIf(!workbookIsPresent)(
        * UNCONFIRMED_PAYMENT items naming the cells that said otherwise.
        */
       const billingStatusTally = new Map<string, number>();
-      for (const caseStatus of crm.CASE_STATUSES) {
-        const metaItems = await context.table.queryGsi(
-          "GSI1",
-          caseStatusGsi1Pk("rgs-rehearsal", caseStatus),
-          { limit: 100_000 },
-        );
-        for (const metaItem of metaItems) {
-          const billingStatus = String(metaItem["billingStatus"] ?? "UNKNOWN");
-          billingStatusTally.set(billingStatus, (billingStatusTally.get(billingStatus) ?? 0) + 1);
-        }
+      const billingRows = await context.sql.query<{ billing_status: string | null; total: number }>(
+        `select billing_status, count(*)::int as total
+           from crm_cases where tenant_id = $1 group by billing_status`,
+        ["rgs-rehearsal"],
+      );
+      for (const billingRow of billingRows.rows) {
+        billingStatusTally.set(billingRow.billing_status ?? "UNKNOWN", billingRow.total);
       }
       for (const [billingStatus, caseCount] of billingStatusTally) {
         const isTerminal = crm.BILLING_STATUSES.every(

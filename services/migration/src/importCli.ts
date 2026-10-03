@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import type { AppContext } from "@rgs/api/src/lib/context";
-import type { TableClient, TableItem } from "@rgs/api/src/lib/db";
+import type { SqlClient, SqlQueryable } from "@rgs/api/src/lib/sql";
 import type { WorkbookExtract } from "./readWorkbook";
 import { mapRow } from "./mapRow";
 import { joinPhones } from "./joinPhones";
@@ -58,7 +58,7 @@ export const IMPORT_CLI_USAGE =
   "usage: pnpm --filter @rgs/migration run import --workbook <path.xlsx> [--commit]";
 
 export const DRY_RUN_BANNER = "DRY RUN — nothing will be written. Pass --commit to write.";
-export const COMMIT_BANNER = "COMMITTING to the table.";
+export const COMMIT_BANNER = "COMMITTING to the database.";
 
 /**
  * The three things an abort can mean, kept apart because the operator's next
@@ -67,18 +67,18 @@ export const COMMIT_BANNER = "COMMITTING to the table.";
  * Finding NEW-4: there used to be two, chosen by `dryRun` alone, so every
  * failure of a `--commit` run announced "some cases are already written" —
  * including the failures that happen before the first write. Building the
- * production context throws on a missing table name or missing credentials,
+ * production context throws on a missing DATABASE_URL or missing credentials,
  * and `buildProductionContext()` was evaluated as an argument INSIDE the try,
  * so the single most likely failure on a fresh machine printed a paragraph
  * about partially written data at an operator whose table was untouched. So
  * did a bad path, and a workbook that would not parse.
  *
  * The message is now decided by whether a write was actually attempted, which
- * is observed rather than inferred — see `tableRecordingWrites`.
+ * is observed rather than inferred — see `sqlRecordingWrites`.
  */
 export const DRY_RUN_ABORT_MESSAGE = "DRY RUN FAILED — nothing was written.";
 export const NO_WRITES_ABORT_MESSAGE =
-  "IMPORT FAILED BEFORE IT WROTE ANYTHING — the table was not touched. Fix the cause and re-run the same command.";
+  "IMPORT FAILED BEFORE IT WROTE ANYTHING — the database was not touched. Fix the cause and re-run the same command.";
 export const PARTIAL_WRITE_ABORT_MESSAGE =
   "IMPORT ABORTED PART-WAY — some cases are already written. Re-running the same command is safe: each REF NO. is reserved before its case, so an already-imported ref is skipped and a half-written one is repaired under its original case id.";
 
@@ -87,33 +87,29 @@ interface WriteObservation {
   anyWriteAttempted: boolean;
 }
 
+/** Any statement that changes data. Over-matching only ever overstates the damage, which is the safe direction. */
+const WRITE_STATEMENT_PATTERN = /\b(?:insert\s+into|delete\s+from|update\s+[a-z_."]+\s+set|truncate)\b/i;
+
 /**
- * Wraps a table client so the CLI can say, truthfully, whether this run had
- * begun writing when it died.
+ * Wraps the context's SQL client so the CLI can say, truthfully, whether this
+ * run had begun writing when it died.
  *
- * The flag is set BEFORE the underlying call, not after it: a `put` that
+ * The flag is set BEFORE the underlying call, not after it: a statement that
  * throws a timeout may well have landed, and "we tried and do not know" has
  * to count as written or the abort message understates the damage in the one
  * case where understating it is dangerous.
  */
-function tableRecordingWrites(table: TableClient, observation: WriteObservation): TableClient {
+function sqlRecordingWrites(sql: SqlClient, observation: WriteObservation): SqlClient {
+  const observe = (queryable: SqlQueryable): SqlQueryable => ({
+    query: ((text: string, values?: readonly unknown[]) => {
+      if (WRITE_STATEMENT_PATTERN.test(text)) observation.anyWriteAttempted = true;
+      return queryable.query(text, values);
+    }) as SqlQueryable["query"],
+  });
   return {
-    get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
-    query: (partitionKey, options) => table.query(partitionKey, options),
-    queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
-    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
-    put: (item: TableItem) => {
-      observation.anyWriteAttempted = true;
-      return table.put(item);
-    },
-    putIfAbsent: (item: TableItem) => {
-      observation.anyWriteAttempted = true;
-      return table.putIfAbsent(item);
-    },
-    delete: (partitionKey: string, sortKey: string) => {
-      observation.anyWriteAttempted = true;
-      return table.delete(partitionKey, sortKey);
-    },
+    ...observe(sql),
+    transaction: (work) => sql.transaction((tx) => work(observe(tx))),
+    end: () => sql.end(),
   };
 }
 
@@ -167,17 +163,17 @@ export async function runImportCli(
     return { exitCode: 1 };
   }
 
-  // Writing is opt-in. A mistyped command must never touch a real table.
+  // Writing is opt-in. A mistyped command must never touch the real database.
   const dryRun = !parsedValues.commit;
   dependencies.logLine(dryRun ? DRY_RUN_BANNER : COMMIT_BANNER);
 
   const writeObservation: WriteObservation = { anyWriteAttempted: false };
   try {
     const context = dependencies.buildContext();
-    const observedContext: AppContext = {
-      ...context,
-      table: tableRecordingWrites(context.table, writeObservation),
-    };
+    const observedContext: AppContext =
+      context.sql === undefined
+        ? context
+        : { ...context, sql: sqlRecordingWrites(context.sql, writeObservation) };
     const workbookExtract = await dependencies.readWorkbookAt(parsedValues.workbook);
     const mappedRows = workbookExtract.miniCrmRows.map(mapRow);
 

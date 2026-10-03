@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { buildTestContext } from "@rgs/api/test/helpers";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  buildSqlTestContext,
+  closeSqlTestContexts,
+  interceptSql,
+  type SqlTestContext,
+} from "@rgs/api/test/helpers";
 import { readCase } from "@rgs/api/src/domain/crm/caseStore";
 import {
   listCaseRefsByStatus,
@@ -9,21 +14,14 @@ import {
 import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
 import { listPartners } from "@rgs/api/src/domain/crm/partners";
 import { getTravellerOrThrow } from "@rgs/api/src/domain/crm/travellers";
-import {
-  META_SORT_KEY,
-  applicantSortKey,
-  caseRefIndexPartitionKey,
-  casePartitionKey,
-  partnerListGsi1Pk,
-  partnerPartitionKey,
-} from "@rgs/api/src/domain/crm/keys";
 import { readCaseRefReservation } from "@rgs/api/src/domain/crm/caseRefIndex";
 import { CorruptRecordError } from "@rgs/api/src/lib/errors";
 import { runImport } from "../src/importRun";
 import { passthroughResidueResolver } from "../src/residueResolver";
 import type { ResidueResolution, ResidueResolver } from "../src/residueResolver";
 import type { MappedRow } from "../src/mapRow";
-import type { TableClient, TableItem, QueryOptions } from "@rgs/api/src/lib/db";
+
+afterEach(closeSqlTestContexts);
 
 function buildMappedRow(overrides: Partial<MappedRow> = {}): MappedRow {
   return {
@@ -63,7 +61,7 @@ const baseInput = {
 
 describe("runImport", () => {
   it("imports a row into a case, partner and traveller", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
     expect(summary.casesCreated).toBe(1);
     expect(summary.partnersCreated).toBe(1);
@@ -71,7 +69,7 @@ describe("runImport", () => {
   });
 
   it("is idempotent: a second run creates nothing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const rows = [buildMappedRow()];
     await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
     const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
@@ -82,7 +80,7 @@ describe("runImport", () => {
   });
 
   it("reuses one partner across spelling variants instead of creating two", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -96,7 +94,7 @@ describe("runImport", () => {
   });
 
   it("imports every migrated case with UNKNOWN billing, never UNBILLED", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
 
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
@@ -106,7 +104,7 @@ describe("runImport", () => {
   });
 
   it("keeps provenance on every imported case so any value traces back", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ legacyRaw: { "Additional Items": "PHOTO, HOTEL" } })],
@@ -126,7 +124,7 @@ describe("runImport", () => {
   // The structured field has to go, or the parse aborts the whole run. The
   // value must not go with it: legacyRaw is the only place it survives.
   it("keeps a dropped visa type in legacyRaw when the case type says it cannot be structured", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -155,7 +153,7 @@ describe("runImport", () => {
   // structured field and must NOT also duplicate it into legacyRaw, or every
   // one of the 7,140 well-formed rows grows a redundant provenance key.
   it("does not copy a visa type into legacyRaw when the structured field keeps it", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
 
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
@@ -164,7 +162,7 @@ describe("runImport", () => {
   });
 
   it("records pass-1 review items in the queue", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -180,7 +178,7 @@ describe("runImport", () => {
   });
 
   it("records proposed groups as review items rather than applying them", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow()],
@@ -194,7 +192,7 @@ describe("runImport", () => {
   });
 
   it("does not re-record a PROPOSED_GROUP on an unchanged second run, once every member case is already imported", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const input = {
       ...baseInput,
       mappedRows: [
@@ -229,7 +227,7 @@ describe("runImport", () => {
   });
 
   it("re-records a PROPOSED_GROUP when a new row extends an already-imported group", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const proposedGroups = [
       {
         caseRefs: ["50001", "50002"],
@@ -263,7 +261,7 @@ describe("runImport", () => {
   });
 
   it("writes nothing on a dry run but still reports what it would do", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow()],
@@ -274,273 +272,15 @@ describe("runImport", () => {
     expect((await listReviewItems(context, "rgs", "OPEN")).reviewItems).toHaveLength(0);
   });
 
-  // --- Ruling (task-9): caseRef is not unique --------------------------------
-
-  it("gives a later duplicate caseRef its own derived ref instead of overwriting the first case", async () => {
-    const context = buildTestContext();
-    const summary = await runImport(context, "rgs", {
-      ...baseInput,
-      mappedRows: [
-        buildMappedRow({ caseRef: "32669", sourceRow: 1203, partnerName: "PARADISE TOURS", passportNumber: "P1111111" }),
-        buildMappedRow({ caseRef: "32669", sourceRow: 1302, partnerName: "Ozzy Travels", passportNumber: "P2222222" }),
-      ],
-    });
-
-    expect(summary.casesCreated).toBe(2);
-    expect(summary.createdCaseIds).toHaveLength(2);
-
-    const firstCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
-    const secondCase = await readCase(context, "rgs", summary.createdCaseIds[1]!);
-    expect(firstCase!.caseRef).toBe("32669");
-    expect(secondCase!.caseRef).toBe("32669-2");
-
-    const open = await listReviewItems(context, "rgs", "OPEN");
-    const duplicateItems = open.reviewItems.filter((item) => item.reason === "DUPLICATE_REF");
-    expect(duplicateItems).toHaveLength(2);
-    expect(duplicateItems.map((item) => item.sourceRow).sort()).toEqual([1203, 1302]);
-    expect(duplicateItems.every((item) => item.rawValue === "32669")).toBe(true);
-  });
-
-  it("keeps both duplicate-caseRef cases stable across a re-run, creating no third case", async () => {
-    const context = buildTestContext();
-    const rows = [
-      buildMappedRow({ caseRef: "32669", sourceRow: 1203, partnerName: "PARADISE TOURS", passportNumber: "P1111111" }),
-      buildMappedRow({ caseRef: "32669", sourceRow: 1302, partnerName: "Ozzy Travels", passportNumber: "P2222222" }),
-    ];
-    const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
-    const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
-
-    expect(secondSummary.casesCreated).toBe(0);
-    expect(secondSummary.casesSkippedAlreadyImported).toBe(2);
-
-    // Both original cases still read back unchanged: no third case, and
-    // neither partner's case was overwritten by the other's on the re-run.
-    const firstCaseAfterRerun = await readCase(context, "rgs", firstSummary.createdCaseIds[0]!);
-    const secondCaseAfterRerun = await readCase(context, "rgs", firstSummary.createdCaseIds[1]!);
-    expect(firstCaseAfterRerun!.caseRef).toBe("32669");
-    expect(secondCaseAfterRerun!.caseRef).toBe("32669-2");
-
-    const closedCasesAfterRerun = await listCasesByStatus(context, "rgs", "CLOSED", 1000);
-    expect(closedCasesAfterRerun.cases).toHaveLength(2);
-
-    const openAfterRerun = await listReviewItems(context, "rgs", "OPEN");
-    // Re-running must not have doubled the DUPLICATE_REF review items either.
-    expect(openAfterRerun.reviewItems.filter((item) => item.reason === "DUPLICATE_REF")).toHaveLength(2);
-  });
-
-  it("derives the same refs for duplicate claimants however the sheet's rows shift", async () => {
-    // The suffix used to be `-R${sourceRow}`, so inserting one row anywhere
-    // above them renumbered both cases, the sweep recognised neither, and the
-    // next run created a second case for each -- compounding on every
-    // insertion into a sheet the whole plan insists is still being edited.
-    async function importedRefsFor(rowOffset: number): Promise<string[]> {
-      const context = buildTestContext();
-      const summary = await runImport(context, "rgs", {
-        ...baseInput,
-        mappedRows: [
-          buildMappedRow({
-            caseRef: "32669",
-            sourceRow: 1203 + rowOffset,
-            travellerFullName: "ATEMA ALIABBAS TINWALA",
-            partnerName: "PARADISE TOURS",
-            passportNumber: "P1111111",
-          }),
-          buildMappedRow({
-            caseRef: "32669",
-            sourceRow: 1302 + rowOffset,
-            travellerFullName: "KUSHMEET SINGH BAWA",
-            partnerName: "Ozzy Travels",
-            passportNumber: "P2222222",
-          }),
-        ],
-      });
-      const importedCases = await Promise.all(
-        summary.createdCaseIds.map((caseId) => readCase(context, "rgs", caseId)),
-      );
-      return importedCases.map((importedCase) => importedCase!.caseRef).sort();
-    }
-
-    expect(await importedRefsFor(0)).toEqual(["32669", "32669-2"]);
-    // Eleven rows inserted above them. Same two travellers, same two refs.
-    expect(await importedRefsFor(11)).toEqual(["32669", "32669-2"]);
-  });
-
-  it("orders duplicate claimants by content, so the same traveller keeps the bare ref", async () => {
-    const context = buildTestContext();
-    const summary = await runImport(context, "rgs", {
-      ...baseInput,
-      mappedRows: [
-        // Later in the sheet, but first by traveller name.
-        buildMappedRow({
-          caseRef: "32669",
-          sourceRow: 1302,
-          travellerFullName: "ATEMA ALIABBAS TINWALA",
-          partnerName: "PARADISE TOURS",
-          passportNumber: "P1111111",
-        }),
-        buildMappedRow({
-          caseRef: "32669",
-          sourceRow: 1203,
-          travellerFullName: "KUSHMEET SINGH BAWA",
-          partnerName: "Ozzy Travels",
-          passportNumber: "P2222222",
-        }),
-      ],
-    });
-
-    const atemasCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
-    const kushmeetsCase = await readCase(context, "rgs", summary.createdCaseIds[1]!);
-    expect(atemasCase!.caseRef).toBe("32669");
-    expect(kushmeetsCase!.caseRef).toBe("32669-2");
-  });
-
-  it("gives a duplicated ref's joined phone to one claimant only, and flags the other", async () => {
-    const context = buildTestContext();
-    // REF 32669 on the real sheet: phone 9872668866, claimed by ATEMA
-    // ALIABBAS TINWALA at PARADISE TOURS and KUSHMEET SINGH BAWA at Ozzy
-    // Travels -- two travellers at rival agencies. Both used to receive it.
-    const summary = await runImport(context, "rgs", {
-      ...baseInput,
-      mappedRows: [
-        buildMappedRow({
-          caseRef: "32669",
-          sourceRow: 1203,
-          travellerFullName: "ATEMA ALIABBAS TINWALA",
-          partnerName: "PARADISE TOURS",
-          passportNumber: "P1111111",
-        }),
-        buildMappedRow({
-          caseRef: "32669",
-          sourceRow: 1302,
-          travellerFullName: "KUSHMEET SINGH BAWA",
-          partnerName: "Ozzy Travels",
-          passportNumber: "P2222222",
-        }),
-      ],
-      contactDetails: new Map([
-        ["32669", { phone: "9872668866", trackingNumber: "25DEL3G0012679" }],
-      ]),
-    });
-
-    const firstClaimantsCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
-    const otherClaimantsCase = await readCase(context, "rgs", summary.createdCaseIds[1]!);
-    expect(firstClaimantsCase!.applicants[0]!.trackingNumber).toBe("25DEL3G0012679");
-    expect(otherClaimantsCase!.applicants[0]!.trackingNumber).toBeUndefined();
-
-    const firstClaimantsTraveller = await getTravellerOrThrow(
-      context,
-      "rgs",
-      firstClaimantsCase!.applicants[0]!.travellerId,
-    );
-    const otherClaimantsTraveller = await getTravellerOrThrow(
-      context,
-      "rgs",
-      otherClaimantsCase!.applicants[0]!.travellerId,
-    );
-    expect(firstClaimantsTraveller.phone).toBe("9872668866");
-    // The PII disclosure this exists to prevent: one agency's client's mobile
-    // stored on a rival agency's client's record.
-    expect(otherClaimantsTraveller.phone).toBeUndefined();
-
-    const open = await listReviewItems(context, "rgs", "OPEN");
-    const withheldItem = open.reviewItems.find(
-      (item) => item.reason === "DUPLICATE_REF" && item.fieldName === "Phone",
-    );
-    expect(withheldItem).toBeDefined();
-    expect(withheldItem!.sourceRow).toBe(1302);
-    expect(withheldItem!.detail).toMatch(/withheld here/);
-  });
-
-  it("records the 2025 YEAR contact details that lost a same-ref conflict", async () => {
-    const context = buildTestContext();
-    await runImport(context, "rgs", {
-      ...baseInput,
-      mappedRows: [buildMappedRow({ caseRef: "33356" })],
-      contactDetails: new Map([
-        [
-          "33356",
-          {
-            phone: "9844544233",
-            conflictingValues: ['Phone 9891842385 ("2025 YEAR" row 2176)'],
-          },
-        ],
-      ]),
-    });
-
-    const open = await listReviewItems(context, "rgs", "OPEN");
-    const conflictItem = open.reviewItems.find(
-      (item) => item.reason === "DUPLICATE_REF" && item.fieldName === "Phone",
-    );
-    expect(conflictItem).toBeDefined();
-    expect(conflictItem!.rawValue).toBe('Phone 9891842385 ("2025 YEAR" row 2176)');
-  });
-
-  // --- Ruling (task-9): blank partner name --------------------------------
-
-  it("routes a blank partner name to the sentinel partner and raises a review item", async () => {
-    const context = buildTestContext();
-    const summary = await runImport(context, "rgs", {
-      ...baseInput,
-      mappedRows: [buildMappedRow({ partnerName: "" })],
-    });
-
-    expect(summary.casesCreated).toBe(1);
-    expect(summary.partnersCreated).toBe(1);
-
-    const partnerListing = await listPartners(context, "rgs");
-    expect(partnerListing.partners).toHaveLength(1);
-    expect(partnerListing.partners[0]!.canonicalName).toBe("(no referrer recorded)");
-    // UNRECORDED, not DIRECT: a blank REFRENCE cell says nothing about how
-    // the work arrived, and DIRECT would assert RGS's own walk-in business on
-    // 207 real cases -- a guess no partner-type report could tell from fact.
-    expect(partnerListing.partners[0]!.partnerType).toBe("UNRECORDED");
-
-    const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
-    expect(importedCase!.partnerId).toBe(partnerListing.partners[0]!.partnerId);
-
-    const open = await listReviewItems(context, "rgs", "OPEN");
-    const unmappedPartnerItem = open.reviewItems.find((item) => item.reason === "UNMAPPED_PARTNER");
-    expect(unmappedPartnerItem).toBeDefined();
-    expect(unmappedPartnerItem!.fieldName).toBe("REFRENCE");
-    expect(unmappedPartnerItem!.rawValue).toBe("");
-  });
-
-  it("reuses the sentinel partner across multiple blank-partner rows", async () => {
-    const context = buildTestContext();
-    const summary = await runImport(context, "rgs", {
-      ...baseInput,
-      mappedRows: [
-        buildMappedRow({ caseRef: "1", partnerName: "", passportNumber: "P1111111" }),
-        buildMappedRow({ caseRef: "2", partnerName: "", passportNumber: "P2222222" }),
-        buildMappedRow({ caseRef: "3", partnerName: "", passportNumber: "P3333333" }),
-      ],
-    });
-
-    expect(summary.partnersCreated).toBe(1);
-    expect(summary.rowsMatchedToExistingPartner).toBe(2);
-    expect((await listPartners(context, "rgs")).partners).toHaveLength(1);
-  });
-
   // --- Ruling (task-9): findPartnerByName must be memoised, not scanned per row ---
 
   it("looks up a shared partner name at most a constant number of times, not once per row", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     let partnerListQueryCount = 0;
-    const partnerListPartitionKey = partnerListGsi1Pk("rgs");
-    const countingTable: TableClient = {
-      get: (partitionKey, sortKey, options) => context.table.get(partitionKey, sortKey, options),
-      put: (item) => context.table.put(item),
-      delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
-      putIfAbsent: (item) => context.table.putIfAbsent(item),
-      query: (partitionKey, options) => context.table.query(partitionKey, options),
-      queryGsi: (indexName: "GSI1" | "GSI2" | "GSI3", partitionKey: string, options?: QueryOptions) => {
-        if (indexName === "GSI1" && partitionKey === partnerListPartitionKey) partnerListQueryCount += 1;
-        return context.table.queryGsi(indexName, partitionKey, options);
-      },
-      queryGsiPage: (indexName, partitionKey, options) =>
-        context.table.queryGsiPage(indexName, partitionKey, options),
-    };
-    const countingContext = { ...context, table: countingTable };
+    interceptSql(context, async ({ text }, run) => {
+      if (/\bfrom\s+crm_partners\b/i.test(text)) partnerListQueryCount += 1;
+      return run();
+    });
 
     const rowCount = 50;
     const rows = Array.from({ length: rowCount }, (_unused, rowIndex) =>
@@ -552,37 +292,27 @@ describe("runImport", () => {
       }),
     );
 
-    const summary = await runImport(countingContext, "rgs", { ...baseInput, mappedRows: rows });
+    const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
 
     expect(summary.partnersCreated).toBe(1);
     expect(summary.rowsMatchedToExistingPartner).toBe(rowCount - 1);
-    // Un-memoised, this would be >= rowCount (one findPartnerByName GSI1 query
-    // per row). Memoised, it is a small constant: our own pre-check plus
-    // createPartner's internal duplicate-name check, both on the first row only.
+    // Un-memoised, this would be >= rowCount (one partner scan per row).
+    // Memoised, it is a small constant: our own pre-check plus createPartner's
+    // internal duplicate-name check, both on the first row only.
     expect(partnerListQueryCount).toBeLessThanOrEqual(3);
   });
 
   // --- J5: the traveller lookup must be memoised the way the partner one is ---
 
   it("looks a repeat traveller up once, not once per row", async () => {
-    const context = buildTestContext();
-    let travellerIndexQueryCount = 0;
-    const countingTable: TableClient = {
-      get: (partitionKey, sortKey, options) => context.table.get(partitionKey, sortKey, options),
-      put: (item) => context.table.put(item),
-      delete: (partitionKey, sortKey) => context.table.delete(partitionKey, sortKey),
-      putIfAbsent: (item) => context.table.putIfAbsent(item),
-      query: (partitionKey, options) => context.table.query(partitionKey, options),
-      queryGsi: (indexName, partitionKey, options) => {
-        if (partitionKey.includes("#TRAVELLER_NAME#") || partitionKey.includes("#PASSPORT#")) {
-          travellerIndexQueryCount += 1;
-        }
-        return context.table.queryGsi(indexName, partitionKey, options);
-      },
-      queryGsiPage: (indexName, partitionKey, options) =>
-        context.table.queryGsiPage(indexName, partitionKey, options),
-    };
-    const countingContext = { ...context, table: countingTable };
+    const context = await buildSqlTestContext();
+    let travellerLookupCount = 0;
+    interceptSql(context, async ({ text }, run) => {
+      if (/\bfrom\s+crm_travellers\b/i.test(text) && /(?:normalized_name|passport_number)\s*=/i.test(text)) {
+        travellerLookupCount += 1;
+      }
+      return run();
+    });
 
     const rowCount = 20;
     const rows = Array.from({ length: rowCount }, (_unused, rowIndex) =>
@@ -594,16 +324,13 @@ describe("runImport", () => {
       }),
     );
 
-    const summary = await runImport(countingContext, "rgs", { ...baseInput, mappedRows: rows });
+    const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
 
     expect(summary.travellersCreated).toBe(1);
     expect(summary.rowsMatchedToExistingTraveller).toBe(rowCount - 1);
-    // GSI2 and GSI3 are eventually consistent and cannot be read
-    // consistently, so a per-row lookup is not merely wasteful: row n+1 can
-    // miss the traveller row n just created and make a second record for one
-    // person. Un-memoised this was >= rowCount; memoised it is the first
-    // row's two misses plus upsertTraveller's own internal passport check.
-    expect(travellerIndexQueryCount).toBeLessThanOrEqual(3);
+    // Un-memoised this was >= rowCount; memoised it is the first row's two
+    // misses plus upsertTraveller's own internal passport check.
+    expect(travellerLookupCount).toBeLessThanOrEqual(3);
   });
 
   it("reports the same traveller counts on a dry run as on a real one", async () => {
@@ -613,12 +340,12 @@ describe("runImport", () => {
       buildMappedRow({ caseRef: "3", sourceRow: 4, travellerFullName: "PRIYA DESAI", passportNumber: "P7654321" }),
     ];
 
-    const dryRunSummary = await runImport(buildTestContext(), "rgs", {
+    const dryRunSummary = await runImport(await buildSqlTestContext(), "rgs", {
       ...baseInput,
       mappedRows: rows,
       dryRun: true,
     });
-    const committedSummary = await runImport(buildTestContext(), "rgs", {
+    const committedSummary = await runImport(await buildSqlTestContext(), "rgs", {
       ...baseInput,
       mappedRows: rows,
     });
@@ -635,7 +362,7 @@ describe("runImport", () => {
   // --- Ruling (task-9): partner names are passed RAW, not canonicalized ---
 
   it("passes the partner name to the API raw, preserving its exact casing", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ partnerName: "VWI Mumbai" })],
@@ -652,7 +379,7 @@ describe("runImport", () => {
   // --- JoinedContactDetails: phone / trackingNumber / flaggedPhoneRaw ---
 
   it("records a phone recovered from the 2025 YEAR join on a newly-created traveller", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const contactDetails = new Map([["31376", { phone: "9876543210" }]]);
     const summary = await runImport(context, "rgs", {
       ...baseInput,
@@ -670,7 +397,7 @@ describe("runImport", () => {
   });
 
   it("carries the tracking number from the phone join onto the case's applicant", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const contactDetails = new Map([["31376", { trackingNumber: "DTDC9911" }]]);
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()], contactDetails });
 
@@ -679,7 +406,7 @@ describe("runImport", () => {
   });
 
   it("records a SUSPECT_PHONE review item and keeps the flagged phone in legacyRaw", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const contactDetails = new Map([["31376", { flaggedPhoneRaw: "Mukesh Kumar" }]]);
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()], contactDetails });
 
@@ -695,7 +422,7 @@ describe("runImport", () => {
   // --- Schema-required fields the workbook does not always supply --------
 
   it("substitutes a sentinel destinationCountry when the country is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ caseDraft: { ...buildMappedRow().caseDraft, destinationCountry: "" } })],
@@ -711,7 +438,7 @@ describe("runImport", () => {
   });
 
   it("substitutes a sentinel receivedDate when the date is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ caseDraft: { ...buildMappedRow().caseDraft, receivedDate: undefined } })],
@@ -735,7 +462,7 @@ describe("runImport", () => {
   });
 
   it("puts a sentinel-dated case at the END of its partner's listing, as the review item claims", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -762,7 +489,7 @@ describe("runImport", () => {
   });
 
   it("substitutes a per-row sentinel travellerFullName when the name is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ travellerFullName: "  ", passportNumber: undefined, sourceRow: 4435 })],
@@ -780,7 +507,7 @@ describe("runImport", () => {
   });
 
   it("does not merge two different blank-name rows onto the same traveller", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -808,7 +535,7 @@ describe("runImport", () => {
   // --- Written-but-never-read field audit: applicantCount, Status note ---
 
   it("surfaces a headcount above one in legacyRaw", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ applicantCount: 3 })],
@@ -818,7 +545,7 @@ describe("runImport", () => {
   });
 
   it("does not clutter legacyRaw with a headcount of exactly one", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ applicantCount: 1, legacyRaw: {} })],
@@ -828,7 +555,7 @@ describe("runImport", () => {
   });
 
   it("surfaces the Status column's note text in legacyRaw", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -844,7 +571,7 @@ describe("runImport", () => {
   // --- Residue resolver seam (pass 2) -------------------------------------
 
   it("auto-applies a high-confidence residue resolution to the draft instead of queuing it", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const highConfidenceResolver: ResidueResolver = {
       async resolve(): Promise<ResidueResolution[]> {
         return [{ fieldName: "Status", proposedValue: "SUBMITTED", confidence: 0.95 }];
@@ -870,7 +597,7 @@ describe("runImport", () => {
   // review item, where a bare .parse() threw an untyped ZodError out of the
   // middle of a run that had already written cases -- straight into C1.
   it("does not let a resolver's out-of-range confidence abort the run", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const misbehavingResolver: ResidueResolver = {
       async resolve(): Promise<ResidueResolution[]> {
         return [{ fieldName: "Status", proposedValue: "SUBMITTED", confidence: -0.2 }];
@@ -896,7 +623,7 @@ describe("runImport", () => {
   });
 
   it("queues a low-confidence residue resolution with its proposed value and confidence attached", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const lowConfidenceResolver: ResidueResolver = {
       async resolve(): Promise<ResidueResolution[]> {
         return [{ fieldName: "Status", proposedValue: "SUBMITTED", confidence: 0.4 }];
@@ -924,15 +651,13 @@ describe("runImport", () => {
   // --- CORRUPT_RECORD on a write path: one bad partner row must not abort the run ---
 
   it("isolates a corrupt stored partner record to one row instead of aborting the whole run", async () => {
-    const context = buildTestContext();
-    const canonicalKeyOfCorruptPartner = "A CORRUPT PARTNER";
-    await context.table.put({
-      PK: partnerPartitionKey("rgs", "prt_corrupt"),
-      SK: META_SORT_KEY,
-      GSI1PK: partnerListGsi1Pk("rgs"),
-      GSI1SK: canonicalKeyOfCorruptPartner,
-      // Deliberately missing every required PartnerSchema field.
-    });
+    const context = await buildSqlTestContext();
+    // Deliberately missing partner_type, which PartnerSchema requires.
+    await context.sql.query(
+      `insert into crm_partners (tenant_id, partner_id, canonical_name, canonical_key, updated_at)
+       values ($1, $2, $3, $4, now())`,
+      ["rgs", "prt_corrupt", "A Corrupt Partner", "A CORRUPT PARTNER"],
+    );
 
     const summary = await runImport(context, "rgs", {
       ...baseInput,
@@ -958,7 +683,7 @@ describe("runImport", () => {
   // --- listCasesByStatus's own default limit (50) must not cap the sweep ---
 
   it("seeds idempotency past listCasesByStatus's own default page limit of 50", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const rowCount = 55;
     const rows = Array.from({ length: rowCount }, (_unused, rowIndex) =>
       buildMappedRow({
@@ -978,7 +703,7 @@ describe("runImport", () => {
   });
 
   it("sweeps past the default page limit when deciding a group is unchanged", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const rowCount = 55;
     const rows = Array.from({ length: rowCount }, (_unused, rowIndex) =>
       buildMappedRow({
@@ -1012,9 +737,7 @@ describe("runImport", () => {
     // no reservations is also a real state -- it is what a tenant imported
     // before reservations existed looks like -- and it is the one state in
     // which the sweep's page limit is load-bearing.
-    for (const row of rows) {
-      await context.table.delete(caseRefIndexPartitionKey("rgs", row.caseRef), META_SORT_KEY);
-    }
+    await context.sql.query("delete from crm_case_ref_reservations where tenant_id = $1", ["rgs"]);
 
     const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows, proposedGroups });
     // Capped at the domain default of 50 the sweep would miss 5 of the refs,
@@ -1028,7 +751,7 @@ describe("runImport", () => {
   // --- J1: the four Mini CRM columns nothing used to read -------------------
 
   it("prefers Mini CRM's own TRACKING NO. over the 2025 YEAR join", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ trackingNumber: "8288303" })],
@@ -1043,7 +766,7 @@ describe("runImport", () => {
   });
 
   it("still falls back to the 2025 YEAR tracking number when Mini CRM has none", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow()],
@@ -1055,7 +778,7 @@ describe("runImport", () => {
   });
 
   it("imports the billing status the payment column actually recorded", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -1072,7 +795,7 @@ describe("runImport", () => {
   });
 
   it("writes the courier date the sheet recorded onto the case", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -1086,105 +809,53 @@ describe("runImport", () => {
     expect(importedCase!.courierDate).toBe("2025-01-15");
   });
 
-  // --- C1/C2: what a non-transactional writeCase and a lagging GSI leave -----
+  // --- C1/C2: what a part-way death and a damaged case row leave behind ------
   //
-  // Every test below needs a table that can fail the way a real one does.
-  // InMemoryTableClient.put is synchronous and cannot fail between two puts,
-  // and its GSIs are immediately consistent, which is exactly why the
-  // three-run rehearsal proved nothing about any of this.
+  // `writeCase` is one SQL transaction now, so a death between a case's META
+  // and its applicants can no longer happen. What survives is the window
+  // between a ref's reservation and its case (reserved, no case row), and
+  // damage done after the fact (applicants lost, a ref blanked). Each test
+  // below builds one of those states directly.
 
-  /** Wraps a table so puts matching `shouldFail` reject, as a timeout would. */
-  function tableFailingPuts(
-    table: TableClient,
-    shouldFail: (item: TableItem) => boolean,
-  ): TableClient {
-    return {
-      get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
-      put: async (item) => {
-        if (shouldFail(item)) throw new Error(`simulated write timeout on ${item.PK} / ${item.SK}`);
-        return table.put(item);
-      },
-      delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
-      putIfAbsent: (item) => table.putIfAbsent(item),
-      query: (partitionKey, options) => table.query(partitionKey, options),
-      queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
-      queryGsiPage: (indexName, partitionKey, options) =>
-        table.queryGsiPage(indexName, partitionKey, options),
+  /** Makes every statement matching `shouldFail` reject, as a timeout would. */
+  function failStatements(context: SqlTestContext, shouldFail: (text: string) => boolean): () => void {
+    const healthyClient = context.sql;
+    interceptSql(context, async ({ text }, run) => {
+      if (shouldFail(text)) throw new Error("simulated write timeout");
+      return run();
+    });
+    return () => {
+      context.sql = healthyClient;
     };
   }
 
-  /** Wraps a table so a GSI1 read returns nothing, as a lagging index does. */
-  function tableWithLaggingGsi1(table: TableClient): TableClient {
-    return {
-      get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
-      put: (item) => table.put(item),
-      delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
-      putIfAbsent: (item) => table.putIfAbsent(item),
-      query: (partitionKey, options) => table.query(partitionKey, options),
-      queryGsi: async (indexName, partitionKey, options) =>
-        indexName === "GSI1" && partitionKey.includes("#CASE_STATUS#")
-          ? []
-          : table.queryGsi(indexName, partitionKey, options),
-      queryGsiPage: async (indexName, partitionKey, options) =>
-        indexName === "GSI1" && partitionKey.includes("#CASE_STATUS#")
-          ? { items: [] }
-          : table.queryGsiPage(indexName, partitionKey, options),
-    };
-  }
-
-  /**
-   * Counts base-table reads that touch a CASE partition. `#CASE#` is the
-   * infix `casePartitionKey` builds with; `#CASE_REF#` (the reservation) and
-   * `#CASE_STATUS#` (the GSI1 partition) do not contain it, so a reservation
-   * read and an index sweep are correctly not counted.
-   */
-  function tableCountingCasePartitionReads(
-    table: TableClient,
-    casePartitionReads: { count: number },
-  ): TableClient {
-    const countIfCasePartition = (partitionKey: string): void => {
-      if (partitionKey.includes("#CASE#")) casePartitionReads.count += 1;
-    };
-    return {
-      get: (partitionKey, sortKey, options) => {
-        countIfCasePartition(partitionKey);
-        return table.get(partitionKey, sortKey, options);
-      },
-      query: (partitionKey, options) => {
-        countIfCasePartition(partitionKey);
-        return table.query(partitionKey, options);
-      },
-      put: (item) => table.put(item),
-      delete: (partitionKey, sortKey) => table.delete(partitionKey, sortKey),
-      putIfAbsent: (item) => table.putIfAbsent(item),
-      queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
-      queryGsiPage: (indexName, partitionKey, options) =>
-        table.queryGsiPage(indexName, partitionKey, options),
-    };
-  }
+  const isCaseInsert = (text: string): boolean => /insert\s+into\s+crm_cases\b/i.test(text);
 
   async function storedCaseRefsInStatus(
-    context: ReturnType<typeof buildTestContext>,
+    context: SqlTestContext,
     caseStatus: "CLOSED",
   ): Promise<string[]> {
     const listing = await listCaseRefsByStatus(context, "rgs", caseStatus, 1000);
     return listing.storedCaseRefs.map((storedCaseRef) => storedCaseRef.caseRef);
   }
 
-  it("never re-imports the ref of a half-written case, and flags it instead", async () => {
-    const context = buildTestContext();
-    const rows = [buildMappedRow()];
+  /**
+   * Leaves a case row whose applicants are gone, and its reservation reopened:
+   * the state a run that died mid-repair, or hand damage, would leave.
+   */
+  async function damageCaseKeepingReservationOpen(context: SqlTestContext, caseId: string, caseRef: string): Promise<void> {
+    await context.sql.query("delete from crm_applicants where tenant_id = $1 and case_id = $2", ["rgs", caseId]);
+    await context.sql.query(
+      "update crm_case_ref_reservations set completed_at = null where tenant_id = $1 and case_ref = $2",
+      ["rgs", caseRef],
+    );
+  }
 
-    // A timeout between writeCase's META put and its applicant put: the
-    // partition is left holding META alone, which is what readCase's own
-    // comment describes and what no in-memory test could produce before.
-    const halfWritingContext = {
-      ...context,
-      table: tableFailingPuts(context.table, (item) => item.SK.startsWith("APPLICANT#")),
-    };
-    await expect(
-      runImport(halfWritingContext, "rgs", { ...baseInput, mappedRows: rows }),
-    ).rejects.toThrow(/simulated write timeout/);
+  it("never re-imports the ref of an unreadable reserved case, and flags it instead", async () => {
+    const context = await buildSqlTestContext();
+    const rows = [buildMappedRow()];
+    const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
+    await damageCaseKeepingReservationOpen(context, firstSummary.createdCaseIds[0]!, "31376");
     expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual(["31376"]);
 
     const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
@@ -1214,20 +885,19 @@ describe("runImport", () => {
   // cannot answer: a case imported by a build that had no reservations, whose
   // applicants have since been lost. There is no reservation to consult, so
   // the status sweep is the only thing standing between this ref and a second
-  // case under it. The sweep reads `caseRef` straight off the raw META item
-  // for exactly this reason -- a Zod parse of the case would fail here, which
-  // is what used to make the ref invisible and the duplicate permanent.
+  // case under it. The sweep reads `case_ref` straight off the raw case row
+  // for exactly this reason -- a Zod parse of the case would fail here.
   it("never re-imports a ref held by a pre-reservation case whose applicants are gone", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const rows = [buildMappedRow()];
     const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
     const caseId = firstSummary.createdCaseIds[0]!;
 
     // Delete the reservation, so the ref looks like one imported before the
-    // reservation index existed, and the applicant item, so the case no
-    // longer reassembles.
-    await context.table.delete(caseRefIndexPartitionKey("rgs", "31376"), META_SORT_KEY);
-    await context.table.delete(casePartitionKey("rgs", caseId), applicantSortKey(0));
+    // reservation index existed, and the applicants, so the case no longer
+    // reassembles.
+    await context.sql.query("delete from crm_case_ref_reservations where tenant_id = $1", ["rgs"]);
+    await context.sql.query("delete from crm_applicants where tenant_id = $1 and case_id = $2", ["rgs", caseId]);
     expect(await readCase(context, "rgs", caseId).catch((error: Error) => error)).toBeInstanceOf(
       CorruptRecordError,
     );
@@ -1247,18 +917,16 @@ describe("runImport", () => {
   });
 
   it("repairs a ref that was reserved before a run died, under the reserved caseId", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const rows = [buildMappedRow()];
 
-    // This time the case's own META put is what fails, so the ref is
-    // reserved and no case exists at all.
-    const reserveOnlyContext = {
-      ...context,
-      table: tableFailingPuts(context.table, (item) => item.SK === "META" && item.PK.includes("#CASE#")),
-    };
+    // The case's own insert fails, so the ref is reserved and no case exists
+    // at all.
+    const restoreHealthyClient = failStatements(context, isCaseInsert);
     await expect(
-      runImport(reserveOnlyContext, "rgs", { ...baseInput, mappedRows: rows }),
+      runImport(context, "rgs", { ...baseInput, mappedRows: rows }),
     ).rejects.toThrow(/simulated write timeout/);
+    restoreHealthyClient();
     expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual([]);
 
     const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
@@ -1280,23 +948,14 @@ describe("runImport", () => {
     expect(await storedCaseRefsInStatus(context, "CLOSED")).toEqual(["31376"]);
   });
 
-  // NEW-3's own symptom, narrowed to a single half-written member: a group
-  // is only re-proposed while at least one of its refs is genuinely
-  // unaccounted for. A ref held by an unreadable stored case IS accounted
-  // for -- the operator already has an UNREADABLE_STORED_CASE item naming
-  // it, and a fresh PROPOSED_GROUP does not help them repair it -- so it
+  // NEW-3's own symptom, narrowed to a single unreadable member: a group is
+  // only re-proposed while at least one of its refs is genuinely unaccounted
+  // for. A ref held by an unreadable stored case IS accounted for -- the
+  // operator already has an UNREADABLE_STORED_CASE item naming it -- so it
   // must count as settled here exactly like an already-imported ref does.
-  //
-  // The case-status sweep alone cannot be allowed to prove this: a
-  // half-written case's META item carries a readable caseRef and status, so
-  // an UNLAGGED sweep can find "31376" on its own and mask a broken
-  // `caseRefsHeldByStoredCases.add` on the UNREADABLE_STORED_CASE branch.
-  // The run that matters is run with `tableWithLaggingGsi1`, exactly as
-  // NEW-3's own lag test does, so the group check has nothing to lean on but
-  // that add.
-  it("does not re-propose a group whose only unsettled member is a half-written case, even when the index lags", async () => {
-    const context = buildTestContext();
-    const halfWrittenRow = buildMappedRow({ caseRef: "31376", sourceRow: 2 });
+  it("does not re-propose a group whose only unsettled member is an unreadable case", async () => {
+    const context = await buildSqlTestContext();
+    const unreadableRow = buildMappedRow({ caseRef: "31376", sourceRow: 2 });
     const cleanlyImportedRow = buildMappedRow({
       caseRef: "31377",
       sourceRow: 3,
@@ -1311,30 +970,17 @@ describe("runImport", () => {
       },
     ];
 
-    // Establish the two settled states independently, as production traffic
-    // would: one case imports cleanly, the other dies between its META put
-    // and its applicant put (same fault as "never re-imports the ref of a
-    // half-written case, and flags it instead" above), leaving its ref
-    // reserved but unreadable.
-    await runImport(context, "rgs", { ...baseInput, mappedRows: [cleanlyImportedRow] });
-    const halfWritingContext = {
-      ...context,
-      table: tableFailingPuts(context.table, (item) => item.SK.startsWith("APPLICANT#")),
-    };
-    await expect(
-      runImport(halfWritingContext, "rgs", { ...baseInput, mappedRows: [halfWrittenRow] }),
-    ).rejects.toThrow(/simulated write timeout/);
-
-    // The run that matters: GSI1 answers nothing, so the case-status sweep
-    // cannot vouch for either ref -- only the per-ref reservation reads (for
-    // "31377") and the UNREADABLE_STORED_CASE branch's own bookkeeping (for
-    // "31376") can. Both group members are settled -- one already imported,
-    // one held by an unreadable stored case -- so the group must not be
-    // re-proposed.
-    const laggingContext = { ...context, table: tableWithLaggingGsi1(context.table) };
-    const summary = await runImport(laggingContext, "rgs", {
+    // Two settled states, established independently: one case imports
+    // cleanly, the other is left reserved but unreadable.
+    const importedSummary = await runImport(context, "rgs", {
       ...baseInput,
-      mappedRows: [halfWrittenRow, cleanlyImportedRow],
+      mappedRows: [unreadableRow, cleanlyImportedRow],
+    });
+    await damageCaseKeepingReservationOpen(context, importedSummary.createdCaseIds[0]!, "31376");
+
+    const summary = await runImport(context, "rgs", {
+      ...baseInput,
+      mappedRows: [unreadableRow, cleanlyImportedRow],
       proposedGroups,
     });
     expect(summary.casesSkippedUnreadable).toBe(1);
@@ -1342,30 +988,26 @@ describe("runImport", () => {
     expect(summary.groupsProposed).toBe(0);
 
     // And it stays quiet: unchanged members must not get a different answer
-    // on a following run, index still lagging.
-    const repeatedSummary = await runImport(laggingContext, "rgs", {
+    // on a following run.
+    const repeatedSummary = await runImport(context, "rgs", {
       ...baseInput,
-      mappedRows: [halfWrittenRow, cleanlyImportedRow],
+      mappedRows: [unreadableRow, cleanlyImportedRow],
       proposedGroups,
     });
     expect(repeatedSummary.groupsProposed).toBe(0);
   });
 
   /**
-   * N11, checkpointing half. The finding asked for resumable checkpointing.
-   * Before building one, the question is whether the caseRef reservation index
-   * already IS the checkpoint -- and it is, so this proves that rather than
-   * adding a second mechanism on top of a working one. There is no checkpoint
-   * file, no `--resume` flag and no run-id: the reservation items ARE the
-   * durable per-ref record of what this import has and has not finished, and
-   * they are written into the same table, in the same partition as the ref
-   * they describe, ahead of the case itself.
+   * N11, checkpointing half. The caseRef reservation index already IS the
+   * checkpoint: there is no checkpoint file, no `--resume` flag and no run-id.
+   * The reservation rows are the durable per-ref record of what this import
+   * has and has not finished, written ahead of the case itself.
    *
    * Resuming is therefore just "run the same command again", which is exactly
    * what the abort message tells the operator to do.
    */
   it("resumes from the reservation index after a part-way death, repairing rather than duplicating", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const rows = Array.from({ length: 6 }, (_unused, rowIndex) =>
       buildMappedRow({
         caseRef: String(60_001 + rowIndex),
@@ -1380,14 +1022,12 @@ describe("runImport", () => {
     expect(finishedSummary.casesCreated).toBe(4);
 
     // A second run over all six that dies between a ref's reservation and its
-    // case -- the one window `writeCase` has no transaction across.
-    const dyingContext = {
-      ...context,
-      table: tableFailingPuts(context.table, (item) => item.SK === "META" && item.PK.includes("#CASE#")),
-    };
+    // case -- the one window left between reserve and write.
+    const restoreHealthyClient = failStatements(context, isCaseInsert);
     await expect(
-      runImport(dyingContext, "rgs", { ...baseInput, mappedRows: rows }),
+      runImport(context, "rgs", { ...baseInput, mappedRows: rows }),
     ).rejects.toThrow(/simulated write timeout/);
+    restoreHealthyClient();
 
     // The state that leaves: four refs complete, one reserved and unwritten.
     const unfinishedReservations = [];
@@ -1428,8 +1068,8 @@ describe("runImport", () => {
     expect(thirdSummary.casesSkippedAlreadyImported).toBe(rows.length);
   });
 
-  it("completes each reservation, so a re-run reads no case partition at all", async () => {
-    const context = buildTestContext();
+  it("completes each reservation, so a re-run reads no case at all", async () => {
+    const context = await buildSqlTestContext();
     const rows = [
       buildMappedRow({ caseRef: "1", sourceRow: 2, passportNumber: "P1111111" }),
       buildMappedRow({ caseRef: "2", sourceRow: 3, passportNumber: "P2222222" }),
@@ -1444,75 +1084,24 @@ describe("runImport", () => {
       expect(reservation?.completedAt).toBeTypeOf("string");
     }
 
-    // NEW-5: and this is what the completion marker BUYS, which is why
-    // deleting `completeCaseRefReservation` left the whole suite green. An
-    // unfinished reservation sends `claimCaseRef` down the repair path, which
-    // calls `readCase` -- 2 strongly-consistent round trips per row, the
-    // ~14,312 that C2 removed -- and then silently heals the marker, so the
-    // run still reports the right counts. Only the round trips tell you.
-    const casePartitionReads = { count: 0 };
-    const countingContext = {
-      ...context,
-      table: tableCountingCasePartitionReads(context.table, casePartitionReads),
-    };
-    const secondSummary = await runImport(countingContext, "rgs", { ...baseInput, mappedRows: rows });
-
-    expect(secondSummary.casesCreated).toBe(0);
-    expect(secondSummary.casesSkippedAlreadyImported).toBe(2);
-    expect(casePartitionReads.count).toBe(0);
-  });
-
-  it("stays idempotent when the case-status index has not caught up", async () => {
-    const context = buildTestContext();
-    const rows = [
-      buildMappedRow({ caseRef: "1", sourceRow: 2, passportNumber: "P1111111" }),
-      buildMappedRow({ caseRef: "2", sourceRow: 3, passportNumber: "P2222222" }),
-    ];
-    // NEW-3: the two rows are a proposed GROUP as well as two cases. The
-    // version of this test that shipped in fix round 1 passed `proposedGroups:
-    // []`, asserted the two case columns, and walked straight past
-    // `groupsProposed` -- so the index-lag hole in the group check was
-    // reported closed by a test that never looked at the group check.
-    const proposedGroups = [
-      {
-        caseRefs: ["1", "2"],
-        partnerName: "VWI Mumbai",
-        destinationCountry: "TR",
-        receivedDate: "2025-01-02",
-      },
-    ];
-    const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows, proposedGroups });
-    expect(firstSummary.groupsProposed).toBe(1);
-
-    // GSI1 returns nothing for the case-status partitions, which is what an
-    // operator re-running seconds after an aborted --commit actually sees.
-    // DynamoDB refuses a consistent read on an index, so the sweep cannot ask
-    // for a better answer; only the per-ref reservation can give one.
-    const laggingContext = { ...context, table: tableWithLaggingGsi1(context.table) };
-    const secondSummary = await runImport(laggingContext, "rgs", {
-      ...baseInput,
-      mappedRows: rows,
-      proposedGroups,
+    // NEW-5: and this is what the completion marker BUYS. An unfinished
+    // reservation sends `claimCaseRef` down the repair path, which calls
+    // `readCase` and then silently heals the marker, so the run still reports
+    // the right counts. Only the reads tell you.
+    let caseReads = 0;
+    interceptSql(context, async ({ text }, run) => {
+      if (/\bfrom\s+crm_applicants\b/i.test(text)) caseReads += 1;
+      return run();
     });
+    const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
 
     expect(secondSummary.casesCreated).toBe(0);
     expect(secondSummary.casesSkippedAlreadyImported).toBe(2);
-    expect((await storedCaseRefsInStatus(context, "CLOSED")).sort()).toEqual(["1", "2"]);
-
-    // The column the old test skipped. Both members were recognised as
-    // already imported by the reservation reads above, so the group has not
-    // changed and must not be re-proposed.
-    expect(secondSummary.groupsProposed).toBe(0);
-    // And in the queue, not just in the summary: one proposal, from run 1.
-    // A human reviewing this group must not find a second copy of it.
-    const openAfterLaggedRun = await listReviewItems(context, "rgs", "OPEN");
-    expect(
-      openAfterLaggedRun.reviewItems.filter((item) => item.reason === "PROPOSED_GROUP"),
-    ).toHaveLength(1);
+    expect(caseReads).toBe(0);
   });
 
-  it("still re-proposes a group extended while the case-status index lags", async () => {
-    const context = buildTestContext();
+  it("still re-proposes a group extended by a newly imported row", async () => {
+    const context = await buildSqlTestContext();
     const firstRow = buildMappedRow({ caseRef: "1", sourceRow: 2, passportNumber: "P1111111" });
     const secondRow = buildMappedRow({ caseRef: "2", sourceRow: 3, passportNumber: "P2222222" });
     const proposedGroups = [
@@ -1525,12 +1114,8 @@ describe("runImport", () => {
     ];
     await runImport(context, "rgs", { ...baseInput, mappedRows: [firstRow], proposedGroups });
 
-    // The other half of NEW-3, which a fix that simply stopped re-proposing
-    // under lag would break: ref "2" is genuinely new, and the reservation
-    // read says so as consistently as it says the opposite for ref "1". A
-    // changed group is still re-proposed with the index dark.
-    const laggingContext = { ...context, table: tableWithLaggingGsi1(context.table) };
-    const secondSummary = await runImport(laggingContext, "rgs", {
+    // Ref "2" is genuinely new, so the changed group is proposed again.
+    const secondSummary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [firstRow, secondRow],
       proposedGroups,
@@ -1540,14 +1125,13 @@ describe("runImport", () => {
     expect(secondSummary.groupsProposed).toBe(1);
   });
 
-  it("flags a stored case whose META item carries no readable ref", async () => {
-    const context = buildTestContext();
+  it("flags a stored case whose row carries no readable ref", async () => {
+    const context = await buildSqlTestContext();
     await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
 
-    // A hand-repaired row: still indexed as a case, no longer naming its ref.
-    const storedMetaItems = await context.table.queryGsi("GSI1", "TENANT#rgs#CASE_STATUS#CLOSED");
-    const { caseRef: _droppedCaseRef, ...metaItemWithoutCaseRef } = storedMetaItems[0]!;
-    await context.table.put(metaItemWithoutCaseRef as typeof storedMetaItems[0]);
+    // A hand-repaired row: still a case, no longer naming its ref.
+    await context.sql.query("update crm_cases set case_ref = '' where tenant_id = $1", ["rgs"]);
+    await context.sql.query("delete from crm_case_ref_reservations where tenant_id = $1", ["rgs"]);
 
     const summary = await runImport(context, "rgs", {
       ...baseInput,

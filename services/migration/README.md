@@ -3,8 +3,8 @@
 A one-off importer that reads the legacy "CRM - RAYS GLOBAL SERVICES.xlsx"
 workbook (the "Mini CRM" and "2025 YEAR" sheets) and writes the CRM domain
 records — cases, partners, travellers, and a human review queue for anything
-that couldn't be mapped deterministically — into the same DynamoDB table the
-deployed API uses.
+that couldn't be mapped deterministically — into the same Postgres
+database (Supabase) the deployed API uses.
 
 It is **not part of the deployed stack**. It is run by hand, once (and then
 again, harmlessly, whenever the live sheet changes before cutover — see
@@ -45,7 +45,7 @@ readWorkbook  → mapRow (per row) → joinPhones + proposeGroups → residueRes
 ## The dry-run default
 
 **The CLI defaults to a dry run.** `--commit` is required to write anything.
-This points at a real DynamoDB table — the same one the deployed API reads
+This points at the real Postgres database — the same one the deployed API reads
 and writes — and a mistyped invocation (wrong `--tenant`, wrong `--workbook`)
 must print what it *would* do, never actually do it.
 
@@ -60,7 +60,7 @@ uses (`buildProductionContext` in `services/api/src/http/handler.ts`), so it
 needs the same four environment variables:
 
 ```bash
-export TABLE_NAME=...
+export DATABASE_URL=...
 export DOCUMENTS_BUCKET=...
 export EMAIL_SENDER=...
 export ADMIN_NOTIFICATION_EMAIL=...

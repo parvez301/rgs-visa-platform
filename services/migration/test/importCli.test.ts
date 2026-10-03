@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { buildTestContext } from "@rgs/api/test/helpers";
-import type { AppContext } from "@rgs/api/src/lib/context";
-import type { TableClient, TableItem } from "@rgs/api/src/lib/db";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  buildSqlTestContext,
+  closeSqlTestContexts,
+  contextRefusingWrites,
+  interceptSql,
+  type SqlTestContext,
+} from "@rgs/api/test/helpers";
 import { listCasesByStatus } from "@rgs/api/src/domain/crm/cases";
 import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
-import { withWriteRetries } from "@rgs/api/src/lib/tableRetry";
 import type { RawMiniCrmRow, WorkbookExtract } from "../src/readWorkbook";
 import {
   COMMIT_BANNER,
@@ -74,7 +77,9 @@ function buildDependencies(
 ): { dependencies: ImportCliDependencies; output: RecordedCliOutput } {
   const output: RecordedCliOutput = { lines: [], errors: [], summaries: [] };
   const dependencies: ImportCliDependencies = {
-    buildContext: () => buildTestContext(),
+    buildContext: () => {
+      throw new Error("this test supplied no context");
+    },
     readWorkbookAt: async () => buildWorkbookExtract(1),
     logLine: (message) => output.lines.push(message),
     logError: (message) => output.errors.push(message),
@@ -84,112 +89,30 @@ function buildDependencies(
   return { dependencies, output };
 }
 
-/**
- * A table that fails the test the moment anything writes through it, rather
- * than merely recording that something did. A dry run that writes has already
- * done the damage by the time an assertion at the end of the test could see
- * it; this stops at the write.
- */
-function tableThatMustNotBeWrittenTo(table: TableClient): TableClient {
-  return {
-    get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
-    query: (partitionKey, options) => table.query(partitionKey, options),
-    queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
-    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
-    put: (item: TableItem) => {
-      throw new Error(`a dry run wrote to the table: put ${item.PK} / ${item.SK}`);
-    },
-    putIfAbsent: (item: TableItem) => {
-      throw new Error(`a dry run wrote to the table: putIfAbsent ${item.PK} / ${item.SK}`);
-    },
-    delete: (partitionKey: string, sortKey: string) => {
-      throw new Error(`a dry run wrote to the table: delete ${partitionKey} / ${sortKey}`);
-    },
-  };
-}
+/** Statements that change data (same shape the API test helpers treat as a write). */
+const WRITE_STATEMENT = /\b(?:insert\s+into|delete\s+from|update\s+[a-z_]+\s+set|truncate)\b/i;
 
-/** Lets the first `allowedWriteCount` writes through, then times out. */
-function tableFailingAfterWrites(table: TableClient, allowedWriteCount: number): TableClient {
+/**
+ * Lets the first `allowedWriteCount` write statements through, then fails every
+ * write after it, the way a dropped connection or timeout would. Reads still
+ * work. Returns a function that restores the healthy client.
+ */
+function failWritesAfter(context: SqlTestContext, allowedWriteCount: number): () => void {
+  const healthyClient = context.sql;
   let writesSoFar = 0;
-  return {
-    get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
-    query: (partitionKey, options) => table.query(partitionKey, options),
-    queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
-    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
-    put: async (item: TableItem) => {
+  interceptSql(context, async ({ text }, run) => {
+    if (WRITE_STATEMENT.test(text)) {
       writesSoFar += 1;
       if (writesSoFar > allowedWriteCount) throw new Error("simulated write timeout");
-      await table.put(item);
-    },
-    putIfAbsent: (item: TableItem) => table.putIfAbsent(item),
-    delete: (partitionKey: string, sortKey: string) => table.delete(partitionKey, sortKey),
-  };
-}
-
-function withTable(context: AppContext, table: TableClient): AppContext {
-  return { ...context, table };
-}
-
-/** What DynamoDB throws when a burst outruns the table's capacity. */
-function buildThrottlingError(): Error {
-  const throttlingError = new Error("Throughput exceeds the current capacity of your table");
-  throttlingError.name = "ProvisionedThroughputExceededException";
-  return throttlingError;
-}
-
-/**
- * Lets `allowedWriteCount` writes through, then throttles every write after
- * it. `allowedWriteCount: 0` is "throttled from the first byte".
- */
-function tableThrottlingAfterWrites(table: TableClient, allowedWriteCount: number): TableClient {
-  let writesSoFar = 0;
-  return {
-    get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
-    query: (partitionKey, options) => table.query(partitionKey, options),
-    queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
-    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
-    put: async (item: TableItem) => {
-      writesSoFar += 1;
-      if (writesSoFar > allowedWriteCount) throw buildThrottlingError();
-      await table.put(item);
-    },
-    putIfAbsent: (item: TableItem) => table.putIfAbsent(item),
-    delete: (partitionKey: string, sortKey: string) => table.delete(partitionKey, sortKey),
-  };
-}
-
-/** Throttles the first `failureCount` write ATTEMPTS, then behaves. */
-function tableThrottlingFirstWrites(
-  table: TableClient,
-  failureCount: number,
-  attemptLog: { putAttempts: number },
-): TableClient {
-  return {
-    get: (partitionKey, sortKey, options) => table.get(partitionKey, sortKey, options),
-    query: (partitionKey, options) => table.query(partitionKey, options),
-    queryGsi: (indexName, partitionKey, options) => table.queryGsi(indexName, partitionKey, options),
-    queryGsiPage: (indexName, partitionKey, options) => table.queryGsiPage(indexName, partitionKey, options),
-    put: async (item: TableItem) => {
-      attemptLog.putAttempts += 1;
-      if (attemptLog.putAttempts <= failureCount) throw buildThrottlingError();
-      await table.put(item);
-    },
-    putIfAbsent: (item: TableItem) => table.putIfAbsent(item),
-    delete: (partitionKey: string, sortKey: string) => table.delete(partitionKey, sortKey),
-  };
-}
-
-/** The production wrapper, with the sleep injected so tests do not wait. */
-function withInstantWriteRetries(table: TableClient, maxAttempts: number): TableClient {
-  return withWriteRetries(table, {
-    maxAttempts,
-    initialDelayMs: 1,
-    maxDelayMs: 4,
-    sleep: async () => undefined,
-    random: () => 1,
-    onRetry: () => undefined,
+    }
+    return run();
   });
+  return () => {
+    context.sql = healthyClient;
+  };
 }
+
+afterEach(closeSqlTestContexts);
 
 describe("runImportCli", () => {
   it("refuses to run without --workbook, printing the usage line and a non-zero exit code", async () => {
@@ -222,8 +145,8 @@ describe("runImportCli", () => {
   });
 
   it("writes nothing without --commit, and says so before it starts", async () => {
-    const context = buildTestContext();
-    const readOnlyContext = withTable(context, tableThatMustNotBeWrittenTo(context.table));
+    const context = await buildSqlTestContext();
+    const readOnlyContext = contextRefusingWrites(context, "importCli dry run");
     const { dependencies, output } = buildDependencies({
       buildContext: () => readOnlyContext,
       readWorkbookAt: async () => buildWorkbookExtract(3),
@@ -231,7 +154,7 @@ describe("runImportCli", () => {
 
     const cliResult = await runImportCli(["--workbook", "book.xlsx"], dependencies);
 
-    // If the dry run had written anything the injected table would have thrown
+    // If the dry run had written anything the injected client would have thrown
     // at that write, and this would be exit code 1 with an abort message.
     expect(cliResult.exitCode).toBe(0);
     expect(output.errors).toHaveLength(0);
@@ -242,7 +165,7 @@ describe("runImportCli", () => {
   });
 
   it("writes with --commit, and the cases are really there afterwards", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { dependencies, output } = buildDependencies({
       buildContext: () => context,
       readWorkbookAt: async () => buildWorkbookExtract(3),
@@ -258,7 +181,9 @@ describe("runImportCli", () => {
   });
 
   it("prints createdCaseIds as a count, never the array itself", async () => {
+    const context = await buildSqlTestContext();
     const { dependencies, output } = buildDependencies({
+      buildContext: () => context,
       readWorkbookAt: async () => buildWorkbookExtract(4),
     });
 
@@ -304,7 +229,9 @@ describe("runImportCli", () => {
   });
 
   it("does not claim cases were written when the workbook itself could not be read", async () => {
+    const context = await buildSqlTestContext();
     const { dependencies, output } = buildDependencies({
+      buildContext: () => context,
       readWorkbookAt: async () => {
         throw new Error("ENOENT: no such file or directory, open 'typo.xlsx'");
       },
@@ -318,12 +245,13 @@ describe("runImportCli", () => {
   });
 
   it("DOES claim cases were written when the run died after writing some", async () => {
-    const context = buildTestContext();
-    // Ten rows, and the table stops accepting writes a few writes in -- the
-    // real shape of a throttled or timed-out --commit at row N.
-    const failingContext = withTable(context, tableFailingAfterWrites(context.table, 5));
+    const context = await buildSqlTestContext();
+    // Ten rows, and the database stops accepting writes a few writes in -- the
+    // real shape of a timed-out --commit at row N.
+    const healthyClient = context.sql;
+    failWritesAfter(context, 5);
     const { dependencies, output } = buildDependencies({
-      buildContext: () => failingContext,
+      buildContext: () => context,
       readWorkbookAt: async () => buildWorkbookExtract(10),
     });
 
@@ -336,24 +264,21 @@ describe("runImportCli", () => {
     expect(output.errors).toContain(PARTIAL_WRITE_ABORT_MESSAGE);
     expect(output.errors).not.toContain(NO_WRITES_ABORT_MESSAGE);
     // Something really did land.
-    const storedItems = await context.table.query("TENANT#rgs#CASE_REF#40000");
-    expect(storedItems.length).toBeGreaterThan(0);
+    const stored = await healthyClient.query("SELECT count(*)::int AS total FROM crm_case_ref_reservations");
+    expect(Number(stored.rows[0]?.["total"])).toBeGreaterThan(0);
   });
 
   it("DOES claim a case may have been written when the very first put times out", async () => {
-    const context = buildTestContext();
-    // allowedWriteCount 0: the FIRST put throws, before any write has ever
+    const context = await buildSqlTestContext();
+    // allowedWriteCount 0: the FIRST write throws, before any write has ever
     // succeeded. The existing "died after writing some" test above lets five
     // writes land first, so `anyWriteAttempted` is already true no matter
     // which side of the call the flag is set on -- it cannot tell "before"
     // from "after" apart. This one can: only "before" observes a write that
     // never got a chance to complete.
-    const failingFromTheFirstWriteContext = withTable(
-      context,
-      tableFailingAfterWrites(context.table, 0),
-    );
+    failWritesAfter(context, 0);
     const { dependencies, output } = buildDependencies({
-      buildContext: () => failingFromTheFirstWriteContext,
+      buildContext: () => context,
       readWorkbookAt: async () => buildWorkbookExtract(1),
     });
 
@@ -368,7 +293,9 @@ describe("runImportCli", () => {
   });
 
   it("says nothing was written when a DRY run fails, whatever the cause", async () => {
+    const context = await buildSqlTestContext();
     const { dependencies, output } = buildDependencies({
+      buildContext: () => context,
       readWorkbookAt: async () => {
         throw new Error("ENOENT: no such file or directory, open 'typo.xlsx'");
       },
@@ -380,106 +307,43 @@ describe("runImportCli", () => {
     expect(output.errors).toContain(DRY_RUN_ABORT_MESSAGE);
   });
 
-  // --- N11: throttling, backoff, and what an exhausted cap leaves behind ---
-
-  it("finishes the import when the table throttles a few writes and then recovers", async () => {
-    const context = buildTestContext();
-    const attemptLog = { putAttempts: 0 };
-    const throttledContext = withTable(
-      context,
-      withInstantWriteRetries(tableThrottlingFirstWrites(context.table, 4, attemptLog), 5),
-    );
+  it("re-running after an aborted --commit finishes the import without duplicating a ref", async () => {
+    const context = await buildSqlTestContext();
+    const restoreHealthyClient = failWritesAfter(context, 12);
     const { dependencies } = buildDependencies({
-      buildContext: () => throttledContext,
-      readWorkbookAt: async () => buildWorkbookExtract(3),
-    });
-
-    const cliResult = await runImportCli(["--workbook", "book.xlsx", "--commit"], dependencies);
-
-    // Unhandled, those four throttles would have aborted a 7,156-row import at
-    // whichever row was in flight -- on a transient condition a short sleep
-    // absorbs.
-    expect(cliResult.exitCode).toBe(0);
-    expect(cliResult.summary?.casesCreated).toBe(3);
-    expect(attemptLog.putAttempts).toBeGreaterThan(4);
-    const storedCases = await listCasesByStatus(context, "rgs", "CLOSED", 100);
-    expect(storedCases.cases).toHaveLength(3);
-  });
-
-  it("gives up when throttling never lets up, and the next run repairs what it left", async () => {
-    const context = buildTestContext();
-    // Ten rows; the table accepts a handful of writes and then throttles
-    // permanently, so the retries exhaust their cap mid-import.
-    const throttledContext = withTable(
-      context,
-      withInstantWriteRetries(tableThrottlingAfterWrites(context.table, 12), 3),
-    );
-    const { dependencies, output } = buildDependencies({
-      buildContext: () => throttledContext,
+      buildContext: () => context,
       readWorkbookAt: async () => buildWorkbookExtract(10),
     });
 
     const abortedResult = await runImportCli(["--workbook", "book.xlsx", "--commit"], dependencies);
-
     expect(abortedResult.exitCode).not.toBe(0);
-    // Accurate, per NEW-4: writes really did happen this time.
-    expect(output.errors).toContain(PARTIAL_WRITE_ABORT_MESSAGE);
-    // And the operator can see WHY, which is the difference between "raise the
-    // table's capacity" and "no idea".
-    expect(output.errors.join("\n")).toMatch(/ProvisionedThroughputExceededException/);
 
-    // The state it left is one the next run repairs -- which is precisely what
-    // the abort message promises. No checkpoint file, no --resume flag: the
-    // caseRef reservations already are the checkpoint, so resuming is running
-    // the same command again.
-    const { dependencies: healthyDependencies } = buildDependencies({
-      buildContext: () => context,
-      readWorkbookAt: async () => buildWorkbookExtract(10),
-    });
-    const resumedResult = await runImportCli(
-      ["--workbook", "book.xlsx", "--commit"],
-      healthyDependencies,
-    );
-
+    // No checkpoint file, no --resume flag: the caseRef reservations already
+    // are the checkpoint, so resuming is running the same command again.
+    restoreHealthyClient();
+    const resumedResult = await runImportCli(["--workbook", "book.xlsx", "--commit"], dependencies);
     expect(resumedResult.exitCode).toBe(0);
 
     const storedCases = await listCasesByStatus(context, "rgs", "CLOSED", 100);
-    // Nine of the ten come back whole, one case per ref: a resumed run
-    // repairs or skips, and never duplicates.
-    expect(storedCases.cases).toHaveLength(9);
-    expect(new Set(storedCases.cases.map((storedCase) => storedCase.caseRef)).size).toBe(9);
-
-    // The tenth is the case the throttle interrupted mid-write, and the
-    // resumed run deliberately does NOT re-create it: C1's ruling is that a
-    // second case under one REF NO. is worse than a missing one, so a
-    // half-written case is NAMED for a human rather than silently replaced.
-    // "The next run repairs it" is therefore exact about the two states the
-    // reservation distinguishes -- completed refs are skipped, reserved-but-
-    // never-written refs are re-written under their original caseId -- and
-    // deliberately not about this third one, which is a refusal, not a gap.
-    expect(storedCases.unreadableCaseIds).toHaveLength(1);
-    expect(resumedResult.summary?.casesSkippedUnreadable).toBe(1);
-    const openQueue = await listReviewItems(context, "rgs", "OPEN", 1_000);
-    const namedForRepair = openQueue.reviewItems.filter(
-      (reviewItem) => reviewItem.reason === "UNREADABLE_STORED_CASE",
-    );
-    expect(namedForRepair).toHaveLength(1);
-    expect(namedForRepair[0]!.detail).toMatch(/NOT imported/);
-
-    // Every row is accounted for exactly once, in one of the three buckets.
+    const refs = storedCases.cases.map((storedCase) => storedCase.caseRef);
+    expect(new Set(refs).size).toBe(refs.length);
     const resumedSummary = resumedResult.summary!;
+    // Every row is accounted for exactly once, in one of the three buckets.
     expect(
       resumedSummary.casesCreated +
         resumedSummary.casesSkippedAlreadyImported +
         resumedSummary.casesSkippedUnreadable,
     ).toBe(10);
-    // And the checkpoint really was consulted: some refs were skipped because
-    // a completed reservation said they were already done.
     expect(resumedSummary.casesSkippedAlreadyImported).toBeGreaterThan(0);
+    expect(storedCases.cases.length + storedCases.unreadableCaseIds.length).toBe(10);
+    const openQueue = await listReviewItems(context, "rgs", "OPEN", 1_000);
+    expect(
+      openQueue.reviewItems.filter((reviewItem) => reviewItem.reason === "UNREADABLE_STORED_CASE"),
+    ).toHaveLength(storedCases.unreadableCaseIds.length);
   });
 
   it("passes --tenant and --actor through instead of hard-coding them", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const { dependencies } = buildDependencies({
       buildContext: () => context,
       readWorkbookAt: async () => buildWorkbookExtract(1),
