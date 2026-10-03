@@ -40,7 +40,11 @@ export class RgsPlatformStack extends cdk.Stack {
     const removalPolicy = isProduction ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
 
     // ---------- Data ----------
-    const ownPlatformTable = stage !== "staging";
+    // Staging and prod product SoR is Postgres. CDK must not own those
+    // tables or CloudFormation would delete them on the next deploy unless
+    // DeletionPolicy is already Retain (prod) / was Retain then orphaned
+    // (staging). Test stacks still get an ephemeral table.
+    const ownPlatformTable = stage !== "staging" && stage !== "prod";
     let platformTable: dynamodb.Table | undefined;
     if (ownPlatformTable) {
       platformTable = new dynamodb.Table(this, "PlatformTable", {

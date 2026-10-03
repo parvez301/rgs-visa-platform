@@ -280,14 +280,13 @@ describe("admin RBAC infrastructure", () => {
     assert.equal(env["rgs-appointment-reminders-staging"]?.["TABLE_NAME"], undefined);
   });
 
-  it("still owns a platform Dynamo table on prod", () => {
+  it("does not own a platform Dynamo table on prod", () => {
     const resources = synthesizedResourcesForStage("prod");
-    const tables = dynamoTables(resources);
-    assert.equal(tables.length, 1);
-    assert.equal(tables[0]?.DeletionPolicy, "Retain");
+    assert.equal(dynamoTables(resources).length, 0);
     const env = lambdaEnvByName(resources);
-    assert.equal(env["rgs-admin-api-prod"]?.["TABLE_NAME"], "rgs-platform-prod");
-    assert.equal(env["rgs-user-api-prod"]?.["TABLE_NAME"], "rgs-platform-prod");
+    assert.equal(env["rgs-admin-api-prod"]?.["TABLE_NAME"], undefined);
+    assert.equal(env["rgs-user-api-prod"]?.["TABLE_NAME"], undefined);
+    assert.equal(env["rgs-appointment-reminders-prod"]?.["TABLE_NAME"], undefined);
   });
 
   it("still destroys the non-prod test platform table by default", () => {
