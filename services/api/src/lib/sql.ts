@@ -26,22 +26,22 @@ export interface SqlClient extends SqlQueryable {
   end(): Promise<void>;
 }
 
-export type LedgerStore = "dynamo" | "postgres";
+export type LedgerStore = "postgres";
 
 export function ledgerStoreFromEnvironment(environment: NodeJS.ProcessEnv): LedgerStore {
   const rawStore = environment["LEDGER_STORE"]?.trim();
-  if (rawStore === undefined || rawStore === "") return "dynamo";
-  if (rawStore === "dynamo" || rawStore === "postgres") return rawStore;
-  throw new Error(`LEDGER_STORE must be dynamo or postgres, got ${rawStore}`);
+  if (rawStore === undefined || rawStore === "") return "postgres";
+  if (rawStore === "postgres") return "postgres";
+  throw new Error(`LEDGER_STORE must be postgres, got ${rawStore}`);
 }
 
-export type CrmStore = "dynamo" | "postgres";
+export type CrmStore = "postgres";
 
 export function crmStoreFromEnvironment(environment: NodeJS.ProcessEnv): CrmStore {
   const rawStore = environment["CRM_STORE"]?.trim();
-  if (rawStore === undefined || rawStore === "") return "dynamo";
-  if (rawStore === "dynamo" || rawStore === "postgres") return rawStore;
-  throw new Error(`CRM_STORE must be dynamo or postgres, got ${rawStore}`);
+  if (rawStore === undefined || rawStore === "") return "postgres";
+  if (rawStore === "postgres") return "postgres";
+  throw new Error(`CRM_STORE must be postgres, got ${rawStore}`);
 }
 
 export function databaseUrlFromEnvironment(

@@ -2,9 +2,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda
 import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import type { AppContext } from "../lib/context";
 import { AwsCognitoAdmins } from "../lib/cognitoAdmins";
-import { DynamoTableClient } from "../lib/db";
-import { unavailableTableClient } from "../lib/unavailableTableClient";
-import { withWriteRetries, writeRetryOptionsFromEnvironment } from "../lib/tableRetry";
+import type { TableClient } from "../lib/db";
 import { S3DocumentStore } from "../lib/documentStore";
 import { BestEffortEmailSender, SesEmailSender } from "../lib/email";
 import { llmProviderConfigFromEnvironment } from "../agent/providers/config";
@@ -58,67 +56,45 @@ function tryBuildLlmProvider(): LlmProvider | undefined {
   }
 }
 
-function dynamoTableRequired(environment: NodeJS.ProcessEnv): boolean {
-  const crmStore = crmStoreFromEnvironment(environment);
-  if (crmStore === "dynamo") return true;
-  const ledgerRaw = environment["LEDGER_STORE"]?.trim();
-  return ledgerRaw === "dynamo";
+function removedDynamoTableClient(): TableClient {
+  const reject = (): Promise<never> =>
+    Promise.reject(new Error("DynamoDB client removed"));
+  return {
+    get: () => reject(),
+    put: () => reject(),
+    putIfAbsent: () => reject(),
+    delete: () => reject(),
+    query: () => reject(),
+    queryGsi: () => reject(),
+    queryGsiPage: () => reject(),
+  };
 }
 
 /**
  * Exported so `services/migration/src/cli.ts` can reuse the exact same
  * production wiring rather than assembling a second `AppContext` builder by
- * hand. The migration CLI points at the same real DynamoDB table this
- * Lambda does, so it must be configured (and fail closed) the same way.
- * When CRM_STORE=postgres and LEDGER_STORE is not dynamo, TABLE_NAME may be
- * unset; CLIs that still read Dynamo must set TABLE_NAME themselves or they
- * fail at the first table call.
+ * hand.
  */
 export function buildProductionContext(): AppContext {
-  const documentsBucket = process.env["DOCUMENTS_BUCKET"];
-  const senderAddress = process.env["EMAIL_SENDER"];
-  const adminNotificationAddress = process.env["ADMIN_NOTIFICATION_EMAIL"];
   const ledgerStore = ledgerStoreFromEnvironment(process.env);
   const crmStore = crmStoreFromEnvironment(process.env);
   const databaseUrl = databaseUrlFromEnvironment(process.env);
-  if (ledgerStore === "postgres" && databaseUrl === undefined) {
-    throw new Error(
-      "LEDGER_STORE is postgres but DATABASE_URL is not configured",
-    );
+  if (databaseUrl === undefined) {
+    throw new Error("DATABASE_URL is not configured");
   }
-  if (crmStore === "postgres" && databaseUrl === undefined) {
-    throw new Error(
-      "CRM_STORE is postgres but DATABASE_URL is not configured",
-    );
-  }
-  const tableName = process.env["TABLE_NAME"];
-  const needsDynamoTable = dynamoTableRequired(process.env);
-  if (needsDynamoTable && !tableName) {
-    throw new Error(
-      "Missing required environment: TABLE_NAME, DOCUMENTS_BUCKET, EMAIL_SENDER, ADMIN_NOTIFICATION_EMAIL",
-    );
-  }
+  const documentsBucket = process.env["DOCUMENTS_BUCKET"];
+  const senderAddress = process.env["EMAIL_SENDER"];
+  const adminNotificationAddress = process.env["ADMIN_NOTIFICATION_EMAIL"];
   if (!documentsBucket || !senderAddress || !adminNotificationAddress) {
     throw new Error(
-      "Missing required environment: TABLE_NAME, DOCUMENTS_BUCKET, EMAIL_SENDER, ADMIN_NOTIFICATION_EMAIL",
+      "Missing required environment: DOCUMENTS_BUCKET, EMAIL_SENDER, ADMIN_NOTIFICATION_EMAIL",
     );
   }
   const llmProvider = tryBuildLlmProvider();
   const adminsUserPoolId = process.env["ADMINS_USER_POOL_ID"];
-  const sqlClient = databaseUrl !== undefined ? createPgSqlClient(databaseUrl) : undefined;
-  const table =
-    tableName !== undefined && tableName !== ""
-      ? withWriteRetries(
-          new DynamoTableClient(tableName),
-          writeRetryOptionsFromEnvironment(process.env),
-        )
-      : unavailableTableClient();
+  const sqlClient = createPgSqlClient(databaseUrl);
   return {
-    // N11: every write in the process goes through the retry seam, including
-    // the migration's -- `cli.ts` builds its context from this same function,
-    // which is why the wrapping belongs here and not at a call site. Reads are
-    // not wrapped; see `tableRetry.ts` for why.
-    table,
+    table: removedDynamoTableClient(),
     documents: new S3DocumentStore(documentsBucket),
     email: new BestEffortEmailSender(
       SesEmailSender.fromOptions({
@@ -140,7 +116,7 @@ export function buildProductionContext(): AppContext {
           ),
         }
       : {}),
-    ...(sqlClient !== undefined ? { sql: sqlClient } : {}),
+    sql: sqlClient,
     ledgerStore,
     crmStore,
   };

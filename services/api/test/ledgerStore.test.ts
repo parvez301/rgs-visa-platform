@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import { ledgerStoreFromEnvironment } from "../src/lib/sql";
 
 describe("ledgerStoreFromEnvironment", () => {
-  it("defaults to dynamo", () => {
-    expect(ledgerStoreFromEnvironment({})).toBe("dynamo");
+  it("defaults to postgres", () => {
+    expect(ledgerStoreFromEnvironment({})).toBe("postgres");
+  });
+  it("rejects dynamo", () => {
+    expect(() => ledgerStoreFromEnvironment({ LEDGER_STORE: "dynamo" })).toThrow(
+      /LEDGER_STORE must be postgres/,
+    );
   });
   it("accepts postgres", () => {
     expect(ledgerStoreFromEnvironment({ LEDGER_STORE: "postgres" })).toBe("postgres");
