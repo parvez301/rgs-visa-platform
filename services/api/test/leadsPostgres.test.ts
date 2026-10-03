@@ -64,10 +64,10 @@ describe("leads", () => {
     const { sql: _removed, ...withoutSql }: AppContext = context;
     void _removed;
     await expect(createLead(withoutSql, LEAD_INPUT)).rejects.toThrow(
-      "CRM_STORE=postgres requires context.sql",
+      "AppContext.sql is required",
     );
     await expect(listNewLeads(withoutSql)).rejects.toThrow(
-      "CRM_STORE=postgres requires context.sql",
+      "AppContext.sql is required",
     );
   });
 });

@@ -6,7 +6,7 @@ import type { DocumentStore } from "./documentStore";
 import type { EmailSender } from "./email";
 import type { CrmStore, LedgerStore, SqlClient } from "./sql";
 import { newId } from "./ids";
-import { crmPostgresOf } from "../domain/crm/postgresClient";
+import { requireSql } from "../domain/crm/postgresClient";
 import { insertActivityEventPostgres } from "../domain/activityPostgres";
 
 /** Everything a domain function needs, injected once at handler startup. */
@@ -42,7 +42,6 @@ export async function logActivity(
 ): Promise<ActivityEvent> {
   const createdAtDate = context.now();
   const createdAt = createdAtDate.toISOString();
-  const dayBucket = createdAt.slice(0, 10);
   const eventId = newId("evt", createdAtDate.getTime());
   const activityEvent: ActivityEvent = {
     eventId,
@@ -54,17 +53,6 @@ export async function logActivity(
     ...(actor?.actorEmail !== undefined ? { actorEmail: actor.actorEmail } : {}),
     ...(actor?.actorRole !== undefined ? { actorRole: actor.actorRole } : {}),
   };
-  const sql = crmPostgresOf(context);
-  if (sql) {
-    await insertActivityEventPostgres(sql, activityEvent);
-    return activityEvent;
-  }
-  await context.table.put({
-    PK: `EVENT#${dayBucket}`,
-    SK: `${createdAt}#${eventId}`,
-    GSI2PK: `USER#${userId}`,
-    GSI2SK: createdAt,
-    ...activityEvent,
-  });
+  await insertActivityEventPostgres(requireSql(context), activityEvent);
   return activityEvent;
 }

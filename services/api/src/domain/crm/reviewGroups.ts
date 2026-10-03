@@ -7,9 +7,8 @@ import { describeFirstZodIssue } from "../../lib/storedRecords";
 import { readCaseRefReservation } from "./caseRefIndex";
 import { readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
-import { reviewQueueGsi1Pk } from "./keys";
 import { getPartnerOrThrow } from "./partners";
-import { crmPostgresOf } from "./postgresClient";
+import { requireSql } from "./postgresClient";
 import { resolveReviewItem } from "./reviewQueue";
 import { listOpenReviewGroupRowsPostgres } from "./reviewQueuePostgres";
 
@@ -23,17 +22,6 @@ import { listOpenReviewGroupRowsPostgres } from "./reviewQueuePostgres";
  * because "GALAXY" and "Galaxy Travels" may well be two partners, and the
  * reviewer, not this code, says which.
  */
-
-const REVIEW_GROUP_PROJECTION: readonly string[] = [
-  "PK",
-  "SK",
-  "reviewItemId",
-  "caseRef",
-  "reason",
-  "fieldName",
-  "rawValue",
-  "proposedValue",
-];
 
 const ReviewGroupRowSchema = crm.ReviewItemSchema.pick({
   reviewItemId: true,
@@ -70,21 +58,13 @@ async function sweepOpenReviewRows(
   context: AppContext,
   tenantId: string,
 ): Promise<{ rows: ReviewGroupRow[]; unreadableReviewItemIds: string[] }> {
-  const sql = crmPostgresOf(context);
-  // Both stores feed the same loop: the candidate the schema checks and the id
-  // to name the row by when it fails.
-  const sweptRows: Array<{ candidate: Record<string, unknown>; fallbackId: string }> =
-    sql !== undefined
-      ? (await listOpenReviewGroupRowsPostgres(sql, tenantId)).map((postgresRow) => ({
-          candidate: postgresRow.candidate,
-          fallbackId: postgresRow.reviewItemId,
-        }))
-      : (
-          await context.table.queryGsi("GSI1", reviewQueueGsi1Pk(tenantId, "OPEN"), {
-            scanForward: true,
-            projection: REVIEW_GROUP_PROJECTION,
-          })
-        ).map((storedItem) => ({ candidate: storedItem, fallbackId: storedItem.PK }));
+  // The candidate the schema checks and the id to name the row by when it fails.
+  const sweptRows: Array<{ candidate: Record<string, unknown>; fallbackId: string }> = (
+    await listOpenReviewGroupRowsPostgres(requireSql(context), tenantId)
+  ).map((postgresRow) => ({
+    candidate: postgresRow.candidate,
+    fallbackId: postgresRow.reviewItemId,
+  }));
   const rows: ReviewGroupRow[] = [];
   const unreadableReviewItemIds: string[] = [];
   for (const { candidate, fallbackId } of sweptRows) {

@@ -3,18 +3,8 @@ import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
-import {
-  parseStoredRecord,
-  storedRecordId,
-  stripStorageKeys,
-} from "../../lib/storedRecords";
-import {
-  META_SORT_KEY,
-  passportGsi3Pk,
-  travellerNameGsi2Pk,
-  travellerPartitionKey,
-} from "./keys";
-import { crmPostgresOf } from "./postgresClient";
+import { parseStoredRecord, storedRecordId, stripStorageKeys } from "../../lib/storedRecords";
+import { requireSql } from "./postgresClient";
 import {
   findTravellerByNamePostgres,
   findTravellerByPassportPostgres,
@@ -76,34 +66,16 @@ export async function upsertTraveller(
     throw error;
   }
 
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    const wasInserted = await insertTravellerPostgres(sql, traveller);
-    if (wasInserted) return traveller;
-    // The passport unique index refused us: another request registered the
-    // same passport between our lookup and our insert. Return its traveller --
-    // recognising a repeat traveller is the whole point of the upsert.
-    const winner = traveller.passportNumber === undefined
-      ? undefined
-      : await findTravellerByPassport(context, tenantId, traveller.passportNumber);
-    if (winner === undefined) throw conflict("Traveller could not be created; please retry.");
-    return winner;
-  }
-
-  await context.table.put({
-    PK: travellerPartitionKey(tenantId, traveller.travellerId),
-    SK: META_SORT_KEY,
-    GSI2PK: travellerNameGsi2Pk(tenantId, traveller.normalizedName),
-    GSI2SK: traveller.travellerId,
-    ...(traveller.passportNumber !== undefined
-      ? {
-          GSI3PK: passportGsi3Pk(tenantId, traveller.passportNumber),
-          GSI3SK: traveller.travellerId,
-        }
-      : {}),
-    ...traveller,
-  });
-  return traveller;
+  const wasInserted = await insertTravellerPostgres(requireSql(context), traveller);
+  if (wasInserted) return traveller;
+  // The passport unique index refused us: another request registered the
+  // same passport between our lookup and our insert. Return its traveller --
+  // recognising a repeat traveller is the whole point of the upsert.
+  const winner = traveller.passportNumber === undefined
+    ? undefined
+    : await findTravellerByPassport(context, tenantId, traveller.passportNumber);
+  if (winner === undefined) throw conflict("Traveller could not be created; please retry.");
+  return winner;
 }
 
 export async function findTravellerByPassport(
@@ -111,24 +83,14 @@ export async function findTravellerByPassport(
   tenantId: string,
   passportNumber: string,
 ): Promise<crm.CrmTraveller | undefined> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    const stored = await findTravellerByPassportPostgres(sql, tenantId, passportNumber);
-    return stored ? parseStoredTraveller(stored) : undefined;
-  }
-  const matches = await context.table.queryGsi(
-    "GSI3",
-    passportGsi3Pk(tenantId, passportNumber),
-    { limit: 1 },
-  );
-  const firstMatch = matches[0];
-  return firstMatch ? parseStoredTraveller(firstMatch) : undefined;
+  const stored = await findTravellerByPassportPostgres(requireSql(context), tenantId, passportNumber);
+  return stored ? parseStoredTraveller(stored) : undefined;
 }
 
 /**
  * Fuzzy fallback for the 74% of rows that carry no passport number (spec §5):
- * matches on the normalized full name via GSI2, mirroring how
- * findTravellerByPassport matches on GSI3. Not unique — two different people
+ * matches on the normalized full name, mirroring how
+ * findTravellerByPassport matches on the passport. Not unique — two different people
  * can share a normalized name — so this returns the earliest match, same as
  * the passport lookup.
  */
@@ -137,18 +99,12 @@ export async function findTravellerByName(
   tenantId: string,
   fullName: string,
 ): Promise<crm.CrmTraveller | undefined> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    const stored = await findTravellerByNamePostgres(sql, tenantId, normalizeTravellerName(fullName));
-    return stored ? parseStoredTraveller(stored) : undefined;
-  }
-  const matches = await context.table.queryGsi(
-    "GSI2",
-    travellerNameGsi2Pk(tenantId, normalizeTravellerName(fullName)),
-    { limit: 1 },
+  const stored = await findTravellerByNamePostgres(
+    requireSql(context),
+    tenantId,
+    normalizeTravellerName(fullName),
   );
-  const firstMatch = matches[0];
-  return firstMatch ? parseStoredTraveller(firstMatch) : undefined;
+  return stored ? parseStoredTraveller(stored) : undefined;
 }
 
 export async function getTravellerOrThrow(
@@ -156,18 +112,9 @@ export async function getTravellerOrThrow(
   tenantId: string,
   travellerId: string,
 ): Promise<crm.CrmTraveller> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    const stored = await getTravellerPostgres(sql, tenantId, travellerId);
-    if (!stored) throw notFound("Traveller");
-    return parseStoredTraveller(stored);
-  }
-  const travellerItem = await context.table.get(
-    travellerPartitionKey(tenantId, travellerId),
-    META_SORT_KEY,
-  );
-  if (!travellerItem) throw notFound("Traveller");
-  return parseStoredTraveller(travellerItem);
+  const stored = await getTravellerPostgres(requireSql(context), tenantId, travellerId);
+  if (!stored) throw notFound("Traveller");
+  return parseStoredTraveller(stored);
 }
 
 export interface UpdateTravellerDetailsInput {
@@ -195,8 +142,7 @@ export async function assertPassportFreeForTraveller(
 
 /**
  * A traveller is one person across every case, so a corrected name shows on
- * all of them -- the edit drawer says so. The name and passport indexes
- * (GSI2, GSI3) are rewritten with the item, and a passport already on file
+ * all of them -- the edit drawer says so. A passport already on file
  * for SOMEONE ELSE is refused: silently re-pointing it would merge two people.
  */
 export async function updateTravellerDetails(
@@ -228,39 +174,24 @@ export async function updateTravellerDetails(
     }
     throw error;
   }
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    try {
-      await updateTravellerDetailsPostgres(sql, updatedTraveller);
-    } catch (error) {
-      if (!isUniqueViolation(error) || updatedTraveller.passportNumber === undefined) throw error;
-      // Lost a race with another writer of the same passport (the pre-check
-      // above passed). Report it the way the pre-check would have.
-      await assertPassportFreeForTraveller(context, tenantId, travellerId, updatedTraveller.passportNumber);
-      throw conflict(`Passport ${updatedTraveller.passportNumber} is already on file for another traveller.`);
-    }
-    return updatedTraveller;
+  try {
+    await updateTravellerDetailsPostgres(requireSql(context), updatedTraveller);
+  } catch (error) {
+    if (!isUniqueViolation(error) || updatedTraveller.passportNumber === undefined) throw error;
+    // Lost a race with another writer of the same passport (the pre-check
+    // above passed). Report it the way the pre-check would have.
+    await assertPassportFreeForTraveller(context, tenantId, travellerId, updatedTraveller.passportNumber);
+    throw conflict(`Passport ${updatedTraveller.passportNumber} is already on file for another traveller.`);
   }
-  await context.table.put({
-    PK: travellerPartitionKey(tenantId, travellerId),
-    SK: META_SORT_KEY,
-    GSI2PK: travellerNameGsi2Pk(tenantId, updatedTraveller.normalizedName),
-    GSI2SK: travellerId,
-    ...(updatedTraveller.passportNumber !== undefined
-      ? { GSI3PK: passportGsi3Pk(tenantId, updatedTraveller.passportNumber), GSI3SK: travellerId }
-      : {}),
-    ...updatedTraveller,
-  });
   return updatedTraveller;
 }
 
 /**
- * The single place a stored traveller item becomes a domain CrmTraveller.
+ * The single place a stored traveller row becomes a domain CrmTraveller.
  *
  * Raw, a ZodError is not an ApiError and router.ts maps only ApiError
  * subclasses — so a half-written traveller row escaped every read here as a
- * 500. Typed as CorruptRecordError it answers 409, exactly as readCase already
- * does for a case partition that will not reassemble.
+ * 500. Typed as CorruptRecordError it answers 409.
  */
 function parseStoredTraveller(travellerItem: Record<string, unknown>): crm.CrmTraveller {
   return parseStoredRecord(

@@ -1,49 +1,21 @@
-import {
-  NoticeInputSchema,
-  NoticeSchema,
-  type Notice,
-} from "@rgs/shared";
+import { NoticeInputSchema, type Notice } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
-import type { TableItem } from "../lib/db";
 import { badRequest, notFound } from "../lib/errors";
 import { newId } from "../lib/ids";
-import { crmPostgresOf } from "./crm/postgresClient";
+import { requireSql } from "./crm/postgresClient";
 import {
   deleteNoticePostgres,
   getNoticePostgres,
   listNoticesPostgres,
   upsertNoticePostgres,
 } from "./noticesPostgres";
-import {
-  collectReadableRecords,
-  parseStoredRecord,
-  storedRecordId,
-  stripStorageKeys,
-} from "../lib/storedRecords";
 
+// Legacy Dynamo key shape, kept only for the backfill in `services/migration`.
 export const NOTICE_PARTITION_KEY = "NOTICE";
 
 export function noticeSortKey(createdAt: string, noticeId: string): string {
   return `${createdAt}#${noticeId}`;
-}
-
-/**
- * The single place a stored row becomes a Notice.
- *
- * This used to end in a bare `NoticeSchema.parse()`, and `listNotices` mapped
- * it over every queried item -- so one malformed NOTICE# row answered 500
- * from `GET /api/v1/notices`, which is unauthenticated and is what the
- * marketing site's notice ticker calls. One hand-repaired row took the public
- * website's notices down for every visitor, not just for admins.
- */
-function itemToNotice(item: TableItem): Notice {
-  return parseStoredRecord(
-    NoticeSchema,
-    "Notice",
-    storedRecordId(item, "noticeId"),
-    stripStorageKeys(item),
-  );
 }
 
 export type PublicNotice = Omit<Notice, "createdByEmail" | "status" | "updatedAt">;
@@ -63,14 +35,6 @@ function toPublicNotice(notice: Notice): PublicNotice {
   };
 }
 
-async function findNoticeItem(
-  context: AppContext,
-  noticeId: string,
-): Promise<TableItem | undefined> {
-  const noticeItems = await context.table.query(NOTICE_PARTITION_KEY);
-  return noticeItems.find((noticeItem) => noticeItem["noticeId"] === noticeId);
-}
-
 export interface NoticeListing {
   notices: Notice[];
   /**
@@ -83,18 +47,7 @@ export interface NoticeListing {
 }
 
 export async function listNotices(context: AppContext): Promise<NoticeListing> {
-  const sql = crmPostgresOf(context);
-  if (sql) return listNoticesPostgres(sql);
-  const noticeItems = await context.table.query(NOTICE_PARTITION_KEY);
-  const { records, unreadableRecordIds } = await collectReadableRecords(
-    noticeItems,
-    itemToNotice,
-    { entityDescription: "notice" },
-  );
-  records.sort((leftNotice, rightNotice) =>
-    rightNotice.createdAt.localeCompare(leftNotice.createdAt),
-  );
-  return { notices: records, unreadableNoticeIds: unreadableRecordIds };
+  return listNoticesPostgres(requireSql(context));
 }
 
 export interface PublicNoticeListing {
@@ -149,15 +102,10 @@ export async function upsertNotice(
   const noticeInput = parseResult.data;
   const nowIso = context.now().toISOString();
 
-  const sql = crmPostgresOf(context);
+  const sql = requireSql(context);
   let existingNotice: Notice | null = null;
   if (noticeInput.noticeId) {
-    if (sql) {
-      existingNotice = (await getNoticePostgres(sql, noticeInput.noticeId)) ?? null;
-    } else {
-      const existingItem = await findNoticeItem(context, noticeInput.noticeId);
-      if (existingItem) existingNotice = itemToNotice(existingItem);
-    }
+    existingNotice = (await getNoticePostgres(sql, noticeInput.noticeId)) ?? null;
   }
 
   const noticeId = noticeInput.noticeId ?? existingNotice?.noticeId ?? newId("ntc", context.now().getTime());
@@ -185,15 +133,7 @@ export async function upsertNotice(
     createdByEmail: existingNotice?.createdByEmail ?? adminEmail,
   };
 
-  if (sql) {
-    await upsertNoticePostgres(sql, notice);
-  } else {
-    await context.table.put({
-      PK: NOTICE_PARTITION_KEY,
-      SK: noticeSortKey(createdAt, noticeId),
-      ...notice,
-    });
-  }
+  await upsertNoticePostgres(sql, notice);
 
   if (notice.status === "PUBLISHED") {
     await logActivity(
@@ -214,12 +154,5 @@ export async function upsertNotice(
 }
 
 export async function deleteNotice(context: AppContext, noticeId: string): Promise<void> {
-  const sql = crmPostgresOf(context);
-  if (sql) {
-    if (!(await deleteNoticePostgres(sql, noticeId))) throw notFound("Notice");
-    return;
-  }
-  const existingItem = await findNoticeItem(context, noticeId);
-  if (!existingItem) throw notFound("Notice");
-  await context.table.delete(existingItem.PK, existingItem.SK);
+  if (!(await deleteNoticePostgres(requireSql(context), noticeId))) throw notFound("Notice");
 }

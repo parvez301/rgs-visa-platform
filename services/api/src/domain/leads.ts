@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
 import { newId } from "../lib/ids";
-import { crmPostgresOf } from "./crm/postgresClient";
+import { requireSql } from "./crm/postgresClient";
 import { insertLeadPostgres, listNewLeadsPostgres } from "./leadsPostgres";
 
 export const CreateLeadSchema = z.object({
@@ -25,18 +25,7 @@ export async function createLead(context: AppContext, input: CreateLeadInput): P
     ...input,
     createdAt,
   };
-  const sql = crmPostgresOf(context);
-  if (sql) {
-    await insertLeadPostgres(sql, lead);
-  } else {
-    await context.table.put({
-      PK: `LEAD#${lead.leadId}`,
-      SK: "PROFILE",
-      GSI1PK: "STATUS#LEAD_NEW",
-      GSI1SK: createdAt,
-      ...lead,
-    });
-  }
+  await insertLeadPostgres(requireSql(context), lead);
   await logActivity(
     context,
     "LEAD_CREATED",
@@ -63,14 +52,5 @@ export async function createLead(context: AppContext, input: CreateLeadInput): P
 }
 
 export async function listNewLeads(context: AppContext, limit = 50): Promise<Lead[]> {
-  const sql = crmPostgresOf(context);
-  if (sql) return listNewLeadsPostgres(sql, limit);
-  const items = await context.table.queryGsi("GSI1", "STATUS#LEAD_NEW", {
-    scanForward: false,
-    limit,
-  });
-  return items.map((item) => {
-    const { PK, SK, GSI1PK, GSI1SK, ...leadAttributes } = item;
-    return leadAttributes as unknown as Lead;
-  });
+  return listNewLeadsPostgres(requireSql(context), limit);
 }

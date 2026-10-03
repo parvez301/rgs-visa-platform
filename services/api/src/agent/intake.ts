@@ -15,7 +15,7 @@ import { zodObjectToJsonSchema } from "./tools/registry";
  *
  * This is a read-and-propose path with NO exceptions (controller-notes §3):
  * `extractIntake` never creates a partner, never creates a traveller, and
- * never touches `context.table` at all. A name or a passport that does not
+ * never writes to the store at all. A name or a passport that does not
  * resolve against the real store is surfaced unresolved -- never guessed,
  * and never used to mint a new record. Turning an unresolved field into a
  * real partner or traveller is a write, and every write in this codebase is
@@ -166,7 +166,7 @@ function parseRawExtraction(responseText: string): RawIntakeExtraction {
 
 /**
  * Turns a pasted enquiry into an `IntakeDraft`. Never writes: no
- * `context.table.put`, no `createPartner`, no `upsertTraveller` -- only the
+ * store write, no `createPartner`, no `upsertTraveller` -- only the
  * two read-only lookups named in the brief's Consumes list
  * (`findTravellerByPassport`, `findPartnerByName`) plus the deterministic,
  * store-free `crm.normalizeCountry`.

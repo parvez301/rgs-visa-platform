@@ -2,7 +2,6 @@ import { crm } from "@rgs/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 import { readCaseOrThrow, writeCase } from "../../src/domain/crm/caseStore";
-import { casePartitionKey } from "../../src/domain/crm/keys";
 import type { SqlClient } from "../../src/lib/sql";
 import { addApplicant, removeApplicant, updateApplicantDetails } from "../../src/domain/crm/applicantEdits";
 import { createPartner } from "../../src/domain/crm/partners";
@@ -1081,48 +1080,15 @@ describe("createCase reference uniqueness", () => {
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
 
-/**
- * Wraps the in-memory Dynamo table so every string argument of every call (the
- * partition keys, index names and sort keys) is recorded. A mutator that still
- * touches a case or event partition in Dynamo shows up here, which is a
- * stronger proof than "the Dynamo table happens to be empty afterwards": a
- * read that came back empty would not leave a trace in the table.
- */
-function trackTableAccess(table: SqlTestContext["table"]): { table: SqlTestContext["table"]; touchedKeys: string[] } {
-  const touchedKeys: string[] = [];
-  const tracked = new Proxy(table, {
-    get(target, property, receiver) {
-      const member = Reflect.get(target, property, receiver);
-      if (typeof member !== "function") return member;
-      return (...args: unknown[]) => {
-        for (const arg of args) {
-          if (typeof arg === "string") touchedKeys.push(arg);
-          else if (typeof arg === "object" && arg !== null && typeof (arg as { PK?: unknown }).PK === "string") {
-            touchedKeys.push((arg as { PK: string }).PK);
-          }
-        }
-        return member.apply(target, args);
-      };
-    },
-  });
-  return { table: tracked, touchedKeys };
-}
-
 describe("CRM case mutators on Postgres", () => {
   let sql: SqlClient;
   let context: SqlTestContext;
-  let touchedKeys: string[];
 
   beforeEach(async () => {
-    const baseContext = await buildSqlTestContext();
-    sql = baseContext.sql;
-    const tracking = trackTableAccess(baseContext.table);
-    touchedKeys = tracking.touchedKeys;
-    context = { ...baseContext, table: tracking.table };
+    context = await buildSqlTestContext();
+    sql = context.sql;
   });
 
-  // Partners, travellers and REF claims live in Postgres too (Task 6): nothing
-  // a case mutator does may reach Dynamo for any of them.
   async function seedPartnerId(): Promise<string> {
     const partner = await createPartner(context, TENANT_ID, { canonicalName: "Ozzy Travels" }, ACTOR);
     return partner.partnerId;
@@ -1165,30 +1131,12 @@ describe("CRM case mutators on Postgres", () => {
     return created;
   }
 
-  /** Every Dynamo key family a CRM mutator could still reach: case, partner, traveller, REF claim. */
-  const CRM_DYNAMO_KEY_MARKERS = [
-    "#CASE#",
-    "#CASE_STATUS#",
-    "#PARTNER#",
-    "#PARTNERS",
-    "#TRAVELLER#",
-    "#TRAVELLER_NAME#",
-    "#PASSPORT#",
-    "#REF_CLAIM#",
-  ];
-
-  function expectNoDynamoCaseAccess(caseId: string): void {
-    const casePartition = casePartitionKey(TENANT_ID, caseId);
-    expect(touchedKeys.filter((key) => key === casePartition)).toEqual([]);
-    expect(touchedKeys.filter((key) => CRM_DYNAMO_KEY_MARKERS.some((marker) => key.includes(marker)))).toEqual([]);
-  }
-
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
     const result = await sql.query<{ value: T }>(text, values);
     return result.rows[0]!.value;
   }
 
-  it("createCase writes case, applicants and event to Postgres and never touches Dynamo case keys", async () => {
+  it("createCase writes case, applicants and event to Postgres", async () => {
     const partnerId = await seedPartnerId();
     const created = await seedCase(partnerId, "31377", ["31377-1", "31377-2"]);
 
@@ -1207,7 +1155,6 @@ describe("CRM case mutators on Postgres", () => {
 
     // The REF claim is held in crm_ref_claims.
     expect(await readRefClaim(context, TENANT_ID, "31377")).toBeDefined();
-    expectNoDynamoCaseAccess(created.caseId);
   });
 
   it("createCase stamps the Ledger search haystack from crm_travellers into the Postgres row", async () => {
@@ -1257,7 +1204,6 @@ describe("CRM case mutators on Postgres", () => {
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
     expect(events.map((event) => event.eventType)).toEqual(["CASE_CREATED", "CASE_STATUS_CHANGED"]);
     expect(events[1]?.meta).toEqual({ fromStatus: "NEW", toStatus: "DOCS_UNDER_REVIEW" });
-    expectNoDynamoCaseAccess(created.caseId);
   });
 
   it("changeCaseStatus refuses an illegal move and leaves the Postgres row alone", async () => {
@@ -1274,11 +1220,10 @@ describe("CRM case mutators on Postgres", () => {
     expect(events.filter((event) => event.eventType === "CASE_STATUS_CHANGED")).toHaveLength(1);
   });
 
-  it("changeCaseStatus on a case that does not exist is a 404, not a Dynamo fallback", async () => {
+  it("changeCaseStatus on a case that does not exist is a 404", async () => {
     await expect(changeCaseStatus(context, TENANT_ID, "case_missing", "DOCS_UNDER_REVIEW", ACTOR)).rejects.toMatchObject(
       { statusCode: 404 },
     );
-    expectNoDynamoCaseAccess("case_missing");
   });
 
   it("updateCaseDetails edits, clears and re-keys fields in Postgres", async () => {
@@ -1335,7 +1280,6 @@ describe("CRM case mutators on Postgres", () => {
     expect(events[1]?.meta["changedFields"]).toBe(
       "caseRef,destinationCountry,appointmentDate,remarks,groupName",
     );
-    expectNoDynamoCaseAccess(created.caseId);
   });
 
   it("updateCaseDetails with no real change writes nothing new", async () => {
@@ -1392,9 +1336,8 @@ describe("CRM case mutators on Postgres", () => {
     const eventTypes = (await listCaseEvents(context, TENANT_ID, created.caseId)).map((event) => event.eventType);
     expect(eventTypes.slice(0, 4)).toEqual(["CASE_CREATED", "BILLING_CHANGED", "CUSTODY_CHANGED", "CUSTODY_CHANGED"]);
     // The PAID write and the CLOSED it derives share one clock tick, so their
-    // relative order is eventId order (random), as it is on Dynamo.
+    // relative order is eventId order (random),.
     expect(eventTypes.slice(4).sort()).toEqual(["BILLING_CHANGED", "CASE_STATUS_CHANGED"]);
-    expectNoDynamoCaseAccess(created.caseId);
   });
 
   it("changeBillingStatus refuses a move the machine does not allow", async () => {
@@ -1425,7 +1368,6 @@ describe("CRM case mutators on Postgres", () => {
     const stored = await readCaseOrThrow(context, TENANT_ID, created.caseId);
     expect(stored.applicants[0]?.outcome).toBe("APPROVED");
     expect(stored.caseStatus).toBe(decided.caseStatus);
-    expectNoDynamoCaseAccess(created.caseId);
   });
 
   it("addApplicant appends a Postgres applicant row and refreshes the search haystack", async () => {
@@ -1455,7 +1397,6 @@ describe("CRM case mutators on Postgres", () => {
       [created.caseId],
     );
     expect(summary.count).toBe(2);
-    expectNoDynamoCaseAccess(created.caseId);
   });
 
   it("updateApplicantDetails rewrites the applicant row, the traveller and the search haystack", async () => {
@@ -1490,7 +1431,6 @@ describe("CRM case mutators on Postgres", () => {
 
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
     expect(events.at(-1)).toMatchObject({ eventType: "APPLICANT_UPDATED" });
-    expectNoDynamoCaseAccess(created.caseId);
   });
 
   it("removeApplicant drops the Postgres applicant row and compacts indexes, and refuses the last one", async () => {
@@ -1518,33 +1458,17 @@ describe("CRM case mutators on Postgres", () => {
 
     const eventTypes = (await listCaseEvents(context, TENANT_ID, created.caseId)).map((event) => event.eventType);
     expect(eventTypes).toEqual(["CASE_CREATED", "APPLICANT_REMOVED", "APPLICANT_REMOVED"]);
-    expectNoDynamoCaseAccess(created.caseId);
   });
 });
 
 
-/** A table whose every call throws: proves a Postgres-backed read never reaches Dynamo. */
-function forbidDynamoTable(table: SqlTestContext["table"]): SqlTestContext["table"] {
-  return new Proxy(table, {
-    get(target, property, receiver) {
-      const member = Reflect.get(target, property, receiver);
-      if (typeof member !== "function") return member;
-      return () => {
-        throw new Error(`Dynamo table touched: ${String(property)}`);
-      };
-    },
-  });
-}
-
 describe("CRM case lists / counts / refs on Postgres", () => {
   let sql: SqlClient;
   let context: SqlTestContext;
-  let baseContext: SqlTestContext;
 
   beforeEach(async () => {
-    baseContext = await buildSqlTestContext();
-    sql = baseContext.sql;
-    context = baseContext;
+    context = await buildSqlTestContext();
+    sql = context.sql;
   });
 
   async function seedPartnerId(name: string): Promise<string> {
@@ -1577,18 +1501,12 @@ describe("CRM case lists / counts / refs on Postgres", () => {
     return created;
   }
 
-  /** From here on any Dynamo access is a failure. */
-  function forbidDynamoFromNow(): void {
-    context = { ...context, table: forbidDynamoTable(baseContext.table) };
-  }
-
-  it("listCasesByStatus returns the Postgres cases, newest update first, without touching Dynamo", async () => {
+  it("listCasesByStatus returns the Postgres cases, newest update first", async () => {
     const partnerId = await seedPartnerId("Ozzy Travels");
     const first = await seedCase(partnerId, "10001");
     const second = await seedCase(partnerId, "10002");
     const moved = await seedCase(partnerId, "10003");
     await changeCaseStatus(context, TENANT_ID, moved.caseId, "DOCS_UNDER_REVIEW", ACTOR);
-    forbidDynamoFromNow();
 
     const listing = await listCasesByStatus(context, TENANT_ID, "NEW");
 
@@ -1605,7 +1523,6 @@ describe("CRM case lists / counts / refs on Postgres", () => {
     const b = await seedCase(partnerId, "10002");
     const broken = await seedCase(partnerId, "10003");
     await sql.query("delete from crm_applicants where case_id = $1", [broken.caseId]);
-    forbidDynamoFromNow();
 
     const limited = await listCasesByStatus(context, TENANT_ID, "NEW", 2);
     expect(limited.cases.length + limited.unreadableCaseIds.length).toBe(2);
@@ -1627,7 +1544,6 @@ describe("CRM case lists / counts / refs on Postgres", () => {
     const older = await seedCase(ozzy, "10001", { receivedDate: "2026-01-02" });
     const newer = await seedCase(ozzy, "10002", { receivedDate: "2026-03-05" });
     await seedCase(other, "20001");
-    forbidDynamoFromNow();
 
     const listing = await listCasesByPartner(context, TENANT_ID, ozzy);
     expect(listing.cases.map((c) => c.caseId)).toEqual([newer.caseId, older.caseId]);
@@ -1643,7 +1559,6 @@ describe("CRM case lists / counts / refs on Postgres", () => {
     await seedCase(ozzy, "10002", { destinationCountry: "JP" });
     const moved = await seedCase(other, "20001", { destinationCountry: "BH" });
     await changeCaseStatus(context, TENANT_ID, moved.caseId, "DOCS_UNDER_REVIEW", ACTOR);
-    forbidDynamoFromNow();
 
     expect(await countCasesByField(context, TENANT_ID, "caseStatus")).toEqual({
       counts: { NEW: 2, DOCS_UNDER_REVIEW: 1 },
@@ -1674,7 +1589,6 @@ describe("CRM case lists / counts / refs on Postgres", () => {
     await sql.query("delete from crm_applicants where case_id = $1", [b.caseId]);
     const moved = await seedCase(ozzy, "10003");
     await changeCaseStatus(context, TENANT_ID, moved.caseId, "DOCS_UNDER_REVIEW", ACTOR);
-    forbidDynamoFromNow();
 
     const listed = await listCaseRefsByStatus(context, TENANT_ID, "NEW");
     expect(listed.unreadableCaseIds).toEqual([]);

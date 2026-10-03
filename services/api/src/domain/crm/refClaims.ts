@@ -1,14 +1,12 @@
 import type { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
 import { badRequest, conflict } from "../../lib/errors";
-import { stripStorageKeys } from "../../lib/storedRecords";
-import { META_SORT_KEY, refClaimPartitionKey } from "./keys";
-import { crmPostgresOf } from "./postgresClient";
+import { requireSql } from "./postgresClient";
 import { deleteRefClaimPostgres, insertRefClaimIfAbsentPostgres, readRefClaimPostgres } from "./refClaimsPostgres";
 
 /**
- * "REF must be unique" (owner, 2026-09-29), enforced by one claim item per
- * normalized reference value written with a conditional put. A case REF and
+ * "REF must be unique" (owner, 2026-09-29), enforced by one claim row per
+ * normalized reference value written with a conditional insert. A case REF and
  * an applicant REF NO share one namespace; a REF NO may repeat its OWN case's
  * REF (a single-person case typed twice) but nothing else's.
  *
@@ -61,20 +59,13 @@ export async function readRefClaim(
   tenantId: string,
   refKey: string,
 ): Promise<RefClaim | undefined> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) return readRefClaimPostgres(sql, tenantId, refKey);
-  // Consistent: a claim written a moment ago by the losing side of a race
-  // must be visible to the reader deciding whether it is ours.
-  const storedItem = await context.table.get(refClaimPartitionKey(tenantId, refKey), META_SORT_KEY, {
-    consistentRead: true,
-  });
-  return storedItem === undefined ? undefined : (stripStorageKeys(storedItem) as unknown as RefClaim);
+  return readRefClaimPostgres(requireSql(context), tenantId, refKey);
 }
 
 /**
- * A claim can be released between our losing putIfAbsent and our read of the
+ * A claim can be released between our losing insert and our read of the
  * winner. Reading "nobody" then means the key is free again, not that another
- * case holds it, so we try the put again. Bounded so a key flapping under
+ * case holds it, so we try the insert again. Bounded so a key flapping under
  * contention cannot spin forever.
  */
 const MAX_CLAIM_ATTEMPTS = 3;
@@ -90,15 +81,7 @@ async function claimRefKey(
 ): Promise<ClaimOutcome> {
   for (let attempt = 1; attempt <= MAX_CLAIM_ATTEMPTS; attempt += 1) {
     const refClaim: RefClaim = { tenantId, refKey, refValue, caseId, claimedAt: context.now().toISOString() };
-    const sql = crmPostgresOf(context);
-    const wasWritten =
-      sql !== undefined
-        ? await insertRefClaimIfAbsentPostgres(sql, refClaim)
-        : await context.table.putIfAbsent({
-            PK: refClaimPartitionKey(tenantId, refKey),
-            SK: META_SORT_KEY,
-            ...refClaim,
-          });
+    const wasWritten = await insertRefClaimIfAbsentPostgres(requireSql(context), refClaim);
     if (wasWritten) return "written";
     const existingClaim = await readRefClaim(context, tenantId, refKey);
     if (existingClaim === undefined) continue;
@@ -121,7 +104,7 @@ export async function claimNewRefs(
     const claimOutcome = await claimRefKey(context, tenantId, caseId, refKey, refValue);
     if (claimOutcome !== "held_by_other_case") {
       // "already_ours" is reported too: keys the previous version held were
-      // skipped above, so a claim of ours that reaches here is a putIfAbsent
+      // skipped above, so a claim of ours that reaches here is an insert
       // that landed but whose response was lost (or an orphan of this case).
       // Rollback must be able to release it, or a failed writeCase leaves the
       // REF claimed forever.
@@ -143,14 +126,9 @@ export async function releaseRefKeys(
   for (const refKey of refKeys) {
     const existingClaim = await readRefClaim(context, tenantId, refKey);
     if (existingClaim?.caseId !== caseId) continue;
-    const sql = crmPostgresOf(context);
-    if (sql !== undefined) {
-      // Guarded on the owner again: between the read and the delete the claim
-      // could have been released and re-taken by another case.
-      await deleteRefClaimPostgres(sql, tenantId, refKey, caseId);
-      continue;
-    }
-    await context.table.delete(refClaimPartitionKey(tenantId, refKey), META_SORT_KEY);
+    // Guarded on the owner again: between the read and the delete the claim
+    // could have been released and re-taken by another case.
+    await deleteRefClaimPostgres(requireSql(context), tenantId, refKey, caseId);
   }
 }
 

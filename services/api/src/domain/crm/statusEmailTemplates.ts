@@ -2,9 +2,7 @@ import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
 import { badRequest } from "../../lib/errors";
-import { parseStoredRecord, stripStorageKeys } from "../../lib/storedRecords";
-import { META_SORT_KEY, statusEmailTemplatePartitionKey } from "./keys";
-import { crmPostgresOf } from "./postgresClient";
+import { requireSql } from "./postgresClient";
 import {
   getStatusEmailTemplatePostgres,
   insertStatusEmailTemplateIfAbsentPostgres,
@@ -23,16 +21,7 @@ export async function getStatusEmailTemplate(
   tenantId: string,
   caseStatus: crm.CaseStatus,
 ): Promise<crm.StatusEmailTemplate | undefined> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) return getStatusEmailTemplatePostgres(sql, tenantId, caseStatus);
-  const storedItem = await context.table.get(statusEmailTemplatePartitionKey(tenantId, caseStatus), META_SORT_KEY);
-  if (storedItem === undefined) return undefined;
-  return parseStoredRecord(
-    crm.StatusEmailTemplateSchema,
-    "StatusEmailTemplate",
-    caseStatus,
-    stripStorageKeys(storedItem),
-  );
+  return getStatusEmailTemplatePostgres(requireSql(context), tenantId, caseStatus);
 }
 
 /** One entry per case status: the stored row if there is one, else the in-memory default. Defaults are not persisted. */
@@ -81,17 +70,9 @@ async function writeTemplate(
     }
     throw error;
   }
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    if (onlyIfAbsent) return { template, written: await insertStatusEmailTemplateIfAbsentPostgres(sql, template) };
-    await upsertStatusEmailTemplatePostgres(sql, template);
-    return { template, written: true };
-  }
-  const item = { PK: statusEmailTemplatePartitionKey(tenantId, caseStatus), SK: META_SORT_KEY, ...template };
-  if (onlyIfAbsent) {
-    return { template, written: await context.table.putIfAbsent(item) };
-  }
-  await context.table.put(item);
+  const sql = requireSql(context);
+  if (onlyIfAbsent) return { template, written: await insertStatusEmailTemplateIfAbsentPostgres(sql, template) };
+  await upsertStatusEmailTemplatePostgres(sql, template);
   return { template, written: true };
 }
 

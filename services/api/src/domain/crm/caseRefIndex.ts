@@ -1,31 +1,16 @@
-import { z } from "zod";
 import type { AppContext } from "../../lib/context";
-import { parseStoredRecord, stripStorageKeys } from "../../lib/storedRecords";
 import { readCaseRefReservationPostgres, writeCaseRefReservationPostgres } from "./caseRefIndexPostgres";
-import { META_SORT_KEY, caseRefIndexPartitionKey } from "./keys";
-import { crmPostgresOf } from "./postgresClient";
+import { requireSql } from "./postgresClient";
 
 /**
  * The importer's idempotency anchor: one tiny item per imported `caseRef`,
  * naming the `caseId` that ref was imported under and whether that import
  * ever finished.
  *
- * Why it exists. Idempotency used to be "sweep every case status through
- * GSI1 and collect the caseRefs". GSI1 is a global secondary index, and
- * DynamoDB refuses a consistent read on one — `runQuery` correctly passes
- * `ConsistentRead: undefined` for index queries. So an import that aborts
- * part-way and is re-run minutes later does not see the cases the first run
- * wrote: the index has not caught up, the sweep reports those refs as
- * never-imported, and the second run writes them all again under fresh
- * `caseId`s. Nothing reconciles that afterwards, because `caseRef` carries no
- * uniqueness constraint of its own.
+ * A reservation is keyed on the ref itself and read back strongly, so a
+ * re-run importer sees exactly what the aborted run left behind.
  *
- * A reservation is keyed on the ref itself, so it lives in its own base-table
- * partition and is read with `ConsistentRead: true` — visible to the very
- * next reader, index lag or not.
- *
- * The two-step write is the point, not overhead. `writeCase` is not
- * transactional (3 sequential calls per case), so the reservation is written
+ * The two-step write is the point, not overhead. The reservation is written
  * BEFORE the case and marked complete AFTER it, which makes every way a run
  * can die distinguishable afterwards:
  *
@@ -53,40 +38,12 @@ export interface CaseRefReservation {
   completedAt?: string;
 }
 
-const CaseRefReservationSchema = z.object({
-  tenantId: z.string().min(1),
-  caseRef: z.string().min(1),
-  caseId: z.string().min(1),
-  reservedAt: z.string().datetime(),
-  completedAt: z.string().datetime().optional(),
-});
-
-/**
- * Strongly consistent by construction — an eventually consistent read here
- * would reintroduce the exact index lag this item exists to route around.
- */
 export async function readCaseRefReservation(
   context: AppContext,
   tenantId: string,
   caseRef: string,
 ): Promise<CaseRefReservation | undefined> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) return readCaseRefReservationPostgres(sql, tenantId, caseRef);
-  const storedItem = await context.table.get(
-    caseRefIndexPartitionKey(tenantId, caseRef),
-    META_SORT_KEY,
-    { consistentRead: true },
-  );
-  if (!storedItem) return undefined;
-  // Raw, a ZodError is not an ApiError and router.ts maps only ApiError
-  // subclasses, so it would leave here as a 500. Typed as CorruptRecordError,
-  // a caller can decide what to do with a reservation row it cannot read.
-  return parseStoredRecord(
-    CaseRefReservationSchema,
-    "Case ref reservation",
-    caseRef,
-    stripStorageKeys(storedItem),
-  );
+  return readCaseRefReservationPostgres(requireSql(context), tenantId, caseRef);
 }
 
 /** Claims a ref for a caseId. Call before writing the case. */
@@ -124,15 +81,5 @@ async function writeReservation(
   context: AppContext,
   reservation: CaseRefReservation,
 ): Promise<void> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    await writeCaseRefReservationPostgres(sql, reservation);
-    return;
-  }
-  await context.table.put({
-    PK: caseRefIndexPartitionKey(reservation.tenantId, reservation.caseRef),
-    SK: META_SORT_KEY,
-    ...reservation,
-  });
+  await writeCaseRefReservationPostgres(requireSql(context), reservation);
 }
-

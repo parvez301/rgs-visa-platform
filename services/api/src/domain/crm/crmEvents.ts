@@ -1,7 +1,6 @@
 import type { AppContext } from "../../lib/context";
 import { newId } from "../../lib/ids";
-import { EVENT_SORT_KEY_PREFIX, casePartitionKey, eventSortKey } from "./keys";
-import { postgresClientFor } from "./postgresClient";
+import { requireSql } from "./postgresClient";
 
 export type CrmEventType =
   | "CASE_CREATED"
@@ -37,7 +36,7 @@ export interface CrmEvent {
   createdAt: string;
 }
 
-/** Append-only. Spec §5 stores these as EVENT#<ts>#<id> under the case partition. */
+/** Append-only: rows in `crm_events`. */
 export async function recordCrmEvent(
   context: AppContext,
   tenantId: string,
@@ -51,21 +50,12 @@ export async function recordCrmEvent(
   const eventId = newId("crmevt", createdAtDate.getTime());
   const crmEvent: CrmEvent = { eventId, eventType, caseId, actorEmail, meta, createdAt };
 
-  if (context.crmStore === "postgres") {
-    // Single INSERT: atomic on its own, no transaction needed.
-    await postgresClientFor(context).query(
-      `insert into crm_events (tenant_id, event_id, case_id, event_type, actor_email, meta, created_at)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz)`,
-      [tenantId, eventId, caseId, eventType, actorEmail, JSON.stringify(meta), createdAt],
-    );
-    return crmEvent;
-  }
-
-  await context.table.put({
-    PK: casePartitionKey(tenantId, caseId),
-    SK: `${EVENT_SORT_KEY_PREFIX}${eventSortKey(createdAt, eventId)}`,
-    ...crmEvent,
-  });
+  // Single INSERT: atomic on its own, no transaction needed.
+  await requireSql(context).query(
+    `insert into crm_events (tenant_id, event_id, case_id, event_type, actor_email, meta, created_at)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz)`,
+    [tenantId, eventId, caseId, eventType, actorEmail, JSON.stringify(meta), createdAt],
+  );
   return crmEvent;
 }
 
@@ -74,43 +64,29 @@ export async function listCaseEvents(
   tenantId: string,
   caseId: string,
 ): Promise<CrmEvent[]> {
-  if (context.crmStore === "postgres") {
-    // created_at formatted in SQL (UTC, ms) so node-pg Date coercion and the
-    // process timezone cannot change the string. event_id breaks ties the way
-    // the Dynamo sort key (`<createdAt>#<eventId>`) does.
-    const result = await postgresClientFor(context).query<{
-      event_id: string;
-      event_type: string;
-      case_id: string;
-      actor_email: string;
-      meta: Record<string, string | number | boolean> | null;
-      created_at: string;
-    }>(
-      `select event_id, event_type, case_id, actor_email, meta,
-              to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
-         from crm_events
-        where tenant_id = $1 and case_id = $2
-        order by crm_events.created_at asc, event_id asc`,
-      [tenantId, caseId],
-    );
-    return result.rows.map((row) => ({
-      eventId: row.event_id,
-      eventType: row.event_type as CrmEventType,
-      caseId: row.case_id,
-      actorEmail: row.actor_email,
-      meta: row.meta ?? {},
-      createdAt: row.created_at,
-    }));
-  }
-  const eventItems = await context.table.query(casePartitionKey(tenantId, caseId), {
-    skPrefix: EVENT_SORT_KEY_PREFIX,
-  });
-  return eventItems.map((eventItem) => ({
-    eventId: String(eventItem["eventId"]),
-    eventType: eventItem["eventType"] as CrmEventType,
-    caseId: String(eventItem["caseId"]),
-    actorEmail: String(eventItem["actorEmail"]),
-    meta: (eventItem["meta"] ?? {}) as Record<string, string | number | boolean>,
-    createdAt: String(eventItem["createdAt"]),
+  // created_at formatted in SQL (UTC, ms) so node-pg Date coercion and the
+  // process timezone cannot change the string. event_id breaks ties.
+  const result = await requireSql(context).query<{
+    event_id: string;
+    event_type: string;
+    case_id: string;
+    actor_email: string;
+    meta: Record<string, string | number | boolean> | null;
+    created_at: string;
+  }>(
+    `select event_id, event_type, case_id, actor_email, meta,
+            to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
+       from crm_events
+      where tenant_id = $1 and case_id = $2
+      order by crm_events.created_at asc, event_id asc`,
+    [tenantId, caseId],
+  );
+  return result.rows.map((row) => ({
+    eventId: row.event_id,
+    eventType: row.event_type as CrmEventType,
+    caseId: row.case_id,
+    actorEmail: row.actor_email,
+    meta: row.meta ?? {},
+    createdAt: row.created_at,
   }));
 }

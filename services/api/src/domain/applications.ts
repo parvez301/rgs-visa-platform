@@ -16,13 +16,9 @@ import { logActivity } from "../lib/context";
 import type { TableItem } from "../lib/db";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { newId } from "../lib/ids";
-import {
-  collectReadableRecords,
-  parseStoredRecord,
-  storedRecordId,
-} from "../lib/storedRecords";
+import { parseStoredRecord, storedRecordId } from "../lib/storedRecords";
 import { resolveCountryProduct } from "./config";
-import { crmPostgresOf } from "./crm/postgresClient";
+import { requireSql } from "./crm/postgresClient";
 import {
   getApplicationPostgres,
   listApplicationsByUserPostgres,
@@ -35,6 +31,10 @@ import {
 } from "./applicationDocumentsPostgres";
 import { ensureUserProfile } from "./users";
 
+/**
+ * Dynamo row shape and parser, kept only for the legacy backfill in
+ * `services/migration` (removed with the migration tooling).
+ */
 export function applicationToItem(application: Application): TableItem {
   return {
     PK: `USER#${application.userId}`,
@@ -47,19 +47,7 @@ export function applicationToItem(application: Application): TableItem {
   };
 }
 
-/**
- * The single place a stored row becomes an Application.
- *
- * Raw, a ZodError is not an ApiError and router.ts maps only ApiError
- * subclasses — so one half-written APP# item answered 500 from every read
- * that touched it, including the ops team's main work queue. Typed as
- * CorruptRecordError it answers 409 naming the row, exactly as the CRM
- * listings do, and a listing can then catch precisely this and skip.
- */
 export function itemToApplication(item: TableItem): Application {
-  // The whole item, storage keys included: ApplicationSchema is a plain
-  // z.object, which drops unknown keys, so stripping them first would be work
-  // with no effect.
   return parseStoredRecord(
     ApplicationSchema,
     "Application",
@@ -68,17 +56,12 @@ export function itemToApplication(item: TableItem): Application {
   );
 }
 
-/** Persists an application to whichever store this context uses (Postgres or Dynamo). */
+/** Persists an application. */
 export async function saveApplication(
   context: AppContext,
   application: Application,
 ): Promise<void> {
-  const sql = crmPostgresOf(context);
-  if (sql) {
-    await upsertApplicationPostgres(sql, application);
-    return;
-  }
-  await context.table.put(applicationToItem(application));
+  await upsertApplicationPostgres(requireSql(context), application);
 }
 
 export async function createDraft(
@@ -146,16 +129,10 @@ export async function getOwnedApplication(
   userId: string,
   applicationId: string,
 ): Promise<Application> {
-  const sql = crmPostgresOf(context);
-  if (sql) {
-    const application = await getApplicationPostgres(sql, applicationId);
-    // Another user's application answers exactly like a missing one.
-    if (!application || application.userId !== userId) throw notFound("Application");
-    return application;
-  }
-  const item = await context.table.get(`USER#${userId}`, `APP#${applicationId}`);
-  if (!item) throw notFound("Application");
-  return itemToApplication(item);
+  const application = await getApplicationPostgres(requireSql(context), applicationId);
+  // Another user's application answers exactly like a missing one.
+  if (!application || application.userId !== userId) throw notFound("Application");
+  return application;
 }
 
 export async function patchDraft(
@@ -211,45 +188,22 @@ export async function listMyApplications(
   context: AppContext,
   userId: string,
 ): Promise<OwnedApplicationListing> {
-  const sql = crmPostgresOf(context);
-  if (sql) return listApplicationsByUserPostgres(sql, userId);
-  const items = await context.table.query(`USER#${userId}`, { skPrefix: "APP#" });
-  const { records, unreadableRecordIds } = await collectReadableRecords(
-    items,
-    itemToApplication,
-    { entityDescription: "application" },
-  );
-  return { applications: records, unreadableApplicationIds: unreadableRecordIds };
+  return listApplicationsByUserPostgres(requireSql(context), userId);
 }
 
 export async function listApplicationDocuments(
   context: AppContext,
   applicationId: string,
 ): Promise<ApplicationDocument[]> {
-  const sql = crmPostgresOf(context);
-  if (sql) return (await listApplicationDocumentsPostgres(sql, applicationId)).documents;
-  const items = await context.table.query(`APP#${applicationId}`, { skPrefix: "DOC#" });
-  return items.map((item) => {
-    const { PK, SK, ...documentAttributes } = item;
-    return documentAttributes as unknown as ApplicationDocument;
-  });
+  return (await listApplicationDocumentsPostgres(requireSql(context), applicationId)).documents;
 }
 
-/** Persists document metadata to whichever store this context uses. S3 bytes are untouched. */
+/** Persists document metadata. S3 bytes are untouched. */
 export async function saveApplicationDocument(
   context: AppContext,
   document: ApplicationDocument,
 ): Promise<void> {
-  const sql = crmPostgresOf(context);
-  if (sql) {
-    await upsertApplicationDocumentPostgres(sql, document);
-    return;
-  }
-  await context.table.put({
-    PK: `APP#${document.applicationId}`,
-    SK: `DOC#${document.docType}#${document.travellerIndex}`,
-    ...document,
-  });
+  await upsertApplicationDocumentPostgres(requireSql(context), document);
 }
 
 /** One document's stored metadata, or undefined when none was recorded. */
@@ -259,12 +213,7 @@ export async function getApplicationDocument(
   docType: DocType,
   travellerIndex: number,
 ): Promise<ApplicationDocument | undefined> {
-  const sql = crmPostgresOf(context);
-  if (sql) return getApplicationDocumentPostgres(sql, applicationId, docType, travellerIndex);
-  const item = await context.table.get(`APP#${applicationId}`, `DOC#${docType}#${travellerIndex}`);
-  if (!item) return undefined;
-  const { PK, SK, ...documentAttributes } = item;
-  return documentAttributes as unknown as ApplicationDocument;
+  return getApplicationDocumentPostgres(requireSql(context), applicationId, docType, travellerIndex);
 }
 
 /** Docs required for submission: every traveller needs each doc on the country checklist. */

@@ -10,7 +10,7 @@ import { MAX_LEDGER_PAGE_LIMIT, type LedgerPage } from "./ledger";
 /**
  * The Ledger read model served from Postgres (`crm_cases` + `crm_partners`).
  *
- * Same contract as `listLedgerRows` in `ledger.ts` -- one `LedgerPage`, the
+ * One `LedgerPage` (see `ledger.ts`), the
  * same 400s for a cursor that cannot be read or was issued for another
  * filter, unreadable rows named rather than dropped -- but every filter is a
  * WHERE clause, so filters combine instead of choosing a Dynamo partition.

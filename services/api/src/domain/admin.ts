@@ -9,10 +9,8 @@ import {
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
 import { badRequest, conflict, notFound } from "../lib/errors";
-import { collectReadableRecords } from "../lib/storedRecords";
 import {
   getApplicationDocument,
-  itemToApplication,
   listApplicationDocuments,
   saveApplication,
   saveApplicationDocument,
@@ -22,23 +20,16 @@ import {
   getApplicationPostgres,
   listApplicationsByStatusPostgres,
 } from "./applicationsPostgres";
-import { crmPostgresOf } from "./crm/postgresClient";
+import { requireSql } from "./crm/postgresClient";
 
-/** Admin lookup by application id alone (GSI3). */
+/** Admin lookup by application id alone. */
 export async function getApplicationById(
   context: AppContext,
   applicationId: string,
 ): Promise<Application> {
-  const sql = crmPostgresOf(context);
-  if (sql) {
-    const application = await getApplicationPostgres(sql, applicationId);
-    if (!application) throw notFound("Application");
-    return application;
-  }
-  const items = await context.table.queryGsi("GSI3", `APP#${applicationId}`, { limit: 1 });
-  const applicationItem = items[0];
-  if (!applicationItem) throw notFound("Application");
-  return itemToApplication(applicationItem);
+  const application = await getApplicationPostgres(requireSql(context), applicationId);
+  if (!application) throw notFound("Application");
+  return application;
 }
 
 export interface ApplicationListing {
@@ -52,31 +43,12 @@ export interface ApplicationListing {
   unreadableApplicationIds: string[];
 }
 
-/**
- * One malformed APP# row must not take the whole queue down with it. Before
- * this, `items.map(itemToApplication)` threw a raw ZodError, router.ts maps
- * only ApiError, and the ops team's main screen answered 500 for every admin
- * in the tenant until someone found and repaired the row. The bad row is now
- * skipped, warned about with the id that finds it, and named in the response.
- * Only CorruptRecordError is swallowed; every other failure still propagates.
- */
 export async function listApplicationsByStatus(
   context: AppContext,
   status: ApplicationStatus,
   limit = 50,
 ): Promise<ApplicationListing> {
-  const sql = crmPostgresOf(context);
-  if (sql) return listApplicationsByStatusPostgres(sql, status, limit);
-  const items = await context.table.queryGsi("GSI1", `STATUS#${status}`, {
-    limit,
-    scanForward: false,
-  });
-  const { records, unreadableRecordIds } = await collectReadableRecords(
-    items,
-    itemToApplication,
-    { entityDescription: "application" },
-  );
-  return { applications: records, unreadableApplicationIds: unreadableRecordIds };
+  return listApplicationsByStatusPostgres(requireSql(context), status, limit);
 }
 
 export interface AdminApplicationDetail {
@@ -160,18 +132,15 @@ export async function transitionApplication(
   assertTransition(application.status, toStatus);
 
   if (toStatus === "DOCS_VERIFIED") {
-    const sql = crmPostgresOf(context);
-    if (sql) {
-      // A document row that will not parse is not an approved document.
-      const { unreadableDocumentIds } = await listApplicationDocumentsPostgres(
-        sql,
-        applicationId,
+    // A document row that will not parse is not an approved document.
+    const { unreadableDocumentIds } = await listApplicationDocumentsPostgres(
+      requireSql(context),
+      applicationId,
+    );
+    if (unreadableDocumentIds.length > 0) {
+      throw conflict(
+        `Unreadable document records must be fixed first: ${unreadableDocumentIds.join(", ")}`,
       );
-      if (unreadableDocumentIds.length > 0) {
-        throw conflict(
-          `Unreadable document records must be fixed first: ${unreadableDocumentIds.join(", ")}`,
-        );
-      }
     }
     const documents = await listApplicationDocuments(context, applicationId);
     const allApproved =

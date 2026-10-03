@@ -25,11 +25,7 @@ import { generateCaseInvoice } from "../domain/crm/caseInvoice";
 import { runAppointmentReminders } from "../domain/crm/appointmentReminders";
 import { listCaseEvents } from "../domain/crm/crmEvents";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
-import {
-  DEFAULT_LEDGER_PAGE_LIMIT,
-  MAX_LEDGER_PAGE_LIMIT,
-  listLedgerRows,
-} from "../domain/crm/ledger";
+import { DEFAULT_LEDGER_PAGE_LIMIT, MAX_LEDGER_PAGE_LIMIT } from "../domain/crm/ledger";
 import { listLedgerRowsFromPostgres } from "../domain/crm/ledgerPostgres";
 import {
   listOpenReviewGroups,
@@ -402,53 +398,27 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       );
       const cursor = requestContext.queryParams["cursor"];
 
-      if ((context.ledgerStore ?? "dynamo") === "postgres") {
-        if (context.sql === undefined) {
-          throw serviceUnavailable(
-            "Ledger Postgres is enabled but DATABASE_URL is not configured",
-          );
-        }
-        const postgresFilters = parsePostgresLedgerFilters(requestContext.queryParams);
-        const postgresPage = await listLedgerRowsFromPostgres(context.sql, tenantId, {
-          statuses,
-          ...(partnerId !== undefined && partnerId !== "" ? { partnerId } : {}),
-          ...postgresFilters,
-          limit,
-          ...(cursor !== undefined ? { cursor } : {}),
-        });
-        return {
-          ...postgresPage,
-          // Every filter here is a WHERE clause, so status and partner apply
-          // together and appliedQuery names each one that ran.
-          appliedQuery: {
-            statuses,
-            ...(partnerId !== undefined && partnerId !== "" ? { partnerId } : {}),
-            ...postgresFilters,
-            limit,
-          },
-        };
+      if (context.sql === undefined) {
+        throw serviceUnavailable(
+          "Ledger Postgres is enabled but DATABASE_URL is not configured",
+        );
       }
-
-      const ledgerPage = await listLedgerRows(context, tenantId, {
+      const postgresFilters = parsePostgresLedgerFilters(requestContext.queryParams);
+      const postgresPage = await listLedgerRowsFromPostgres(context.sql, tenantId, {
         statuses,
-        ...(partnerId !== undefined ? { partnerId } : {}),
+        ...(partnerId !== undefined && partnerId !== "" ? { partnerId } : {}),
+        ...postgresFilters,
         limit,
         ...(cursor !== undefined ? { cursor } : {}),
       });
-
       return {
-        ...ledgerPage,
-        // What ran, not what was asked for. In partner mode the status filter
-        // is not applied server-side (domain/crm/ledger.ts, decision 3), and a
-        // client that could not see that would draw a filter chip for a filter
-        // nothing is enforcing. `statuses` is omitted entirely in partner mode
-        // rather than sent as `[]`: an empty array reads just as naturally as
-        // "filtered down to nothing" as it does "no filter is in force", and
-        // partner mode really does return a nonempty `rows` alongside it. Omitting
-        // the field forces a client to handle its absence rather than leaving the
-        // meaning in a comment.
+        ...postgresPage,
+        // Every filter here is a WHERE clause, so status and partner apply
+        // together and appliedQuery names each one that ran.
         appliedQuery: {
-          ...(partnerId !== undefined ? { partnerId } : { statuses }),
+          statuses,
+          ...(partnerId !== undefined && partnerId !== "" ? { partnerId } : {}),
+          ...postgresFilters,
           limit,
         },
       };

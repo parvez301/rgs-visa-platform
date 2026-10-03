@@ -1,7 +1,7 @@
 import { crm } from "@rgs/shared";
-import type { AppContext } from "../../lib/context";
-import { stripStorageKeys } from "../../lib/storedRecords";
-import { META_SORT_KEY, travellerPartitionKey } from "./keys";
+import type { AppContext } from "@rgs/api/src/lib/context";
+import { stripStorageKeys } from "@rgs/api/src/lib/storedRecords";
+import { META_SORT_KEY, travellerPartitionKey } from "@rgs/api/src/domain/crm/keys";
 
 /**
  * Resolves each applicant's traveller (best-effort) and builds the Ledger

@@ -1,18 +1,11 @@
 import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import type { TableItem } from "../../lib/db";
 import { badRequest, conflict, corruptRecord, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
-import { collectReadableRecords, describeFirstZodIssue } from "../../lib/storedRecords";
+import { describeFirstZodIssue } from "../../lib/storedRecords";
 import { readCase, readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
-import {
-  META_SORT_KEY,
-  caseIdFromPartitionKey,
-  caseStatusGsi1Pk,
-  partnerCasesGsi2Pk,
-} from "./keys";
 import { getPartnerOrThrow } from "./partners";
 import { readCasesPostgres } from "./caseStorePostgres";
 import {
@@ -21,7 +14,7 @@ import {
   listCaseIdsByStatusPostgres,
   listCaseRefsByStatusPostgres,
 } from "./casesListPostgres";
-import { crmPostgresOf } from "./postgresClient";
+import { requireSql } from "./postgresClient";
 import type { SqlClient } from "../../lib/sql";
 import { assertApplicantRefNosDistinct, claimNewRefs, releaseRefKeys, staleRefKeys } from "./refClaims";
 import { getTravellerOrThrow } from "./travellers";
@@ -528,20 +521,12 @@ export async function listCasesByStatus(
   caseStatus: crm.CaseStatus,
   limit = 50,
 ): Promise<CaseListing> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    return loadCasesFromPostgres(
-      sql,
-      tenantId,
-      await listCaseIdsByStatusPostgres(sql, tenantId, caseStatus, limit),
-    );
-  }
-  const metaItems = await context.table.queryGsi(
-    "GSI1",
-    caseStatusGsi1Pk(tenantId, caseStatus),
-    { limit, scanForward: false },
+  const sql = requireSql(context);
+  return loadCasesFromPostgres(
+    sql,
+    tenantId,
+    await listCaseIdsByStatusPostgres(sql, tenantId, caseStatus, limit),
   );
-  return loadCasesFromMetaItems(context, tenantId, metaItems);
 }
 
 export interface StoredCaseRef {
@@ -561,71 +546,22 @@ export interface CaseRefListing {
 }
 
 /**
- * The `caseRef`s stored under one case status, read straight off the META
- * items GSI1 already returned.
- *
- * `listCasesByStatus` cannot answer this cheaply: it reassembles every case
- * through `readCase`, which costs one strongly-consistent GetItem plus one
- * strongly-consistent Query per case. Measured on the real workbook that is
- * 14,312 sequential round-trips to collect one attribute the index query had
- * already handed over.
- *
- * It cannot answer it correctly either. `readCase` throws CorruptRecordError
- * for a partition holding META with no applicant items — which `writeCase`,
- * being non-transactional, produces on any timeout between its two writes —
- * and `loadCasesFromMetaItems` then drops that case from the listing. Its
- * `caseRef` never reaches the caller, so an importer concludes the ref was
- * never imported and imports it a second time, on that run and on every run
- * after it. Reading the attribute off the META item cannot fail that way: the
- * META item is written first and carries the ref.
+ * The `caseRef`s stored under one case status, read straight off the case
+ * rows without reassembling any case.
  */
 export async function listCaseRefsByStatus(
   context: AppContext,
   tenantId: string,
   caseStatus: crm.CaseStatus,
-  // No default: `queryGsi` (via `runQuery`) drains the whole partition when
-  // `limit` is `undefined`, and `InMemoryTableClient` returns everything
-  // unsliced for the same input. A sentinel like Number.MAX_SAFE_INTEGER
-  // would instead reach DynamoDB's real `Limit` parameter, which rejects
-  // anything that large with a ValidationException -- a production-only
-  // failure no in-memory test would catch. The backfill sweep is the caller
-  // that needs the drain; every other caller already passes an explicit page
-  // size, so widening this changes no existing behaviour.
+  // No default: `undefined` drains the whole status.
   limit?: number,
 ): Promise<CaseRefListing> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) return listCaseRefsByStatusPostgres(sql, tenantId, caseStatus, limit);
-  const metaItems = await context.table.queryGsi(
-    "GSI1",
-    caseStatusGsi1Pk(tenantId, caseStatus),
-    { limit, scanForward: false },
-  );
-  const storedCaseRefs: StoredCaseRef[] = [];
-  const unreadableCaseIds: string[] = [];
-  for (const metaItem of metaItems) {
-    if (metaItem["SK"] !== META_SORT_KEY) continue;
-    const storedCaseRef = metaItem["caseRef"];
-    const caseId = caseIdOfMetaItem(metaItem);
-    if (typeof storedCaseRef === "string" && storedCaseRef.length > 0 && caseId !== undefined) {
-      storedCaseRefs.push({ caseRef: storedCaseRef, caseId });
-      continue;
-    }
-    // The index names a case whose META item carries no ref (or nothing that
-    // identifies it at all). Report the caseId if the item still knows it,
-    // and the storage key otherwise — it is all an operator has to find the
-    // row with, and String(undefined) would report the literal id "undefined".
-    unreadableCaseIds.push(caseId ?? metaItem.PK);
-    console.warn(
-      `CRM case META item in tenant ${tenantId} carries no usable caseRef: ${metaItem.PK}`,
-    );
-  }
-  return { storedCaseRefs, unreadableCaseIds };
+  return listCaseRefsByStatusPostgres(requireSql(context), tenantId, caseStatus, limit);
 }
 
 /**
  * The fields a "how many cases" question can group and count by. Every one of
- * these lives directly on the case META item -- `writeCase` (`caseStore.ts`)
- * spreads `...caseBody` onto it -- so counting never needs a case reassembled.
+ * these is a column on the case row, so counting never needs a case reassembled.
  */
 export const CASE_COUNT_GROUP_BY_FIELDS = [
   "caseStatus",
@@ -652,46 +588,18 @@ export interface CaseCountByField {
  * Counts every case in the tenant by one field, grouped by that field's
  * value, without reassembling a single case.
  *
- * `listCasesByStatus` cannot answer a "how many" question cheaply: it hands
- * every META item to `readCase`, which costs one strongly-consistent GetItem
- * plus one strongly-consistent Query per case -- on the real ledger, 7,156
- * partition reads to answer a question the GSI1 query per status already
- * answered on its own. Every field this counts by is already sitting on the
- * META item that query returns, so the GSI1 query -- one per `CASE_STATUSES`
- * entry -- is the entire cost. No `context.table.get` or `context.table.query`
- * (the base-table, partition-scoped reads) ever runs.
+ * A single grouped query answers it; no case is reassembled.
  *
- * A META item whose counted field is missing or not a string is named in
+ * A row whose counted field is missing or not a string is named in
  * `uncountedCaseIds` rather than counted under a bogus `"undefined"` key or
- * silently skipped -- the same rule `listCaseRefsByStatus` follows for a
- * missing `caseRef`.
+ * silently skipped.
  */
 export async function countCasesByField(
   context: AppContext,
   tenantId: string,
   groupByField: CaseCountGroupByField,
 ): Promise<CaseCountByField> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) return countCasesByFieldPostgres(sql, tenantId, groupByField);
-  const counts: Record<string, number> = {};
-  const uncountedCaseIds: string[] = [];
-  let total = 0;
-
-  for (const caseStatus of crm.CASE_STATUSES) {
-    const metaItems = await context.table.queryGsi("GSI1", caseStatusGsi1Pk(tenantId, caseStatus));
-    for (const metaItem of metaItems) {
-      if (metaItem["SK"] !== META_SORT_KEY) continue;
-      const groupFieldValue = metaItem[groupByField];
-      if (typeof groupFieldValue === "string" && groupFieldValue.length > 0) {
-        counts[groupFieldValue] = (counts[groupFieldValue] ?? 0) + 1;
-        total += 1;
-        continue;
-      }
-      uncountedCaseIds.push(caseIdOfMetaItem(metaItem) ?? metaItem.PK);
-    }
-  }
-
-  return { counts, total, uncountedCaseIds };
+  return countCasesByFieldPostgres(requireSql(context), tenantId, groupByField);
 }
 
 export async function listCasesByPartner(
@@ -700,26 +608,18 @@ export async function listCasesByPartner(
   partnerId: string,
   limit = 50,
 ): Promise<CaseListing> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    return loadCasesFromPostgres(
-      sql,
-      tenantId,
-      await listCaseIdsByPartnerPostgres(sql, tenantId, partnerId, limit),
-    );
-  }
-  const metaItems = await context.table.queryGsi(
-    "GSI2",
-    partnerCasesGsi2Pk(tenantId, partnerId),
-    { limit, scanForward: false },
+  const sql = requireSql(context);
+  return loadCasesFromPostgres(
+    sql,
+    tenantId,
+    await listCaseIdsByPartnerPostgres(sql, tenantId, partnerId, limit),
   );
-  return loadCasesFromMetaItems(context, tenantId, metaItems);
 }
 
 /**
  * Reassembles the listed ids in one batched read, in the order the index query
  * gave them. A row that exists but cannot be parsed (e.g. no applicant rows) is
- * named in `unreadableCaseIds`, as on the Dynamo path; an id that vanished
+ * named in `unreadableCaseIds`; an id that vanished
  * between the two statements is simply absent.
  */
 async function loadCasesFromPostgres(
@@ -741,61 +641,4 @@ async function loadCasesFromPostgres(
     }),
     unreadableCaseIds: caseIds.filter((caseId) => unreadable.has(caseId)),
   };
-}
-
-/**
- * A GSI query returns only the META item; applicants live in sibling items, so
- * each case is reassembled through the store.
- *
- * One case that cannot be reassembled (a half-written partition) must not hide
- * the healthy ones — a whole tenant's queue would go down with it — so the bad
- * row is skipped, logged with its caseId, and named in `unreadableCaseIds` so
- * the caller can say something happened. Only CorruptRecordError is swallowed;
- * every other failure still propagates.
- */
-async function loadCasesFromMetaItems(
-  context: AppContext,
-  tenantId: string,
-  metaItems: TableItem[],
-): Promise<CaseListing> {
-  const caseMetaItems = metaItems.filter((metaItem) => metaItem["SK"] === META_SORT_KEY);
-  const { records, unreadableRecordIds } = await collectReadableRecords(
-    caseMetaItems,
-    async (metaItem) => {
-      const caseId = caseIdOfMetaItem(metaItem);
-      if (caseId === undefined) {
-        // Neither the body nor the partition key names a case — a row repaired
-        // into a partition that is not a case partition at all looks like this.
-        // Report the storage key: it is all an operator has to find the row
-        // with, and String(undefined) used to turn this into the literal id
-        // "undefined", which reads back as no case and left the loop wordless.
-        throw corruptRecord("Case", metaItem.PK, "the row names no caseId at all");
-      }
-      const loadedCase = await readCase(context, tenantId, caseId);
-      if (loadedCase) return loadedCase;
-      // The index named a case whose partition holds no META item — a deleted
-      // case still in an eventually consistent GSI, or an index entry pointing
-      // at the wrong id. Dropping it here is what made the disappearance silent.
-      throw corruptRecord(
-        "Case",
-        caseId,
-        "the status index names it but its partition holds no case",
-      );
-    },
-    { entityDescription: "CRM case", scopeDescription: `tenant ${tenantId}` },
-  );
-  return { cases: records, unreadableCaseIds: unreadableRecordIds };
-}
-
-/**
- * The caseId a META item is stored under. The body carries it, but a
- * half-written or hand-repaired item may not, and the partition key always
- * does — so the key is the fallback rather than the string "undefined".
- */
-function caseIdOfMetaItem(metaItem: TableItem): string | undefined {
-  const caseIdFromBody = metaItem["caseId"];
-  if (typeof caseIdFromBody === "string" && caseIdFromBody.length > 0) {
-    return caseIdFromBody;
-  }
-  return caseIdFromPartitionKey(metaItem.PK);
 }

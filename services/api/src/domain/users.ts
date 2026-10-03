@@ -1,53 +1,18 @@
-import { UserSchema, type User } from "@rgs/shared";
+import type { User } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
-import type { TableItem } from "../lib/db";
-import { crmPostgresOf } from "./crm/postgresClient";
+import { requireSql } from "./crm/postgresClient";
 import {
   getUserProfilePostgres,
   listUserProfilesPostgres,
   upsertUserProfilePostgres,
 } from "./userProfilesPostgres";
-import {
-  collectReadableRecords,
-  parseStoredRecord,
-  storedRecordId,
-  stripStorageKeys,
-} from "../lib/storedRecords";
-
-export const PROFILE_SORT_KEY = "PROFILE";
-const USER_PROFILE_GSI_PARTITION = "USERPROFILE";
-
-function userPartitionKey(userId: string): string {
-  return `USER#${userId}`;
-}
-
-/**
- * The single place a stored row becomes a User.
- *
- * This used to end in a bare `UserSchema.parse()`, and `listUserProfiles`
- * mapped it over every profile the index returned -- so one malformed USER#
- * row answered 500 from `GET /api/v1/admin/users`, which is what resolves
- * names on the activity and user-trail screens.
- */
-function itemToUser(item: TableItem): User {
-  return parseStoredRecord(
-    UserSchema,
-    "User profile",
-    storedRecordId(item, "userId"),
-    stripStorageKeys(item),
-  );
-}
 
 export async function getUserProfile(
   context: AppContext,
   userId: string,
 ): Promise<User | null> {
-  const sql = crmPostgresOf(context);
-  if (sql) return (await getUserProfilePostgres(sql, userId)) ?? null;
-  const profileItem = await context.table.get(userPartitionKey(userId), PROFILE_SORT_KEY);
-  if (!profileItem) return null;
-  return itemToUser(profileItem);
+  return (await getUserProfilePostgres(requireSql(context), userId)) ?? null;
 }
 
 export interface UserProfileListing {
@@ -61,15 +26,7 @@ export interface UserProfileListing {
 }
 
 export async function listUserProfiles(context: AppContext): Promise<UserProfileListing> {
-  const sql = crmPostgresOf(context);
-  if (sql) return listUserProfilesPostgres(sql);
-  const profileItems = await context.table.queryGsi("GSI1", USER_PROFILE_GSI_PARTITION);
-  const { records, unreadableRecordIds } = await collectReadableRecords(
-    profileItems,
-    itemToUser,
-    { entityDescription: "user profile" },
-  );
-  return { users: records, unreadableUserIds: unreadableRecordIds };
+  return listUserProfilesPostgres(requireSql(context));
 }
 
 export async function ensureUserProfile(
@@ -90,18 +47,7 @@ export async function ensureUserProfile(
     ...(extra?.phone !== undefined ? { phone: extra.phone } : {}),
   };
 
-  const sql = crmPostgresOf(context);
-  if (sql) {
-    await upsertUserProfilePostgres(sql, userProfile);
-  } else {
-    await context.table.put({
-      PK: userPartitionKey(userId),
-      SK: PROFILE_SORT_KEY,
-      GSI1PK: USER_PROFILE_GSI_PARTITION,
-      GSI1SK: createdAt,
-      ...userProfile,
-    });
-  }
+  await upsertUserProfilePostgres(requireSql(context), userProfile);
 
   await logActivity(
     context,

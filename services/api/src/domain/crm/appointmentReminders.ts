@@ -2,10 +2,10 @@ import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
 import { readCaseOrThrow, writeCase } from "./caseStore";
 import { recordCrmEvent } from "./crmEvents";
-import { DEFAULT_LEDGER_PAGE_LIMIT, listLedgerRows } from "./ledger";
+import { DEFAULT_LEDGER_PAGE_LIMIT } from "./ledger";
 import { listLedgerRowsFromPostgres } from "./ledgerPostgres";
 import { getPartnerOrThrow } from "./partners";
-import { crmPostgresOf } from "./postgresClient";
+import { requireSql } from "./postgresClient";
 
 export const APPOINTMENT_REMINDER_ACTOR = "appointment-reminders@system";
 
@@ -30,51 +30,29 @@ function addCalendarDays(isoDate: string, dayCount: number): string {
 }
 
 /**
- * Candidate rows (live cases whose appointment falls in the reminder window).
- *
- * Dynamo: the status-partition ledger scan, filtered to the window here.
- * Postgres (`CRM_STORE=postgres`): `listLedgerRows` has no Postgres branch --
- * the Dynamo table is frozen after cutover -- so ask `crm_cases` directly,
- * once per window date with `appointment_date = $date`, and page each.
+ * Candidate rows (live cases whose appointment falls in the reminder window):
+ * ask `crm_cases` directly, once per window date with
+ * `appointment_date = $date`, and page each.
  */
 async function* appointmentCandidateRows(
   context: AppContext,
   tenantId: string,
   reminderDates: readonly string[],
 ): AsyncGenerator<crm.LedgerRow> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    for (const reminderDate of reminderDates) {
-      let cursor: string | undefined;
-      do {
-        const page = await listLedgerRowsFromPostgres(sql, tenantId, {
-          statuses: [...crm.LIVE_CASE_STATUSES],
-          appointmentDateOn: reminderDate,
-          limit: DEFAULT_LEDGER_PAGE_LIMIT,
-          ...(cursor !== undefined ? { cursor } : {}),
-        });
-        yield* page.rows;
-        cursor = page.nextCursor;
-      } while (cursor !== undefined);
-    }
-    return;
+  const sql = requireSql(context);
+  for (const reminderDate of reminderDates) {
+    let cursor: string | undefined;
+    do {
+      const page = await listLedgerRowsFromPostgres(sql, tenantId, {
+        statuses: [...crm.LIVE_CASE_STATUSES],
+        appointmentDateOn: reminderDate,
+        limit: DEFAULT_LEDGER_PAGE_LIMIT,
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+      yield* page.rows;
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
   }
-
-  const reminderDateSet = new Set(reminderDates);
-  let cursor: string | undefined;
-  do {
-    const page = await listLedgerRows(context, tenantId, {
-      statuses: [...crm.LIVE_CASE_STATUSES],
-      limit: DEFAULT_LEDGER_PAGE_LIMIT,
-      ...(cursor !== undefined ? { cursor } : {}),
-    });
-    for (const row of page.rows) {
-      if (row.appointmentDate !== undefined && reminderDateSet.has(row.appointmentDate)) {
-        yield row;
-      }
-    }
-    cursor = page.nextCursor;
-  } while (cursor !== undefined);
 }
 
 /**

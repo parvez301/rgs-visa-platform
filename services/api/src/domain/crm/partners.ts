@@ -8,14 +8,13 @@ import {
   storedRecordId,
   stripStorageKeys,
 } from "../../lib/storedRecords";
-import { META_SORT_KEY, partnerListGsi1Pk, partnerPartitionKey } from "./keys";
 import {
   getPartnerRowPostgres,
   insertPartnerPostgres,
   listPartnerRowsPostgres,
   updatePartnerContactPostgres,
 } from "./partnersPostgres";
-import { crmPostgresOf } from "./postgresClient";
+import { requireSql } from "./postgresClient";
 
 export interface CreatePartnerInput {
   canonicalName: string;
@@ -66,21 +65,7 @@ export async function createPartner(
     ...(actorEmail !== "" ? { createdByEmail: actorEmail } : {}),
   });
 
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    await insertPartnerPostgres(sql, partner, normalized.canonicalKey);
-    return partner;
-  }
-
-  await context.table.put({
-    PK: partnerPartitionKey(tenantId, partner.partnerId),
-    SK: META_SORT_KEY,
-    GSI1PK: partnerListGsi1Pk(tenantId),
-    // The canonical key is a storage attribute only — PartnerSchema has no such
-    // field, so it must not be spread into the domain object.
-    GSI1SK: normalized.canonicalKey,
-    ...partner,
-  });
+  await insertPartnerPostgres(requireSql(context), partner, normalized.canonicalKey);
   return partner;
 }
 
@@ -109,11 +94,9 @@ export async function listPartners(
   context: AppContext,
   tenantId: string,
 ): Promise<PartnerListing> {
-  const sql = crmPostgresOf(context);
-  const partnerItems =
-    sql !== undefined
-      ? (await listPartnerRowsPostgres(sql, tenantId)).map((row) => row.candidate)
-      : await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId));
+  const partnerItems = (await listPartnerRowsPostgres(requireSql(context), tenantId)).map(
+    (row) => row.candidate,
+  );
   const { records, unreadableRecordIds } = await collectReadableRecords(
     partnerItems,
     parseStoredPartner,
@@ -127,15 +110,9 @@ export async function getPartnerOrThrow(
   tenantId: string,
   partnerId: string,
 ): Promise<crm.Partner> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    const partnerRow = await getPartnerRowPostgres(sql, tenantId, partnerId);
-    if (!partnerRow) throw notFound("Partner");
-    return parseStoredPartner(partnerRow.candidate);
-  }
-  const partnerItem = await context.table.get(partnerPartitionKey(tenantId, partnerId), META_SORT_KEY);
-  if (!partnerItem) throw notFound("Partner");
-  return parseStoredPartner(partnerItem);
+  const partnerRow = await getPartnerRowPostgres(requireSql(context), tenantId, partnerId);
+  if (!partnerRow) throw notFound("Partner");
+  return parseStoredPartner(partnerRow.candidate);
 }
 
 /**
@@ -163,25 +140,18 @@ export async function findPartnerByName(
   const normalized = crm.normalizePartnerName(rawName);
   const soughtCanonicalKey = normalized.canonicalKey;
   if (soughtCanonicalKey === null) return undefined;
-  const sql = crmPostgresOf(context);
-  // Both stores reduce to the same lookup shape: the stored canonical key, the
-  // stored aliases, and the row to parse. Match on those RAW values -- parsing
-  // first would strip the key.
-  const lookupRows: PartnerLookupRow[] =
-    sql !== undefined
-      ? (await listPartnerRowsPostgres(sql, tenantId)).map((row) => ({
-          // Phase A backfill rows carry no canonical_key; derive it from the name.
-          canonicalKey:
-            row.canonicalKey ??
-            crm.normalizePartnerName(String(row.candidate["canonicalName"] ?? "")).canonicalKey,
-          aliases: row.aliases,
-          stored: row.candidate,
-        }))
-      : (await context.table.queryGsi("GSI1", partnerListGsi1Pk(tenantId))).map((partnerItem) => ({
-          canonicalKey: partnerItem.GSI1SK ?? null,
-          aliases: storedAliasesOf(partnerItem),
-          stored: partnerItem,
-        }));
+  // The lookup shape: the stored canonical key, the stored aliases, and the
+  // row to parse. Match on those RAW values -- parsing first would strip the key.
+  const lookupRows: PartnerLookupRow[] = (
+    await listPartnerRowsPostgres(requireSql(context), tenantId)
+  ).map((row) => ({
+    // Phase A backfill rows carry no canonical_key; derive it from the name.
+    canonicalKey:
+      row.canonicalKey ??
+      crm.normalizePartnerName(String(row.candidate["canonicalName"] ?? "")).canonicalKey,
+    aliases: row.aliases,
+    stored: row.candidate,
+  }));
   const canonicalNameMatch = lookupRows.find((lookupRow) => lookupRow.canonicalKey === soughtCanonicalKey);
   const aliasMatch = lookupRows.find((lookupRow) =>
     lookupRow.aliases.some(
@@ -199,12 +169,11 @@ interface PartnerLookupRow {
 }
 
 /**
- * The single place a stored partner item becomes a domain Partner.
+ * The single place a stored partner row becomes a domain Partner.
  *
  * Raw, a ZodError is not an ApiError and router.ts maps only ApiError
  * subclasses — so a partner row that no longer satisfies PartnerSchema answered
- * 500 from every read. Typed as CorruptRecordError it answers 409, exactly as
- * readCase already does for a case partition that will not reassemble, and
+ * 500 from every read. Typed as CorruptRecordError it answers 409, and
  * listPartners can then catch precisely this and let everything else propagate.
  */
 function parseStoredPartner(partnerItem: Record<string, unknown>): crm.Partner {
@@ -227,8 +196,7 @@ export interface UpdatePartnerContactInput {
  * The desk types a vendor's email onto the system by hand (owner, 2026-09-25),
  * usually well after the partner was created by the importer with no contact
  * details at all. Only the three contact fields move; the name, aliases and
- * type have their own rules and stay exactly as stored. The raw item is
- * re-put with its GSI1 keys intact so the partner stays listed and findable.
+ * type have their own rules and stay exactly as stored.
  */
 export async function updatePartnerContact(
   context: AppContext,
@@ -236,15 +204,10 @@ export async function updatePartnerContact(
   partnerId: string,
   input: UpdatePartnerContactInput,
 ): Promise<crm.Partner> {
-  const sql = crmPostgresOf(context);
-  const partnerItem =
-    sql === undefined
-      ? await context.table.get(partnerPartitionKey(tenantId, partnerId), META_SORT_KEY)
-      : undefined;
-  const partnerRow = sql === undefined ? undefined : await getPartnerRowPostgres(sql, tenantId, partnerId);
-  const storedPartner = partnerItem ?? partnerRow?.candidate;
-  if (!storedPartner) throw notFound("Partner");
-  const currentPartner = parseStoredPartner(storedPartner);
+  const sql = requireSql(context);
+  const partnerRow = await getPartnerRowPostgres(sql, tenantId, partnerId);
+  if (!partnerRow) throw notFound("Partner");
+  const currentPartner = parseStoredPartner(partnerRow.candidate);
 
   const { contactEmail: _email, contactPhone: _phone, contactWhatsapp: _whatsapp, ...partnerWithoutContact } = currentPartner;
   const resolveField = (next: string | null | undefined, current: string | undefined): string | undefined =>
@@ -260,28 +223,6 @@ export async function updatePartnerContact(
     ...(contactWhatsapp !== undefined ? { contactWhatsapp } : {}),
   });
 
-  if (sql !== undefined) {
-    await updatePartnerContactPostgres(sql, updatedPartner, context.now().toISOString());
-    return updatedPartner;
-  }
-
-  // `TableItem` (lib/db.ts) types PK/SK as strings and GSI1PK/GSI1SK as
-  // optional strings, so these read back typed. GSI1SK is the canonical name
-  // key createPartner stored; it is not on PartnerSchema and must be carried
-  // over by hand or the partner drops out of every by-name lookup.
-  await context.table.put({
-    PK: partnerItem!.PK,
-    SK: partnerItem!.SK,
-    GSI1PK: partnerListGsi1Pk(tenantId),
-    ...(partnerItem!.GSI1SK !== undefined ? { GSI1SK: partnerItem!.GSI1SK } : {}),
-    ...updatedPartner,
-  });
+  await updatePartnerContactPostgres(sql, updatedPartner, context.now().toISOString());
   return updatedPartner;
-}
-
-/** The aliases on a raw stored item, ignoring anything that is not a string. */
-function storedAliasesOf(partnerItem: Record<string, unknown>): string[] {
-  const storedAliases = partnerItem["aliases"];
-  if (!Array.isArray(storedAliases)) return [];
-  return storedAliases.filter((alias): alias is string => typeof alias === "string");
 }

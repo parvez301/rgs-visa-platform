@@ -1,19 +1,11 @@
 import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../lib/context";
-import type { TableItem } from "../lib/db";
 import { badRequest, conflict, notFound } from "../lib/errors";
-import {
-  collectReadableRecords,
-  describeFirstZodIssue,
-  parseStoredRecord,
-  storedRecordId,
-  stripStorageKeys,
-} from "../lib/storedRecords";
+import { describeFirstZodIssue } from "../lib/storedRecords";
 import { getCase } from "../domain/crm/cases";
 import { recordCrmEvent } from "../domain/crm/crmEvents";
-import { PROPOSAL_SORT_KEY, proposalPartitionKey, proposalStatusGsi1Pk } from "../domain/crm/keys";
-import { crmPostgresOf } from "../domain/crm/postgresClient";
+import { requireSql } from "../domain/crm/postgresClient";
 import {
   getProposalPostgres,
   listProposalsByStatusPostgres,
@@ -174,27 +166,7 @@ async function putProposal(
   proposal: ProposedChange,
 ): Promise<void> {
   const validatedProposal = parseProposedChangeForWrite(proposal);
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    await upsertProposalPostgres(sql, tenantId, validatedProposal);
-    return;
-  }
-  await context.table.put({
-    PK: proposalPartitionKey(tenantId, validatedProposal.proposalId),
-    SK: PROPOSAL_SORT_KEY,
-    GSI1PK: proposalStatusGsi1Pk(tenantId, validatedProposal.status),
-    GSI1SK: validatedProposal.proposedAt,
-    ...validatedProposal,
-  });
-}
-
-function parseStoredProposal(storedItem: TableItem): ProposedChange {
-  return parseStoredRecord(
-    ProposedChangeSchema,
-    "Agent proposal",
-    storedRecordId(storedItem, "proposalId"),
-    stripStorageKeys(storedItem),
-  );
+  await upsertProposalPostgres(requireSql(context), tenantId, validatedProposal);
 }
 
 /**
@@ -230,23 +202,14 @@ export interface PendingProposalListing {
   unreadableProposalIds: string[];
 }
 
-/** The Dynamo path drains the PENDING partition; Postgres needs an explicit, generous cap. */
+/** An explicit, generous cap on the PENDING listing. */
 const PENDING_PROPOSAL_LIMIT = 10_000;
 
 export async function listPendingProposals(
   context: AppContext,
   tenantId: string,
 ): Promise<PendingProposalListing> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    return listProposalsByStatusPostgres(sql, tenantId, "PENDING", PENDING_PROPOSAL_LIMIT);
-  }
-  const storedItems = await context.table.queryGsi("GSI1", proposalStatusGsi1Pk(tenantId, "PENDING"));
-  const { records, unreadableRecordIds } = await collectReadableRecords(storedItems, parseStoredProposal, {
-    entityDescription: "agent proposal",
-    scopeDescription: `tenant ${tenantId}`,
-  });
-  return { proposals: records, unreadableProposalIds: unreadableRecordIds };
+  return listProposalsByStatusPostgres(requireSql(context), tenantId, "PENDING", PENDING_PROPOSAL_LIMIT);
 }
 
 /**
@@ -269,27 +232,7 @@ export async function getProposal(
   tenantId: string,
   proposalId: string,
 ): Promise<ProposedChange | undefined> {
-  // Postgres reads are read-your-writes, so the consistency note below is
-  // moot there.
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) return getProposalPostgres(sql, tenantId, proposalId);
-  // Strongly consistent, the same opt-in `caseStore.readCase` takes and for
-  // the same documented reason (db.ts's GetOptions: "an eventually consistent
-  // get can miss an item that was written moments earlier, which reads back
-  // as a record that does not exist"). This is the ONE read every proposal
-  // path goes through -- readProposalOrThrow, and therefore approve and
-  // discard -- and the window it would otherwise open is measured in
-  // consequences, not milliseconds (branch review I1): `stageProposal` hands
-  // the user a proposalId immediately, so a human clicking Approve inside the
-  // replication window would get "404 Proposal not found" for a proposal that
-  // exists, and the trust ladder's auto-apply path (loop.ts) stages and
-  // approves in the same breath, where a stale read sends the turn into its
-  // indeterminate arm and tells the user to go check a proposal by hand.
-  const storedItem = await context.table.get(proposalPartitionKey(tenantId, proposalId), PROPOSAL_SORT_KEY, {
-    consistentRead: true,
-  });
-  if (storedItem === undefined) return undefined;
-  return parseStoredProposal(storedItem);
+  return getProposalPostgres(requireSql(context), tenantId, proposalId);
 }
 
 async function readProposalOrThrow(

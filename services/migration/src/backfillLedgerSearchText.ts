@@ -1,7 +1,7 @@
 import { readCase, writeCase } from "@rgs/api/src/domain/crm/caseStore";
 import { listCaseRefsByStatus } from "@rgs/api/src/domain/crm/cases";
 import { casePartitionKey, META_SORT_KEY } from "@rgs/api/src/domain/crm/keys";
-import { resolveLedgerSearchText } from "@rgs/api/src/domain/crm/ledgerSearchText";
+import { resolveLedgerSearchText } from "./ledgerSearchText";
 import { CorruptRecordError } from "@rgs/api/src/lib/errors";
 import type { AppContext } from "@rgs/api/src/lib/context";
 import { crm } from "@rgs/shared";

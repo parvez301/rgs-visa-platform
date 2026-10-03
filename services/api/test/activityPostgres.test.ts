@@ -133,7 +133,7 @@ describe("activity", () => {
     const { sql: _removed, ...withoutSql }: AppContext = context;
     void _removed;
     await expect(logActivity(withoutSql, "SIGNED_UP", "user_1", undefined)).rejects.toThrow(
-      "CRM_STORE=postgres requires context.sql",
+      "AppContext.sql is required",
     );
   });
 });

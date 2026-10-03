@@ -1,32 +1,9 @@
 import { crm } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
-import { CorruptRecordError } from "../../lib/errors";
-import { readCase } from "./caseStore";
 import { readCasesPostgres } from "./caseStorePostgres";
-import { crmPostgresOf } from "./postgresClient";
+import { requireSql } from "./postgresClient";
 import { resolveCaseTravellers } from "./caseTravellers";
 import { listPartners } from "./partners";
-
-/** Parallel reads per batch: fast enough for 500 cases in a few seconds, gentle on on-demand capacity. */
-const EXPORT_READ_CONCURRENCY = 20;
-
-async function mapWithConcurrency<InputType, OutputType>(
-  inputs: readonly InputType[],
-  concurrencyLimit: number,
-  mapInput: (input: InputType) => Promise<OutputType>,
-): Promise<OutputType[]> {
-  const outputs: OutputType[] = new Array(inputs.length);
-  let nextInputIndex = 0;
-  async function drainQueue(): Promise<void> {
-    while (nextInputIndex < inputs.length) {
-      const inputIndex = nextInputIndex;
-      nextInputIndex += 1;
-      outputs[inputIndex] = await mapInput(inputs[inputIndex]!);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrencyLimit, inputs.length) }, drainQueue));
-  return outputs;
-}
 
 type LoadedExportCase = {
   caseId: string;
@@ -35,37 +12,22 @@ type LoadedExportCase = {
 };
 
 /**
- * Under CRM_STORE=postgres every statement queues on `createPgSqlClient`'s
- * one-connection pool, so fan-out buys nothing and per-case reads cost ~3
- * round-trips each (1,500 for 500 cases). Load the whole set instead: one
- * `crm_cases` query, one `crm_applicants` query and one `crm_travellers` query
- * for the batch -- a constant ~3 round-trips however many ids are exported.
- * Dynamo keeps the bounded per-case fan-out.
+ * Every statement queues on `createPgSqlClient`'s one-connection pool, so
+ * fan-out buys nothing and per-case reads cost ~3 round-trips each (1,500 for
+ * 500 cases). Load the whole set instead: one `crm_cases` query, one
+ * `crm_applicants` query and one `crm_travellers` query for the batch -- a
+ * constant ~3 round-trips however many ids are exported.
  */
 async function loadExportCases(
   context: AppContext,
   tenantId: string,
   caseIds: readonly string[],
 ): Promise<LoadedExportCase[]> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    const { cases } = await readCasesPostgres(sql, tenantId, caseIds);
-    const allApplicants = [...cases.values()].flatMap((storedCase) => storedCase.applicants);
-    // One map for the whole export: the row builder looks travellers up by id.
-    const travellers = await resolveCaseTravellers(context, tenantId, allApplicants);
-    return caseIds.map((caseId) => ({ caseId, storedCase: cases.get(caseId), travellers }));
-  }
-  return mapWithConcurrency(caseIds, EXPORT_READ_CONCURRENCY, async (caseId) => {
-    try {
-      const storedCase = await readCase(context, tenantId, caseId);
-      if (storedCase === undefined) return { caseId, storedCase: undefined, travellers: {} };
-      const travellers = await resolveCaseTravellers(context, tenantId, storedCase.applicants);
-      return { caseId, storedCase, travellers };
-    } catch (error) {
-      if (!(error instanceof CorruptRecordError)) throw error;
-      return { caseId, storedCase: undefined, travellers: {} };
-    }
-  });
+  const { cases } = await readCasesPostgres(requireSql(context), tenantId, caseIds);
+  const allApplicants = [...cases.values()].flatMap((storedCase) => storedCase.applicants);
+  // One map for the whole export: the row builder looks travellers up by id.
+  const travellers = await resolveCaseTravellers(context, tenantId, allApplicants);
+  return caseIds.map((caseId) => ({ caseId, storedCase: cases.get(caseId), travellers }));
 }
 
 /**

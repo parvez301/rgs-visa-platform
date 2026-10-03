@@ -2,15 +2,9 @@ import { ZodError } from "zod";
 import { crm } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { badRequest } from "../lib/errors";
-import {
-  describeFirstZodIssue,
-  parseStoredRecord,
-  storedRecordId,
-  stripStorageKeys,
-} from "../lib/storedRecords";
-import { CRM_USER_PREFS_SORT_KEY, crmUserPrefsPartitionKey } from "../domain/crm/keys";
+import { describeFirstZodIssue } from "../lib/storedRecords";
 import { readUserPrefsPostgres, writeUserPrefsPostgres } from "../domain/crm/prefsPostgres";
-import { crmPostgresOf } from "../domain/crm/postgresClient";
+import { requireSql } from "../domain/crm/postgresClient";
 
 /**
  * One CRM user's trust-ladder preferences (task-10 brief, spec §7). Persists
@@ -64,16 +58,7 @@ async function readStoredUserPrefs(
   tenantId: string,
   email: string,
 ): Promise<crm.CrmUserPrefs | undefined> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) return readUserPrefsPostgres(sql, tenantId, email);
-  const storedItem = await context.table.get(crmUserPrefsPartitionKey(tenantId, email), CRM_USER_PREFS_SORT_KEY);
-  if (storedItem === undefined) return undefined;
-  return parseStoredRecord(
-    crm.CrmUserPrefsSchema,
-    "CRM user prefs",
-    storedRecordId(storedItem, "email"),
-    stripStorageKeys(storedItem),
-  );
+  return readUserPrefsPostgres(requireSql(context), tenantId, email);
 }
 
 async function writeUserPrefs(
@@ -99,16 +84,7 @@ async function writeUserPrefs(
     }
     throw error;
   }
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    await writeUserPrefsPostgres(sql, { ...validatedUserPrefs, tenantId });
-    return validatedUserPrefs;
-  }
-  await context.table.put({
-    PK: crmUserPrefsPartitionKey(tenantId, validatedUserPrefs.email),
-    SK: CRM_USER_PREFS_SORT_KEY,
-    ...validatedUserPrefs,
-  });
+  await writeUserPrefsPostgres(requireSql(context), { ...validatedUserPrefs, tenantId });
   return validatedUserPrefs;
 }
 

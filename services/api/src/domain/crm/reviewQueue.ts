@@ -1,18 +1,10 @@
 import { crm } from "@rgs/shared";
 import { ZodError } from "zod";
 import type { AppContext } from "../../lib/context";
-import type { TableItem } from "../../lib/db";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
-import {
-  collectReadableRecords,
-  describeFirstZodIssue,
-  parseStoredRecord,
-  storedRecordId,
-  stripStorageKeys,
-} from "../../lib/storedRecords";
-import { REVIEW_ITEM_SORT_KEY, reviewItemPartitionKey, reviewQueueGsi1Pk } from "./keys";
-import { crmPostgresOf } from "./postgresClient";
+import { describeFirstZodIssue } from "../../lib/storedRecords";
+import { requireSql } from "./postgresClient";
 import {
   getReviewItemPostgres,
   insertReviewItemPostgres,
@@ -24,13 +16,9 @@ import {
  * The migration review queue: the rows the importer could not apply
  * deterministically, parked for a human. Spec §9.
  *
- * Storage shape mirrors partners.ts — one item per review item, the record
- * itself under the shared meta sort key, and a GSI1 partition per review
- * status so the screen is one query rather than a scan. Under
- * `CRM_STORE=postgres` the same items live in `crm_review_items`
- * (reviewQueuePostgres.ts), indexed on (tenant_id, review_status), and Dynamo
- * is not touched. The review-group sweep (reviewGroups.ts) reads the same
- * table, so it dispatches too.
+ * One row per review item in `crm_review_items` (reviewQueuePostgres.ts),
+ * indexed on (tenant_id, review_status). The review-group sweep
+ * (reviewGroups.ts) reads the same table.
  */
 export interface RecordReviewItemInput {
   reason: crm.ReviewReason;
@@ -53,9 +41,9 @@ export interface ReviewItemListing {
    */
   unreadableReviewItemIds: string[];
   /**
-   * True when the partition holds more items than this page returned.
+   * True when the queue holds more items than this page returned.
    *
-   * A real import puts 3,932 OPEN items into one GSI1 partition, of which
+   * A real import puts 3,932 OPEN items into the queue, of which
    * this returns 200 — so 5.1% of the queue was reachable and nothing in the
    * response said so. An operator works the 200 they can see, refreshes,
    * sees another 200, and at some point concludes the migration is clean
@@ -82,9 +70,8 @@ export async function recordReviewItem(
     caseRef: input.caseRef,
     fieldName: input.fieldName,
     rawValue: input.rawValue,
-    // Spread conditionally rather than assigning undefined: DynamoDB rejects an
-    // undefined attribute value, and a key that merely exists renders as an
-    // empty suggestion on the review screen.
+    // Spread conditionally rather than assigning undefined: a key that merely
+    // exists renders as an empty suggestion on the review screen.
     ...(input.proposedValue !== undefined ? { proposedValue: input.proposedValue } : {}),
     ...(input.confidence !== undefined ? { confidence: input.confidence } : {}),
     ...(input.detail !== undefined ? { detail: input.detail } : {}),
@@ -136,27 +123,7 @@ export async function listReviewItems(
   reviewStatus: crm.ReviewStatus,
   limit = 200,
 ): Promise<ReviewItemListing> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) return listReviewItemsPostgres(sql, tenantId, reviewStatus, limit);
-  // One more than the page, then dropped: the extra row is how the caller
-  // learns the queue did not fit, and it costs one item's worth of read.
-  const storedItemsPlusOne = await context.table.queryGsi(
-    "GSI1",
-    reviewQueueGsi1Pk(tenantId, reviewStatus),
-    { limit: limit + 1, scanForward: true },
-  );
-  const hasMore = storedItemsPlusOne.length > limit;
-  const storedItems = hasMore ? storedItemsPlusOne.slice(0, limit) : storedItemsPlusOne;
-  const { records, unreadableRecordIds } = await collectReadableRecords(
-    storedItems,
-    parseStoredReviewItem,
-    { entityDescription: "CRM review item", scopeDescription: `tenant ${tenantId}` },
-  );
-  return {
-    reviewItems: records,
-    unreadableReviewItemIds: unreadableRecordIds,
-    hasMore,
-  };
+  return listReviewItemsPostgres(requireSql(context), tenantId, reviewStatus, limit);
 }
 
 export async function getReviewItemOrThrow(
@@ -164,18 +131,9 @@ export async function getReviewItemOrThrow(
   tenantId: string,
   reviewItemId: string,
 ): Promise<crm.ReviewItem> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    const postgresItem = await getReviewItemPostgres(sql, tenantId, reviewItemId);
-    if (!postgresItem) throw notFound("Review item");
-    return postgresItem;
-  }
-  const storedItem = await context.table.get(
-    reviewItemPartitionKey(tenantId, reviewItemId),
-    REVIEW_ITEM_SORT_KEY,
-  );
-  if (!storedItem) throw notFound("Review item");
-  return parseStoredReviewItem(storedItem);
+  const postgresItem = await getReviewItemPostgres(requireSql(context), tenantId, reviewItemId);
+  if (!postgresItem) throw notFound("Review item");
+  return postgresItem;
 }
 
 export interface ReviewItemResolution {
@@ -215,28 +173,11 @@ export async function resolveReviewItem(
 }
 
 /**
- * The single place a review item reaches storage.
- *
- * GSI1PK is derived from the item's own status on every write, so a resolved
- * item leaves the OPEN partition. Writing it once at creation and not again
- * leaves resolved items in the OPEN partition forever, and the review screen
- * never empties.
+ * The single place a review item reaches storage. The status column is
+ * written with every item, so a resolved item leaves the OPEN queue.
  */
 async function writeReviewItem(context: AppContext, reviewItem: crm.ReviewItem): Promise<void> {
-  const sql = crmPostgresOf(context);
-  if (sql !== undefined) {
-    await insertReviewItemPostgres(sql, reviewItem);
-    return;
-  }
-  await context.table.put({
-    PK: reviewItemPartitionKey(reviewItem.tenantId, reviewItem.reviewItemId),
-    SK: REVIEW_ITEM_SORT_KEY,
-    GSI1PK: reviewQueueGsi1Pk(reviewItem.tenantId, reviewItem.reviewStatus),
-    // createdAt, not resolvedAt: the queue is read oldest-first and a resolved
-    // item keeps the position it was imported at.
-    GSI1SK: reviewItem.createdAt,
-    ...reviewItem,
-  });
+  await insertReviewItemPostgres(requireSql(context), reviewItem);
 }
 
 /**
@@ -246,18 +187,9 @@ async function writeReviewItem(context: AppContext, reviewItem: crm.ReviewItem):
  * `listReviewItems` cannot answer this: it caps at 200 of 3,958 OPEN items and
  * has no cursor, so a marker built on it would appear on 5% of the dirty rows
  * and nowhere else -- which reads as "the rest are clean". This reads the whole
- * OPEN partition with a five-attribute projection instead, and carries the item
- * ids so opening a marker is a `get` per item actually opened rather than a
- * second sweep.
+ * OPEN queue instead, and carries the item ids so opening a marker is a single
+ * lookup per item actually opened rather than a second sweep.
  */
-export const OPEN_REVIEW_SUMMARY_ATTRIBUTES: readonly string[] = [
-  "PK",
-  "SK",
-  "reviewItemId",
-  "caseRef",
-  "reason",
-];
-
 export interface OpenReviewSummaryEntry {
   caseRef: string;
   /**
@@ -296,30 +228,15 @@ export async function summariseOpenReviewItems(
   context: AppContext,
   tenantId: string,
 ): Promise<OpenReviewSummary> {
-  const sql = crmPostgresOf(context);
-  // Both stores feed the same loop: the candidate the schema checks, the id to
-  // name the row by when it fails, and the label the warning points at.
-  const summaryRows: Array<{
-    candidate: Record<string, unknown>;
-    fallbackId: string;
-    rowLabel: string;
-  }> =
-    sql !== undefined
-      ? (await listOpenReviewSummaryRowsPostgres(sql, tenantId)).map((postgresRow) => ({
-          candidate: postgresRow.candidate,
-          fallbackId: postgresRow.reviewItemId,
-          rowLabel: postgresRow.reviewItemId,
-        }))
-      : (
-          await context.table.queryGsi("GSI1", reviewQueueGsi1Pk(tenantId, "OPEN"), {
-            scanForward: true,
-            projection: OPEN_REVIEW_SUMMARY_ATTRIBUTES,
-          })
-        ).map((storedItem) => ({
-          candidate: storedItem,
-          fallbackId: storedItem.PK,
-          rowLabel: storedItem.PK,
-        }));
+  // The candidate the schema checks, the id to name the row by when it fails,
+  // and the label the warning points at.
+  const summaryRows = (await listOpenReviewSummaryRowsPostgres(requireSql(context), tenantId)).map(
+    (postgresRow) => ({
+      candidate: postgresRow.candidate,
+      fallbackId: postgresRow.reviewItemId,
+      rowLabel: postgresRow.reviewItemId,
+    }),
+  );
 
   const entriesByCaseRef = new Map<string, OpenReviewSummaryEntry>();
   const unreadableReviewItemIds: string[] = [];
@@ -363,22 +280,4 @@ export async function summariseOpenReviewItems(
   }
 
   return { entries: [...entriesByCaseRef.values()], unreadableReviewItemIds };
-}
-
-/**
- * The single place a stored item becomes a domain ReviewItem.
- *
- * Raw, a ZodError is not an ApiError and router.ts maps only ApiError
- * subclasses — so a review row that no longer satisfies ReviewItemSchema would
- * answer 500 from every read. Typed as CorruptRecordError it answers 409,
- * exactly as partners.ts does, and listReviewItems can then catch precisely
- * this and let everything else propagate.
- */
-function parseStoredReviewItem(storedItem: TableItem): crm.ReviewItem {
-  return parseStoredRecord(
-    crm.ReviewItemSchema,
-    "Review item",
-    storedRecordId(storedItem, "reviewItemId"),
-    stripStorageKeys(storedItem),
-  );
 }
