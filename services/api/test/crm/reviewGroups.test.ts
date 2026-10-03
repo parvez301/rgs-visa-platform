@@ -1,13 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { buildTestContext, type TestContext } from "../helpers";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 import { completeCaseRefReservation, reserveCaseRef } from "../../src/domain/crm/caseRefIndex";
-import { createCase, getCase } from "../../src/domain/crm/cases";
+import { createCase, getCase, listCasesByPartner } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
-import { partnerCasesGsi2Pk } from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
 import { listOpenReviewGroups, resolveReviewGroup } from "../../src/domain/crm/reviewGroups";
 import { getReviewItemOrThrow, listReviewItems, recordReviewItem } from "../../src/domain/crm/reviewQueue";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
+
+afterEach(closeSqlTestContexts);
 
 const TENANT = "rgs";
 const ACTOR = "ops@rgs.test";
@@ -17,7 +18,7 @@ const ACTOR = "ops@rgs.test";
  * the review screen uses to find it. `createCase` alone writes no
  * reservation, and every review item points at a case the importer wrote.
  */
-async function seedCase(context: TestContext, partnerId: string, caseRef: string) {
+async function seedCase(context: SqlTestContext, partnerId: string, caseRef: string) {
   const traveller = await upsertTraveller(context, TENANT, { fullName: `Traveller ${caseRef}` });
   const created = await createCase(
     context,
@@ -38,7 +39,7 @@ async function seedCase(context: TestContext, partnerId: string, caseRef: string
   return created;
 }
 
-async function seedPartnerItem(context: TestContext, caseRef: string, rawValue: string, proposedValue?: string) {
+async function seedPartnerItem(context: SqlTestContext, caseRef: string, rawValue: string, proposedValue?: string) {
   return recordReviewItem(context, TENANT, {
     reason: "UNMAPPED_PARTNER",
     sourceSheet: "Mini CRM",
@@ -52,7 +53,7 @@ async function seedPartnerItem(context: TestContext, caseRef: string, rawValue: 
 
 describe("listOpenReviewGroups", () => {
   it("groups open items by exact (reason, column, raw text), biggest group first, with a sample of refs", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await seedPartnerItem(context, "38001", "GALAXY");
     await seedPartnerItem(context, "38002", "GALAXY", "partner_galaxy");
     await seedPartnerItem(context, "38003", "Galaxy Travels");
@@ -89,7 +90,7 @@ describe("listOpenReviewGroups", () => {
   });
 
   it("does not group a resolved item", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await seedPartnerItem(context, "38001", "GALAXY");
     await resolveReviewGroup(
       context,
@@ -103,7 +104,7 @@ describe("listOpenReviewGroups", () => {
 
 describe("resolveReviewGroup", () => {
   it("dismisses in chunks and reports what is left, so a 15-second Lambda can work a 300-item group", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     for (let index = 0; index < 5; index += 1) await seedPartnerItem(context, `3800${index}`, "GALAXY");
     await seedPartnerItem(context, "38999", "OTHER");
 
@@ -129,7 +130,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("APPLIED on a partner group moves every case to that partner, re-keys the partner index, and closes the items", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const sentinel = await createPartner(context, TENANT, { canonicalName: "(no referrer recorded)" }, ACTOR);
     const galaxy = await createPartner(context, TENANT, { canonicalName: "Galaxy Travels" }, ACTOR);
     const firstCase = await seedCase(context, sentinel.partnerId, "38001");
@@ -156,12 +157,14 @@ describe("resolveReviewGroup", () => {
       const updated = await getCase(context, TENANT, seeded.caseId);
       expect(updated.partnerId).toBe(galaxy.partnerId);
     }
-    // The by-partner listing reads GSI2; a partner change that leaves the old
-    // key behind would list the case under the sentinel forever.
-    const underGalaxy = await context.table.queryGsi("GSI2", partnerCasesGsi2Pk(TENANT, galaxy.partnerId), {});
-    expect(underGalaxy.map((item) => item["caseId"]).sort()).toEqual([firstCase.caseId, secondCase.caseId].sort());
-    const underSentinel = await context.table.queryGsi("GSI2", partnerCasesGsi2Pk(TENANT, sentinel.partnerId), {});
-    expect(underSentinel).toEqual([]);
+    // The by-partner listing must follow the move; a partner change that left
+    // the old link behind would list the case under the sentinel forever.
+    const underGalaxy = await listCasesByPartner(context, TENANT, galaxy.partnerId);
+    expect(underGalaxy.cases.map((listed) => listed.caseId).sort()).toEqual(
+      [firstCase.caseId, secondCase.caseId].sort(),
+    );
+    const underSentinel = await listCasesByPartner(context, TENANT, sentinel.partnerId);
+    expect(underSentinel.cases).toEqual([]);
 
     const closedItem = await getReviewItemOrThrow(context, TENANT, firstItem.reviewItemId);
     expect(closedItem.reviewStatus).toBe("APPLIED");
@@ -176,7 +179,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("writes an unparseable date into the case field its workbook column maps to", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(context, TENANT, { canonicalName: "Galaxy Travels" }, ACTOR);
     const seeded = await seedCase(context, partner.partnerId, "38001");
     await recordReviewItem(context, TENANT, {
@@ -207,7 +210,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("refuses a bad value for the whole group before touching any case", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     await recordReviewItem(context, TENANT, {
       reason: "UNMAPPED_COUNTRY",
       sourceSheet: "Mini CRM",
@@ -227,7 +230,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("refuses APPLIED on a reason that has nothing to write back", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const attempt = resolveReviewGroup(
       context,
       TENANT,
@@ -238,7 +241,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("refuses an unknown partner id before touching any case", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const attempt = resolveReviewGroup(
       context,
       TENANT,
@@ -249,7 +252,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("names a case it could not rewrite and leaves that item OPEN, while the rest of the group still closes", async () => {
-    const context = buildTestContext();
+    const context = await buildSqlTestContext();
     const partner = await createPartner(context, TENANT, { canonicalName: "Galaxy Travels" }, ACTOR);
     const filed = await seedCase(context, partner.partnerId, "38001");
     const filedItem = await seedPartnerItem(context, "38001", "GALAXY");
@@ -279,5 +282,30 @@ describe("resolveReviewGroup", () => {
     expect((await getReviewItemOrThrow(context, TENANT, filedItem.reviewItemId)).reviewStatus).toBe("APPLIED");
     expect((await getReviewItemOrThrow(context, TENANT, orphanItem.reviewItemId)).reviewStatus).toBe("OPEN");
     expect((await getCase(context, TENANT, filed.caseId)).partnerId).toBe(partner.partnerId);
+  });
+});
+
+describe("a review row the group sweep cannot read", () => {
+  it("is named in the listing and is left alone, while the readable rows still group", async () => {
+    const context = await buildSqlTestContext();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await seedPartnerItem(context, "38001", "GALAXY");
+      await context.sql.query(
+        `insert into crm_review_items
+           (tenant_id, review_item_id, reason, source_sheet, source_row, case_ref,
+            field_name, raw_value, created_at)
+         values ($1, 'rev_bad_reason', 'NOT_A_REASON', 'Mini CRM', 7, '38002',
+                 'REFRENCE', 'GALAXY', now())`,
+        [TENANT],
+      );
+
+      const listing = await listOpenReviewGroups(context, TENANT);
+      expect(listing.unreadableReviewItemIds).toEqual(["rev_bad_reason"]);
+      expect(listing.groups).toHaveLength(1);
+      expect(listing.groups[0]?.itemCount).toBe(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

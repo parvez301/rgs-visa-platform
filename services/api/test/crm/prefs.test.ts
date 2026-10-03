@@ -1,27 +1,21 @@
-import { PGlite } from "@electric-sql/pglite";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   readTrustLevel,
   readUserPrefs,
   recordConfirmedWithoutEdit,
   setUserPrefs,
 } from "../../src/agent/prefs";
-import { applyMigrations } from "../../src/db/migrate";
-import { CRM_USER_PREFS_SORT_KEY, crmUserPrefsPartitionKey } from "../../src/domain/crm/keys";
 import { readUserPrefsPostgres, writeUserPrefsPostgres } from "../../src/domain/crm/prefsPostgres";
-import type { AppContext } from "../../src/lib/context";
 import type { SqlClient } from "../../src/lib/sql";
-import { buildTestContext, type TestContext } from "../helpers";
-import { pgliteAsSqlClient } from "../pgliteSqlClient";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 
 const TENANT_ID = "rgs";
 const ALICE = "alice@rgs.local";
 const BOB = "bob@rgs.local";
 
-describe("CRM user prefs with CRM_STORE=postgres", () => {
+describe("CRM user prefs", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
     const result = await sql.query<{ value: T }>(text, values);
@@ -29,11 +23,11 @@ describe("CRM user prefs with CRM_STORE=postgres", () => {
   }
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext({ seedStatusEmailTemplates: false });
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    sql = context.sql;
   });
+
+  afterEach(closeSqlTestContexts);
 
   it("reads nothing for a user with no row, and the safe defaults through readUserPrefs", async () => {
     expect(await readUserPrefsPostgres(sql, TENANT_ID, ALICE)).toBeUndefined();
@@ -77,7 +71,7 @@ describe("CRM user prefs with CRM_STORE=postgres", () => {
     });
   });
 
-  it("setUserPrefs stores in Postgres, merges onto the existing row, and leaves Dynamo empty", async () => {
+  it("setUserPrefs merges onto the existing row in one stored row", async () => {
     await setUserPrefs(context, TENANT_ID, ALICE, { trustLevel: 2, autoApplyOptIn: true });
     const merged = await setUserPrefs(context, TENANT_ID, ALICE, { trustLevel: 1 });
 
@@ -85,9 +79,6 @@ describe("CRM user prefs with CRM_STORE=postgres", () => {
     expect(merged.autoApplyOptIn).toBe(true);
     expect(await readTrustLevel(context, TENANT_ID, ALICE)).toBe(1);
     expect(await scalar<number>("select count(*)::int as value from crm_user_prefs")).toBe(1);
-    expect(
-      await baseContext.table.get(crmUserPrefsPartitionKey(TENANT_ID, ALICE), CRM_USER_PREFS_SORT_KEY),
-    ).toBeUndefined();
   });
 
   it("recordConfirmedWithoutEdit increments the count without touching trust or opt-in", async () => {
@@ -98,9 +89,6 @@ describe("CRM user prefs with CRM_STORE=postgres", () => {
     expect(userPrefs.confirmedWithoutEditCount).toBe(2);
     expect(userPrefs.trustLevel).toBe(0);
     expect(userPrefs.autoApplyOptIn).toBe(false);
-    expect(
-      await baseContext.table.get(crmUserPrefsPartitionKey(TENANT_ID, ALICE), CRM_USER_PREFS_SORT_KEY),
-    ).toBeUndefined();
   });
 
   it("refuses an out-of-range trustLevel with a 400 and writes nothing", async () => {

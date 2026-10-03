@@ -1,5 +1,4 @@
-import { PGlite } from "@electric-sql/pglite";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyApprovedChange,
   discardProposal,
@@ -10,19 +9,11 @@ import {
 } from "../../src/agent/approval";
 import { ToolRegistry } from "../../src/agent/tools/registry";
 import { WRITE_TOOLS } from "../../src/agent/tools/writeTools";
-import { applyMigrations } from "../../src/db/migrate";
 import { createCase } from "../../src/domain/crm/cases";
-import {
-  PROPOSAL_SORT_KEY,
-  proposalPartitionKey,
-  proposalStatusGsi1Pk,
-} from "../../src/domain/crm/keys";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
-import type { AppContext } from "../../src/lib/context";
 import type { SqlClient } from "../../src/lib/sql";
-import { buildTestContext, type TestContext } from "../helpers";
-import { pgliteAsSqlClient } from "../pgliteSqlClient";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
@@ -42,27 +33,13 @@ function proposal(proposalId: string, overrides: Partial<ProposedChange> = {}): 
   };
 }
 
-describe("agent proposals with CRM_STORE=postgres", () => {
+describe("agent proposals", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
     const result = await sql.query<{ value: T }>(text, values);
     return result.rows[0]!.value;
-  }
-
-  async function dynamoProposalRowCount(proposalId: string): Promise<number> {
-    const byKey = await baseContext.table.get(
-      proposalPartitionKey(TENANT_ID, proposalId),
-      PROPOSAL_SORT_KEY,
-    );
-    const pending = await baseContext.table.queryGsi(
-      "GSI1",
-      proposalStatusGsi1Pk(TENANT_ID, "PENDING"),
-      {},
-    );
-    return (byKey === undefined ? 0 : 1) + pending.length;
   }
 
   async function seedCase() {
@@ -90,13 +67,13 @@ describe("agent proposals with CRM_STORE=postgres", () => {
   }
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext({ seedStatusEmailTemplates: false });
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    sql = context.sql;
   });
 
-  it("stages a PENDING proposal in Postgres with jsonb input/summary, and leaves Dynamo empty", async () => {
+  afterEach(closeSqlTestContexts);
+
+  it("stages a PENDING proposal in Postgres with jsonb input/summary", async () => {
     const staged = await stageProposal(context, TENANT_ID, proposal("prop_1"));
 
     expect(await scalar<number>("select count(*)::int as value from crm_proposals")).toBe(1);
@@ -105,7 +82,6 @@ describe("agent proposals with CRM_STORE=postgres", () => {
         "select jsonb_typeof(input) || '/' || jsonb_typeof(summary) as value from crm_proposals",
       ),
     ).toBe("object/array");
-    expect(await dynamoProposalRowCount("prop_1")).toBe(0);
 
     expect(await getProposal(context, TENANT_ID, "prop_1")).toEqual(staged);
   });
@@ -136,7 +112,6 @@ describe("agent proposals with CRM_STORE=postgres", () => {
     expect(await scalar<number>("select count(*)::int as value from crm_proposals")).toBe(1);
     expect(await getProposal(context, TENANT_ID, "prop_1")).toEqual(discarded);
     expect((await listPendingProposals(context, TENANT_ID)).proposals).toEqual([]);
-    expect(await dynamoProposalRowCount("prop_1")).toBe(0);
 
     await expect(
       discardProposal(context, TENANT_ID, "prop_1", ACTOR, "again"),
@@ -163,14 +138,13 @@ describe("agent proposals with CRM_STORE=postgres", () => {
     expect(approved!.input).toEqual(staged.input);
     expect(await scalar<number>("select count(*)::int as value from crm_proposals")).toBe(1);
     expect((await listPendingProposals(context, TENANT_ID)).proposals).toEqual([]);
-    expect(await dynamoProposalRowCount(staged.proposalId)).toBe(0);
 
     await expect(
       applyApprovedChange(context, TENANT_ID, staged.proposalId, ACTOR),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
-  it("answers 404 when approving or discarding a proposal that is not in Postgres", async () => {
+  it("answers 404 when approving or discarding a proposal that does not exist", async () => {
     await expect(
       applyApprovedChange(context, TENANT_ID, "prop_missing", ACTOR),
     ).rejects.toMatchObject({ statusCode: 404 });
@@ -208,14 +182,5 @@ describe("agent proposals with CRM_STORE=postgres", () => {
     } finally {
       warn.mockRestore();
     }
-  });
-
-  it("still uses the Dynamo table when the context is not postgres", async () => {
-    const dynamoContext = buildTestContext();
-    await stageProposal(dynamoContext, TENANT_ID, proposal("prop_1"));
-    expect(
-      await dynamoContext.table.get(proposalPartitionKey(TENANT_ID, "prop_1"), PROPOSAL_SORT_KEY),
-    ).toBeDefined();
-    expect(await scalar<number>("select count(*)::int as value from crm_proposals")).toBe(0);
   });
 });

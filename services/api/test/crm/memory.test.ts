@@ -1,8 +1,5 @@
-import { PGlite } from "@electric-sql/pglite";
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyMigrations } from "../../src/db/migrate";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createCase } from "../../src/domain/crm/cases";
-import { memoryPartitionKey } from "../../src/domain/crm/keys";
 import {
   forgetMemory,
   getMemoryOrUndefined,
@@ -13,29 +10,21 @@ import {
 } from "../../src/domain/crm/memory";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
-import type { AppContext } from "../../src/lib/context";
 import type { SqlClient } from "../../src/lib/sql";
-import { buildTestContext, type TestContext } from "../helpers";
-import { pgliteAsSqlClient } from "../pgliteSqlClient";
+import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
 
 const TENANT_ID = "rgs";
 const ALICE = "alice@rgs.local";
 const BOB = "bob@rgs.local";
 const NOW_ISO = "2026-07-23T10:00:00.000Z";
 
-describe("CRM memory with CRM_STORE=postgres", () => {
+describe("CRM memory", () => {
   let sql: SqlClient;
-  let baseContext: TestContext;
-  let context: TestContext & AppContext;
+  let context: SqlTestContext;
 
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
     const result = await sql.query<{ value: T }>(text, values);
     return result.rows[0]!.value;
-  }
-
-  async function dynamoMemoryRowCount(scope: string): Promise<number> {
-    const items = await baseContext.table.query(memoryPartitionKey(TENANT_ID, scope), {});
-    return items.length;
   }
 
   async function seedCase() {
@@ -63,13 +52,13 @@ describe("CRM memory with CRM_STORE=postgres", () => {
   }
 
   beforeEach(async () => {
-    sql = pgliteAsSqlClient(new PGlite());
-    await applyMigrations(sql);
-    baseContext = buildTestContext({ seedStatusEmailTemplates: false });
-    context = { ...baseContext, crmStore: "postgres", sql };
+    context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    sql = context.sql;
   });
 
-  it("remembers an ORG memory in Postgres, recalls it, and leaves Dynamo empty", async () => {
+  afterEach(closeSqlTestContexts);
+
+  it("remembers an ORG memory, recalls it, and stores one row", async () => {
     const remembered = await rememberMemory(
       context,
       TENANT_ID,
@@ -82,7 +71,6 @@ describe("CRM memory with CRM_STORE=postgres", () => {
     expect(remembered.sourceCaseId).toBeUndefined();
 
     expect(await scalar<number>("select count(*)::int as value from crm_memories")).toBe(1);
-    expect(await dynamoMemoryRowCount("ORG")).toBe(0);
 
     const listing = await recallMemories(context, TENANT_ID, [memoryScope("ORG")]);
     expect(listing.unreadableMemoryKeys).toEqual([]);
