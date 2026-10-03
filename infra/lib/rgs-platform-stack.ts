@@ -40,12 +40,17 @@ export class RgsPlatformStack extends cdk.Stack {
     const removalPolicy = isProduction ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
 
     // ---------- Data ----------
+    // Staging RETAIN so a later template that drops this resource orphans
+    // rgs-platform-staging instead of deleting it (Phase D.2).
+    const platformTableRemovalPolicy =
+      stage === "staging" || isProduction ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
+
     const platformTable = new dynamodb.Table(this, "PlatformTable", {
       tableName: `rgs-platform-${stage}`,
       partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy,
+      removalPolicy: platformTableRemovalPolicy,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: isProduction },
     });
     for (const indexName of ["GSI1", "GSI2", "GSI3"] as const) {

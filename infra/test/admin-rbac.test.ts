@@ -31,6 +31,12 @@ function resourcesOfType(
   return Object.values(resources).filter((resource) => resource.Type === type);
 }
 
+function dynamoTables(
+  resources: Record<string, Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return resourcesOfType(resources, "AWS::DynamoDB::Table");
+}
+
 function lambdaEnvByName(
   resources: Record<string, Record<string, unknown>>,
 ): Record<string, Record<string, unknown>> {
@@ -263,5 +269,17 @@ describe("admin RBAC infrastructure", () => {
     const customAws = resourcesOfType(synthesizedResources(), "Custom::AWS");
     const serialized = JSON.stringify(customAws);
     assert.equal(serialized.includes("adminAddUserToGroup"), false);
+  });
+
+  it("retains the staging platform Dynamo table on stack delete/orphan", () => {
+    const tables = dynamoTables(synthesizedResourcesForStage("staging"));
+    assert.equal(tables.length, 1);
+    assert.equal(tables[0]?.DeletionPolicy, "Retain");
+  });
+
+  it("still destroys the non-prod test platform table by default", () => {
+    const tables = dynamoTables(synthesizedResources());
+    assert.equal(tables.length, 1);
+    assert.equal(tables[0]?.DeletionPolicy, "Delete");
   });
 });
