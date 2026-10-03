@@ -3,6 +3,7 @@ import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-
 import type { AppContext } from "../lib/context";
 import { AwsCognitoAdmins } from "../lib/cognitoAdmins";
 import { DynamoTableClient } from "../lib/db";
+import { unavailableTableClient } from "../lib/unavailableTableClient";
 import { withWriteRetries, writeRetryOptionsFromEnvironment } from "../lib/tableRetry";
 import { S3DocumentStore } from "../lib/documentStore";
 import { BestEffortEmailSender, SesEmailSender } from "../lib/email";
@@ -57,6 +58,13 @@ function tryBuildLlmProvider(): LlmProvider | undefined {
   }
 }
 
+function dynamoTableRequired(environment: NodeJS.ProcessEnv): boolean {
+  const crmStore = crmStoreFromEnvironment(environment);
+  if (crmStore === "dynamo") return true;
+  const ledgerRaw = environment["LEDGER_STORE"]?.trim();
+  return ledgerRaw === "dynamo";
+}
+
 /**
  * Exported so `services/migration/src/cli.ts` can reuse the exact same
  * production wiring rather than assembling a second `AppContext` builder by
@@ -64,17 +72,9 @@ function tryBuildLlmProvider(): LlmProvider | undefined {
  * Lambda does, so it must be configured (and fail closed) the same way.
  */
 export function buildProductionContext(): AppContext {
-  const tableName = process.env["TABLE_NAME"];
   const documentsBucket = process.env["DOCUMENTS_BUCKET"];
   const senderAddress = process.env["EMAIL_SENDER"];
   const adminNotificationAddress = process.env["ADMIN_NOTIFICATION_EMAIL"];
-  if (!tableName || !documentsBucket || !senderAddress || !adminNotificationAddress) {
-    throw new Error(
-      "Missing required environment: TABLE_NAME, DOCUMENTS_BUCKET, EMAIL_SENDER, ADMIN_NOTIFICATION_EMAIL",
-    );
-  }
-  const llmProvider = tryBuildLlmProvider();
-  const adminsUserPoolId = process.env["ADMINS_USER_POOL_ID"];
   const ledgerStore = ledgerStoreFromEnvironment(process.env);
   const crmStore = crmStoreFromEnvironment(process.env);
   const databaseUrl = databaseUrlFromEnvironment(process.env);
@@ -88,16 +88,34 @@ export function buildProductionContext(): AppContext {
       "CRM_STORE is postgres but DATABASE_URL is not configured",
     );
   }
+  const tableName = process.env["TABLE_NAME"];
+  const needsDynamoTable = dynamoTableRequired(process.env);
+  if (needsDynamoTable && !tableName) {
+    throw new Error(
+      "Missing required environment: TABLE_NAME, DOCUMENTS_BUCKET, EMAIL_SENDER, ADMIN_NOTIFICATION_EMAIL",
+    );
+  }
+  if (!documentsBucket || !senderAddress || !adminNotificationAddress) {
+    throw new Error(
+      "Missing required environment: TABLE_NAME, DOCUMENTS_BUCKET, EMAIL_SENDER, ADMIN_NOTIFICATION_EMAIL",
+    );
+  }
+  const llmProvider = tryBuildLlmProvider();
+  const adminsUserPoolId = process.env["ADMINS_USER_POOL_ID"];
   const sqlClient = databaseUrl !== undefined ? createPgSqlClient(databaseUrl) : undefined;
+  const table =
+    tableName !== undefined && tableName !== ""
+      ? withWriteRetries(
+          new DynamoTableClient(tableName),
+          writeRetryOptionsFromEnvironment(process.env),
+        )
+      : unavailableTableClient();
   return {
     // N11: every write in the process goes through the retry seam, including
     // the migration's -- `cli.ts` builds its context from this same function,
     // which is why the wrapping belongs here and not at a call site. Reads are
     // not wrapped; see `tableRetry.ts` for why.
-    table: withWriteRetries(
-      new DynamoTableClient(tableName),
-      writeRetryOptionsFromEnvironment(process.env),
-    ),
+    table,
     documents: new S3DocumentStore(documentsBucket),
     email: new BestEffortEmailSender(
       SesEmailSender.fromOptions({

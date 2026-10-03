@@ -52,4 +52,38 @@ describe("buildProductionContext sql wiring", () => {
     expect(typeof context.sql?.query).toBe("function");
     await context.sql?.end();
   });
+
+  it("boots without TABLE_NAME when CRM_STORE=postgres and LEDGER_STORE is unset", async () => {
+    Object.assign(process.env, requiredEnv);
+    delete process.env["TABLE_NAME"];
+    process.env["CRM_STORE"] = "postgres";
+    process.env["DATABASE_URL"] = "postgresql://user:pass@localhost:6543/postgres";
+    delete process.env["LEDGER_STORE"];
+
+    const { buildProductionContext } = await import("../src/http/handler");
+    const context = buildProductionContext();
+    await expect(context.table.get("PK", "SK")).rejects.toThrow(/TABLE_NAME unset/);
+    await context.sql?.end();
+  });
+
+  it("still requires TABLE_NAME when CRM_STORE defaults to dynamo", async () => {
+    Object.assign(process.env, requiredEnv);
+    delete process.env["TABLE_NAME"];
+    delete process.env["CRM_STORE"];
+    delete process.env["LEDGER_STORE"];
+
+    const { buildProductionContext } = await import("../src/http/handler");
+    expect(() => buildProductionContext()).toThrow(/TABLE_NAME/);
+  });
+
+  it("requires TABLE_NAME when LEDGER_STORE=dynamo even if CRM is postgres", async () => {
+    Object.assign(process.env, requiredEnv);
+    delete process.env["TABLE_NAME"];
+    process.env["CRM_STORE"] = "postgres";
+    process.env["LEDGER_STORE"] = "dynamo";
+    process.env["DATABASE_URL"] = "postgresql://user:pass@localhost:6543/postgres";
+
+    const { buildProductionContext } = await import("../src/http/handler");
+    expect(() => buildProductionContext()).toThrow(/TABLE_NAME/);
+  });
 });
