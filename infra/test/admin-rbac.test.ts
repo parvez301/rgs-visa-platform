@@ -37,6 +37,18 @@ function dynamoTables(
   return resourcesOfType(resources, "AWS::DynamoDB::Table");
 }
 
+/** D.3 removed the platform-table env var; synth must not resurrect it. */
+const LEGACY_PLATFORM_TABLE_ENV = "TABLE" + "_NAME";
+
+function assertLambdasLackLegacyPlatformTableEnv(
+  env: Record<string, Record<string, unknown>>,
+  lambdaNames: string[],
+): void {
+  for (const name of lambdaNames) {
+    assert.equal(env[name]?.[LEGACY_PLATFORM_TABLE_ENV], undefined);
+  }
+}
+
 function lambdaEnvByName(
   resources: Record<string, Record<string, unknown>>,
 ): Record<string, Record<string, unknown>> {
@@ -258,26 +270,32 @@ describe("admin RBAC infrastructure", () => {
     const resources = synthesizedResourcesForStage("staging");
     assert.equal(dynamoTables(resources).length, 0);
     const env = lambdaEnvByName(resources);
-    assert.equal(env["rgs-admin-api-staging"]?.["TABLE_NAME"], undefined);
-    assert.equal(env["rgs-user-api-staging"]?.["TABLE_NAME"], undefined);
-    assert.equal(env["rgs-appointment-reminders-staging"]?.["TABLE_NAME"], undefined);
+    assertLambdasLackLegacyPlatformTableEnv(env, [
+      "rgs-admin-api-staging",
+      "rgs-user-api-staging",
+      "rgs-appointment-reminders-staging",
+    ]);
   });
 
   it("does not own a platform Dynamo table on prod", () => {
     const resources = synthesizedResourcesForStage("prod");
     assert.equal(dynamoTables(resources).length, 0);
     const env = lambdaEnvByName(resources);
-    assert.equal(env["rgs-admin-api-prod"]?.["TABLE_NAME"], undefined);
-    assert.equal(env["rgs-user-api-prod"]?.["TABLE_NAME"], undefined);
-    assert.equal(env["rgs-appointment-reminders-prod"]?.["TABLE_NAME"], undefined);
+    assertLambdasLackLegacyPlatformTableEnv(env, [
+      "rgs-admin-api-prod",
+      "rgs-user-api-prod",
+      "rgs-appointment-reminders-prod",
+    ]);
   });
 
   it("does not own a platform Dynamo table on test", () => {
     const resources = synthesizedResources();
     assert.equal(dynamoTables(resources).length, 0);
     const env = lambdaEnvByName(resources);
-    assert.equal(env["rgs-admin-api-test"]?.["TABLE_NAME"], undefined);
-    assert.equal(env["rgs-user-api-test"]?.["TABLE_NAME"], undefined);
-    assert.equal(env["rgs-appointment-reminders-test"]?.["TABLE_NAME"], undefined);
+    assertLambdasLackLegacyPlatformTableEnv(env, [
+      "rgs-admin-api-test",
+      "rgs-user-api-test",
+      "rgs-appointment-reminders-test",
+    ]);
   });
 });

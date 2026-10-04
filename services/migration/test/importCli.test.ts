@@ -204,7 +204,7 @@ describe("runImportCli", () => {
   // --- NEW-4: what the abort message is allowed to claim -------------------
 
   it("does not claim cases were written when the context could not even be built", async () => {
-    const configurationFailure = new Error("RGS_TABLE_NAME is not set");
+    const configurationFailure = new Error("DATABASE_URL is not configured");
     const { dependencies, output } = buildDependencies({
       buildContext: () => {
         throw configurationFailure;
@@ -216,7 +216,7 @@ describe("runImportCli", () => {
     expect(cliResult.exitCode).not.toBe(0);
     expect(cliResult.abortReason).toBe(configurationFailure);
     // The defect: `buildProductionContext()` was evaluated as an argument
-    // INSIDE the try, so a missing table name -- the likeliest failure on a
+    // INSIDE the try, so a missing database URL -- the likeliest failure on a
     // fresh machine, before a single byte is written -- printed a paragraph
     // about partially written data and a "re-running is safe" reassurance
     // about a repair that had nothing to repair.
@@ -225,7 +225,7 @@ describe("runImportCli", () => {
     expect(output.errors).toContain(NO_WRITES_ABORT_MESSAGE);
     // And the cause is still on screen; a correct message is not a substitute
     // for saying what went wrong.
-    expect(output.errors.join("\n")).toMatch(/RGS_TABLE_NAME is not set/);
+    expect(output.errors.join("\n")).toMatch(/DATABASE_URL is not configured/);
   });
 
   it("does not claim cases were written when the workbook itself could not be read", async () => {

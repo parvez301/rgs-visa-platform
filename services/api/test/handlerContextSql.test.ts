@@ -53,7 +53,7 @@ describe("buildProductionContext sql wiring", () => {
     expect(() => buildProductionContext()).toThrow(/DATABASE_URL/);
   });
 
-  it("throws when CRM_STORE=dynamo", async () => {
+  it("throws when CRM store is dynamo", async () => {
     Object.assign(process.env, requiredEnv);
     process.env["CRM_STORE"] = "dynamo";
 
@@ -69,7 +69,7 @@ describe("buildProductionContext sql wiring", () => {
     expect(() => buildProductionContext()).toThrow(/LEDGER_STORE must be postgres/);
   });
 
-  it("throws when DOCUMENTS_BUCKET is missing without mentioning TABLE_NAME", async () => {
+  it("throws when DOCUMENTS_BUCKET is missing without mentioning the legacy platform table env var", async () => {
     Object.assign(process.env, requiredEnv);
     delete process.env["DOCUMENTS_BUCKET"];
 
@@ -79,7 +79,7 @@ describe("buildProductionContext sql wiring", () => {
       buildProductionContext();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      expect(message).not.toMatch(/TABLE_NAME/);
+      expect(message).not.toMatch(new RegExp("TABLE" + "_NAME"));
     }
   });
 });

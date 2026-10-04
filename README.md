@@ -11,7 +11,7 @@ surfaces plus a serverless backend:
 | **Admin** (`apps/admin`) | Ops console: application queue, activity, notices, country config, leads | Vite + React SPA |
 | **API** (`services/api`) | All business logic and persistence | AWS Lambda (TypeScript), API Gateway |
 
-Backend data lives in a single **DynamoDB** table; auth is **Cognito** (separate
+Backend data lives in **Postgres** (Supabase); auth is **Cognito** (separate
 user and admin pools); files are in **S3**; everything is fronted by
 **CloudFront** and provisioned with **AWS CDK**. Payments are handled offline in
 v1 — the status machine is API-ready for automation later.
@@ -51,10 +51,10 @@ v1 — the status machine is API-ready for automation later.
         ┌───────────────────┼────────────────────┐
         ▼                   ▼                     ▼
 ┌───────────────┐   ┌───────────────┐    ┌───────────────┐
-│   DynamoDB    │   │  S3 documents │    │      SES       │
-│ single table  │   │  (presigned   │    │  transactional │
-│ USER# CONFIG# │   │  up/download) │    │  email         │
-│ NOTICE EVENT# │   │               │    │                │
+│ Postgres      │   │  S3 documents │    │      SES       │
+│ (Supabase)    │   │  (presigned   │    │  transactional │
+│ CRM · portal  │   │  up/download) │    │  email         │
+│ catalog · …   │   │               │    │                │
 └───────────────┘   └───────────────┘    └───────────────┘
 
 Provisioned by AWS CDK (infra/) → one stack per env: RgsPlatform-{staging|prod}, ap-south-1
@@ -70,7 +70,7 @@ Provisioned by AWS CDK (infra/) → one stack per env: RgsPlatform-{staging|prod
 - **Portal** and **Admin** authenticate against **separate Cognito pools**; API
   Gateway verifies the JWT before the request reaches a Lambda.
 - One Lambda per audience (**user** vs **admin**) shares the same domain layer and
-  `@rgs/shared` contracts, and talks to a **single DynamoDB table**, an **S3**
+  `@rgs/shared` contracts, and talks to **Postgres** (Supabase), an **S3**
   bucket for documents (via presigned URLs), and **SES** for notifications.
 - Adding a new top-level API path is a CDK change — routes are declared
   explicitly (see [Deploying](#deploying)).
@@ -211,17 +211,24 @@ pnpm --filter @rgs/infra exec cdk deploy RgsPlatform-staging
 For production, set `RGS_STAGE=prod` and build the front-ends with the **prod**
 API URL / pool IDs. **Never seed test data into production.**
 
-The stack outputs the CloudFront URLs, API endpoint, table name, and pool IDs on
-every deploy. Current environment details (URLs, pool IDs, first-admin setup,
-production cutover runbook) are kept out of the repo and **provided by the
-project owner** to maintainers.
+The stack outputs the CloudFront URLs, API endpoint, and pool IDs on every
+deploy. Current environment details (URLs, pool IDs, Supabase connection string,
+first-admin setup, production cutover runbook) are kept out of the repo and
+**provided by the project owner** to maintainers.
 
 ### Runtime configuration (set by CDK, not by you)
 
-The Lambda receives `TABLE_NAME`, `DOCUMENTS_BUCKET`, `EMAIL_SENDER`, and
-`ADMIN_NOTIFICATION_EMAIL` from the stack. There are **no secrets in the repo** —
-all credentials come from the deployer's AWS profile and from Cognito/SES, which
-CDK wires up.
+Lambdas receive `DOCUMENTS_BUCKET`, `EMAIL_SENDER`, and
+`ADMIN_NOTIFICATION_EMAIL` from the stack. Postgres access uses
+`DATABASE_URL` (Supabase transaction pooler), set at deploy time via CDK from
+`RGS_DATABASE_URL` on the deployer's machine — it is **not** committed to the
+repo.
+
+The **admin** API also receives `CRM_STORE` and `LEDGER_STORE` (both default to
+`postgres` when unset). The **user** API receives `CRM_STORE` only; ledger
+data is admin-scoped. There are **no secrets in the repo** — credentials come
+from the deployer's AWS profile, Cognito/SES (CDK), and the out-of-band Supabase
+URL.
 
 ---
 
@@ -231,9 +238,9 @@ CDK wires up.
   `travellerIndex`, `countryProduct`, `activityEvent`.
 - **Statuses come from `@rgs/shared`, verbatim.** Never invent states or
   transitions; the API enforces the machine, the UI renders it.
-- **Country data is admin-managed**, stored in DynamoDB (`CONFIG#COUNTRY` rows).
-  The catalog in `@rgs/shared` is a seed/fallback only — the UI must read live
-  config (`GET /api/v1/config/countries`), never hardcode fees or timelines.
+- **Country data is admin-managed**, stored in Postgres. The catalog in
+  `@rgs/shared` is a seed/fallback only — the UI must read live config
+  (`GET /api/v1/config/countries`), never hardcode fees or timelines.
 - **No red focus ring on form inputs** (owner preference) — fields signal focus
   via their border; only links/buttons keep the red `:focus-visible` ring.
 - **Design tokens**: reuse the Tailwind theme vars (`rgs-red`, `ink`, `ink-soft`,

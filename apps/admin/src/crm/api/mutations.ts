@@ -219,31 +219,22 @@ export function rollbackOptimisticCaseWrite(
  * R76: the ledger is marked STALE, never refetched on the spot; the case is
  * refetched actively.
  *
- * `listLedgerRows` (services/api/src/domain/crm/ledger.ts) reads GSI1 through
- * `queryGsiPage`, and a DynamoDB GSI read is always eventually consistent --
- * the plan's own `## Established facts` says so. Refetching the instant the PUT
- * settles therefore races the index: the base-table write returns, the client
- * immediately re-reads GSI1, and GSI1 may still be serving the pre-write
- * projection. The refetch then overwrites the optimistic value with the stale
- * one -- and because `hooks.ts` gives the ledger `staleTime: 5 * 60_000`,
- * nothing asks again for five minutes. The desk agent watches their edit apply,
- * revert, and stay reverted. The race is narrow (GSI propagation is usually
- * sub-second against a 50-200ms round trip) but one-directional: it can only
- * ever lose the newer value.
+ * Persistence is Postgres on the server; this SPA does not keep a separate
+ * client-side store of mutations beyond React Query's optimistic patches.
+ * Refetching the ledger the instant a PUT settles can still race a concurrent
+ * in-flight ledger query and briefly overwrite the optimistic row with an
+ * older payload. Because `hooks.ts` gives the ledger `staleTime: 5 * 60_000`,
+ * that stale win can stick until the next natural read.
  *
  * `refetchType: "none"` marks every matching ledger entry invalidated without
- * starting a fetch, so the next natural read -- a remount, a window focus, a
- * filter change -- picks the ledger up once the index has caught up, and until
- * then the optimistic patch (which holds exactly what the PUT wrote) stands.
- * The case query keeps refetching actively on purpose: `getCase` is a
- * strongly consistent GetItem on the base table, so it has no race to lose.
+ * starting a fetch, so the next remount, focus, or filter change picks the
+ * ledger up after the server has the new row, and until then the optimistic
+ * patch (what the PUT wrote) stands. The case query refetches actively: a
+ * single-row read right after write is the authoritative server state.
  *
- * No test can see this. The in-memory test backend is strongly consistent by
- * construction, so a ledger read there always reflects the preceding write
- * (G5) -- this comment is the record of the decision, which is why it is this
- * long. What `mutations.test.tsx` CAN pin, and does, is the mechanism: after a
- * settled write the ledger entry is invalidated and no second ledger GET went
- * out, while the case GET did.
+ * `mutations.test.tsx` pins the mechanism: after a settled write the ledger
+ * entry is invalidated and no second ledger GET went out, while the case GET
+ * did.
  */
 export function invalidateAfterCaseWriteSettles(queryClient: QueryClient, caseId: string): void {
   void queryClient.invalidateQueries({ queryKey: LEDGER_CACHE_KEY_PREFIX, refetchType: "none" });
