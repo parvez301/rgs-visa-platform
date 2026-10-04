@@ -6,9 +6,9 @@ import { changeApplicantCustody } from "../../src/domain/crm/cases";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { CorruptRecordError } from "../../src/lib/errors";
 import type { SqlClient } from "../../src/lib/sql";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 function buildCase(overrides: Partial<crm.CrmCase> = {}): crm.CrmCase {
   return {
@@ -63,11 +63,11 @@ async function seedTraveller(
 }
 
 describe("caseStore", () => {
-  let context: SqlTestContext;
+  let context: TestContext;
   let sql: SqlClient;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
   });
 

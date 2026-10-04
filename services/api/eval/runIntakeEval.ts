@@ -617,24 +617,10 @@ export function evaluateThreshold(scorecard: ProviderScorecard, coverageThreshol
   return { passed: failedChecks.length === 0, failedChecks };
 }
 
-/** The eval reads and writes the CRM through Postgres only; DynamoDB is gone. */
-function removedTableClient(): AppContext["table"] {
-  const reject = (): Promise<never> => Promise.reject(new Error("DynamoDB client removed"));
-  return {
-    get: reject,
-    put: reject,
-    putIfAbsent: reject,
-    delete: reject,
-    query: reject,
-    queryGsi: reject,
-    queryGsiPage: reject,
-  };
-}
-
 /**
  * A fresh in-process Postgres (PGlite) with every migration applied, behind
  * the same `SqlClient` seam production uses -- so the eval seeds and resolves
- * travellers and partners through the real `crmStore: "postgres"` domain path.
+ * travellers and partners through the real Postgres domain path.
  * Call `closeEvalContext` when done.
  */
 export async function buildEvalContext(
@@ -643,15 +629,12 @@ export async function buildEvalContext(
   const sql = pgliteAsSqlClient(new PGlite());
   await applyMigrations(sql);
   return {
-    table: removedTableClient(),
     documents: new InMemoryDocumentStore(),
     email: new InMemoryEmailSender(),
     adminNotificationAddress: "info@raysglobalservices.com",
     now: () => new Date(),
     llm: llmProvider,
     sql,
-    crmStore: "postgres",
-    ledgerStore: "postgres",
   };
 }
 

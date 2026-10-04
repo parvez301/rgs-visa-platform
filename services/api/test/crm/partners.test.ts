@@ -1,6 +1,6 @@
 import { crm } from "@rgs/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import type { SqlClient } from "../../src/lib/sql";
 import { CorruptRecordError } from "../../src/lib/errors";
 import {
@@ -11,7 +11,7 @@ import {
   updatePartnerContact,
 } from "../../src/domain/crm/partners";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 /**
  * Writes a partner item exactly as createPartner does, but without its
@@ -21,7 +21,7 @@ afterEach(closeSqlTestContexts);
  * recorded first and the partner whose own name it squats came second.
  */
 async function seedPartnerItemDirectly(
-  context: SqlTestContext,
+  context: TestContext,
   tenantId: string,
   canonicalName: string,
   aliases: string[] = [],
@@ -45,7 +45,7 @@ async function seedPartnerItemDirectly(
  * importer writing an older shape can.
  */
 async function seedUnparseablePartnerItem(
-  context: SqlTestContext,
+  context: TestContext,
   tenantId: string,
   canonicalName: string,
   partnerId = "prt_half_written",
@@ -61,7 +61,7 @@ async function seedUnparseablePartnerItem(
 
 describe("crm partners", () => {
   it("creates a partner with the type the shared normalizer inferred", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(
       context,
       "rgs",
@@ -77,7 +77,7 @@ describe("crm partners", () => {
   });
 
   it("finds an existing partner through a different spelling", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await createPartner(context, "rgs", { canonicalName: "VWI Mumbai" }, "ops@rgs.test");
     // "VWI BOM" folds to the same canonical key — this is what stops the
     // migration creating one partner per spelling.
@@ -87,7 +87,7 @@ describe("crm partners", () => {
   });
 
   it("refuses a second partner that folds to the same canonical key", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const existing = await createPartner(
       context,
       "rgs",
@@ -113,7 +113,7 @@ describe("crm partners", () => {
   });
 
   it("lets a second tenant use a canonical key the first tenant already holds", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await createPartner(context, "rgs", { canonicalName: "VWI Mumbai" }, "ops@rgs.test");
     const otherTenantPartner = await createPartner(
       context,
@@ -130,7 +130,7 @@ describe("crm partners", () => {
   // "Ozzy". The migration importer resolves partner names across 7,157
   // spreadsheet rows, where collapsing aliases is the entire point.
   it("finds a partner through one of its recorded aliases", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const ozzy = await createPartner(
       context,
       "rgs",
@@ -143,7 +143,7 @@ describe("crm partners", () => {
   });
 
   it("normalizes an alias the same way it normalizes the canonical name", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const ozzy = await createPartner(
       context,
       "rgs",
@@ -158,7 +158,7 @@ describe("crm partners", () => {
   });
 
   it("refuses a new partner whose name collides with an existing alias", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const existing = await createPartner(
       context,
       "rgs",
@@ -183,7 +183,7 @@ describe("crm partners", () => {
   // "VWI" as an alias.
   describe("an exact canonical name always beats another partner's alias", () => {
     it("wins when the alias holder sorts ahead of it in the partner index", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const ozzy = await createPartner(
         context,
         "rgs",
@@ -203,7 +203,7 @@ describe("crm partners", () => {
     });
 
     it("wins when the alias holder sorts behind it in the partner index", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const ozzy = await createPartner(
         context,
         "rgs",
@@ -226,7 +226,7 @@ describe("crm partners", () => {
     });
 
     it("wins even when the alias holder was recorded first", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const aliasSquatter = await createPartner(
         context,
         "rgs",
@@ -243,7 +243,7 @@ describe("crm partners", () => {
     });
 
     it("still falls back to the alias when no partner carries that canonical name", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const aliasSquatter = await createPartner(
         context,
         "rgs",
@@ -258,7 +258,7 @@ describe("crm partners", () => {
   });
 
   it("keeps one tenant's aliases from matching another tenant's lookup", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await createPartner(
       context,
       "rgs",
@@ -269,7 +269,7 @@ describe("crm partners", () => {
   });
 
   it("records the creating admin's email and reads it back", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(
       context,
       "rgs",
@@ -286,7 +286,7 @@ describe("crm partners", () => {
   });
 
   it("omits createdByEmail for an admin token that carries no email claim", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     // router.ts defaults a missing `email` claim to "", and "" is not an author.
     const partner = await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "");
     expect(partner.createdByEmail).toBeUndefined();
@@ -294,12 +294,12 @@ describe("crm partners", () => {
   });
 
   it("returns undefined when no partner matches", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     expect(await findPartnerByName(context, "rgs", "Nobody Travels")).toBeUndefined();
   });
 
   it("lists partners for the tenant", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "ops@rgs.test");
     await createPartner(context, "rgs", { canonicalName: "Luxe Escape" }, "ops@rgs.test");
     const listed = await listPartners(context, "rgs");
@@ -312,7 +312,7 @@ describe("crm partners", () => {
   });
 
   it("keeps one tenant's partners out of another's list", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await createPartner(context, "rgs", { canonicalName: "Ozzy Travels" }, "ops@rgs.test");
     expect(await listPartners(context, "other-tenant")).toEqual({
       partners: [],
@@ -327,7 +327,7 @@ describe("crm partners", () => {
   // removed here, which is how this class of bug stayed hidden twice already.
   describe("a stored partner record that no longer parses", () => {
     it("surfaces as a typed 409 from the name lookup, naming the bad field", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const partnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
 
       const nameLookup = findPartnerByName(context, "rgs", "Ozzy Travels");
@@ -342,7 +342,7 @@ describe("crm partners", () => {
     });
 
     it("surfaces as a typed 409 from the single-partner read", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const partnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
 
       const singleRead = getPartnerOrThrow(context, "rgs", partnerId);
@@ -361,7 +361,7 @@ describe("crm partners", () => {
   // The same blast radius the case queue was already fixed for: one bad
   // partition 500'd GET /crm/cases?status=NEW for the entire tenant.
   it("still lists the healthy partners when one stored row will not parse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const healthy = await createPartner(
       context,
       "rgs",
@@ -380,7 +380,7 @@ describe("crm partners", () => {
   });
 
   it("warns with the id of the partner row it had to skip", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await createPartner(context, "rgs", { canonicalName: "Luxe Escape" }, "ops@rgs.test");
     const corruptPartnerId = await seedUnparseablePartnerItem(context, "rgs", "Ozzy Travels");
 
@@ -399,7 +399,7 @@ describe("crm partners", () => {
   });
 
   it("keeps listing when every row in the tenant is corrupt", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const firstCorruptId = await seedUnparseablePartnerItem(
       context,
       "rgs",
@@ -423,14 +423,14 @@ describe("crm partners", () => {
   });
 
   it("throws a 404 for a partner that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await expect(getPartnerOrThrow(context, "rgs", "nope")).rejects.toMatchObject({
       statusCode: 404,
     });
   });
 
   it("accepts an explicit partner type and aliases", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(
       context,
       "rgs",
@@ -442,7 +442,7 @@ describe("crm partners", () => {
   });
 
   it("stores contact details when they are supplied and reads them back", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(
       context,
       "rgs",
@@ -466,7 +466,7 @@ describe("crm partners", () => {
 
   describe("updatePartnerContact", () => {
     it("sets the contact email on a partner created without one, leaving everything else intact", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const created = await createPartner(context, "rgs", { canonicalName: "Skyline Travels", aliases: ["Skyline"] }, "ops@rgs.test");
 
       const updated = await updatePartnerContact(context, "rgs", created.partnerId, { contactEmail: "desk@skyline.test" });
@@ -480,7 +480,7 @@ describe("crm partners", () => {
     });
 
     it("clears a contact field when given null and leaves an omitted field alone", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const created = await createPartner(
         context,
         "rgs",
@@ -495,7 +495,7 @@ describe("crm partners", () => {
     });
 
     it("404s for a partner that does not exist", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       await expect(
         updatePartnerContact(context, "rgs", "prt_missing", { contactEmail: "x@y.test" }),
       ).rejects.toMatchObject({ statusCode: 404 });
@@ -507,7 +507,7 @@ const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
 
 describe("partners on Postgres (SQL row assertions)", () => {
-  let context: SqlTestContext;
+  let context: TestContext;
   let sql: SqlClient;
 
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
@@ -516,7 +516,7 @@ describe("partners on Postgres (SQL row assertions)", () => {
   }
 
   beforeEach(async () => {
-    context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    context = await buildTestContext({ seedStatusEmailTemplates: false });
     sql = context.sql;
   });
 

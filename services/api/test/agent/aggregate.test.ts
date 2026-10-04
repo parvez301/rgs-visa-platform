@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { aggregateTool } from "../../src/agent/tools/aggregate";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { createCase } from "../../src/domain/crm/cases";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
 
-async function seedCases(context: SqlTestContext, howMany: number) {
+async function seedCases(context: TestContext, howMany: number) {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -39,7 +39,7 @@ async function seedCases(context: SqlTestContext, howMany: number) {
 
 describe("aggregate", () => {
   it("returns counts, never the underlying rows", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedCases(context, 3);
 
     const result = await aggregateTool.execute(context, TENANT_ID, { groupBy: "caseStatus" }, ACTOR);
@@ -50,14 +50,14 @@ describe("aggregate", () => {
   });
 
   it("groups by destination country", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedCases(context, 2);
     const result = await aggregateTool.execute(context, TENANT_ID, { groupBy: "destinationCountry" }, ACTOR);
     expect(result).toEqual({ groupBy: "destinationCountry", counts: { JP: 2 }, total: 2 });
   });
 
   it("names the unreadable rows it could not count rather than quietly undercounting", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedCases(context, 2);
     // One case row whose counted column is blank, so it cannot be counted.
     const stored = await context.sql.query<{ case_id: string }>(

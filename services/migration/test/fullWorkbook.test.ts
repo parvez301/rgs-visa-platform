@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { crm } from "@rgs/shared";
-import { buildSqlTestContext, closeSqlTestContexts } from "@rgs/api/test/helpers";
+import { buildTestContext, closeTestContexts } from "@rgs/api/test/helpers";
 import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
 import { readWorkbook } from "../src/readWorkbook";
 import { mapRow } from "../src/mapRow";
@@ -21,7 +21,7 @@ import { runImport } from "../src/importRun";
  * passing" figure quoted in the ledger was reproducible on exactly one
  * machine.
  */
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const DEFAULT_WORKBOOK_PATH = "/Users/parvez/Downloads/CRM - RAYS GLOBAL SERVICES.xlsx";
 const WORKBOOK_PATH = process.env["RGS_WORKBOOK_PATH"] ?? DEFAULT_WORKBOOK_PATH;
@@ -158,7 +158,7 @@ describe.skipIf(!workbookIsPresent)(
     it("is idempotent end to end: a second full-sheet run creates nothing", async () => {
       const extract = await readWorkbook(WORKBOOK_PATH);
       const mappedRows = extract.miniCrmRows.map(mapRow);
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const importInput = {
         mappedRows,
         contactDetails: joinPhones(mappedRows, extract.yearRows),

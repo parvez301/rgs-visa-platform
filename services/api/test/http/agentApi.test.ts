@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import { Router } from "../../src/http/router";
 import { AGENT_ROUTES, registerAgentRoutes } from "../../src/http/agentApi";
 import { buildAdminRouter } from "../../src/http/adminApi";
@@ -17,7 +17,7 @@ import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { getMemoryOrUndefined, memoryScope, rememberMemory } from "../../src/domain/crm/memory";
 import type { AppContext } from "../../src/lib/context";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT_ID = "rgs";
 const ADMIN_EMAIL = "desk-admin@rgs.test";
@@ -141,7 +141,7 @@ function fillPathParams(pathTemplate: string): string {
 // caseRef doubles as the partner's name suffix -- mirrors loop.test.ts's and
 // approval.test.ts's own seedOneCase, so two calls in one test do not trip
 // createPartner's one-canonical-name-per-partner rule.
-async function seedOneCase(context: SqlTestContext, caseRef = "80001") {
+async function seedOneCase(context: TestContext, caseRef = "80001") {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -165,7 +165,7 @@ async function seedOneCase(context: SqlTestContext, caseRef = "80001") {
   );
 }
 
-function contextWithFakeLlm(context: SqlTestContext, provider: FakeLlmProvider): SqlTestContext & { llm: FakeLlmProvider } {
+function contextWithFakeLlm(context: TestContext, provider: FakeLlmProvider): TestContext & { llm: FakeLlmProvider } {
   return Object.assign(context, { llm: provider });
 }
 
@@ -181,7 +181,7 @@ describe("the agent route table, dispatched through the real buildAdminRouter", 
   it.each(AGENT_ROUTES)(
     "$method $path is actually mounted, not just registered on a bare router",
     async ({ method, path }) => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const router = buildAdminRouter(context);
 
       const response = await call(router, method, fillPathParams(path), {});
@@ -227,7 +227,7 @@ describe("the agent route table, dispatched through the real buildAdminRouter", 
   it.each(registeredAgentRoutes)(
     "$method $path requires admin authentication on the real admin router",
     async ({ method, path }) => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const router = buildAdminRouter(context);
 
       const rejected = await callUnauthenticated(router, method, fillPathParams(path), {});
@@ -239,7 +239,7 @@ describe("the agent route table, dispatched through the real buildAdminRouter", 
 
 describe("POST /api/v1/admin/crm/agent/turn", () => {
   it("runs a full turn: reads a case, stages a write proposal, and returns every field of the result", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-TURN-01");
     const provider = new FakeLlmProvider([
       { text: "", toolCalls: [{ toolCallId: "c1", toolName: "get_case", input: { caseId: seededCase.caseId } }] },
@@ -296,7 +296,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   });
 
   it("threads prior conversation into the messages sent to the model", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "continuing", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -318,7 +318,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   });
 
   it("400s a conversation tool_result message that has no toolName, rather than crashing the provider adapter", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -340,7 +340,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   // real Anthropic mapper produces a paired request), not merely by the
   // field surviving.
   it("carries a replayed assistant turn's toolCalls through to the model, so replayed results still pair", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "continuing", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -377,7 +377,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   });
 
   it("400s toolCalls attached to a user message, which neither adapter would map", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -397,7 +397,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   });
 
   it("400s a body with no userMessage, not 500", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -406,7 +406,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   });
 
   it("400s when the context has no llm provider configured, rather than 500ing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
 
     const response = await call(router, "POST", "/api/v1/admin/crm/agent/turn", { userMessage: "hi" });
@@ -419,7 +419,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   // "") happened to throw). requireAdminEmail now refuses this deliberately,
   // before the model is ever called.
   it("refuses an admin token with no email claim, rather than staging a proposal under an empty actor", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -436,7 +436,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   // history -- MAX_TOOL_ITERATIONS (loop.ts) caps how many times one turn
   // calls the model, not how much is sent on any one call.
   it("400s a userMessage over the length cap, rather than paying to send it to the model", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -450,7 +450,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   });
 
   it("400s a conversation longer than the message cap, rather than replaying it all into the model", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -478,7 +478,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   // replay it as conversation history on the next turn and confirm the
   // server accepts its own output.
   it("never emits a reply it will then refuse to accept back as conversation history", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     // 4096 tokens at roughly 4 characters/token (the brief's own estimate)
     // is ~16,000 characters -- a stand-in for the longest reply the
     // configured provider's completion budget could actually produce.
@@ -506,7 +506,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   });
 
   it("accepts a single conversation message's content well past the old shared cap, and still 400s one character over its own cap", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
 
     // At MAX_CONVERSATION_MESSAGE_LENGTH (agentApi.ts) -- past the old
     // shared 8,000-char cap, proving `content` now has its own, larger
@@ -532,7 +532,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   });
 
   it("400s a conversation whose total content length exceeds the transcript-wide cap, even with every message under its own per-message cap", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -554,7 +554,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   // argument, so this constructs the event by hand to send a body that isn't
   // valid JSON at all.
   it("400s a malformed JSON body, rather than 500ing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const event = {
       rawPath: "/api/v1/admin/crm/agent/turn",
@@ -581,7 +581,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
   });
 
   it("rejects an unauthenticated caller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const rejected = await callUnauthenticated(router, "POST", "/api/v1/admin/crm/agent/turn", {
       userMessage: "hi",
@@ -592,7 +592,7 @@ describe("POST /api/v1/admin/crm/agent/turn", () => {
 
 describe("GET /api/v1/admin/crm/agent/proposals", () => {
   it("returns pending proposals and names unreadableProposalIds, never dropping a row that will not parse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-PROP-01");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -623,7 +623,7 @@ describe("GET /api/v1/admin/crm/agent/proposals", () => {
   });
 
   it("rejects an unauthenticated caller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const rejected = await callUnauthenticated(router, "GET", "/api/v1/admin/crm/agent/proposals");
     expect(rejected.statusCode).toBe(403);
@@ -632,7 +632,7 @@ describe("GET /api/v1/admin/crm/agent/proposals", () => {
 
 describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
   it("passes an edited body through to the applied change", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-APPR-01");
     const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
     const proposal = (await tool.execute(
@@ -665,7 +665,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
   });
 
   it("never records the actor from the request body, only the verified admin caller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-APPR-02");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -695,7 +695,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
   });
 
   it("404s an approval of a proposal that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const response = await call(router, "PUT", "/api/v1/admin/crm/agent/proposals/prop_missing/approve", {});
     expect(response.statusCode).toBe(404);
@@ -708,7 +708,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
   // nothing to propose from. Asserted through the real route against the
   // stored prefs row, not against the counter function directly.
   it("counts an approval the human did not edit, as the trust-ladder advancement signal", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-APPR-COUNT-1");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -743,7 +743,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
   // approval carrying an edit is evidence the agent got it WRONG, and must
   // not be counted as evidence for trusting it more.
   it("does not count an approval the human edited", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-APPR-COUNT-2");
     const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
     const proposal = (await tool.execute(
@@ -767,7 +767,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
   });
 
   it("rejects an unauthenticated caller and applies nothing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-APPR-03");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -797,7 +797,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
   // token with `sub` but no `email` claim used to approve with
   // `decidedBy: ""`, and the schema let that round-trip as a valid decision.
   it("refuses an admin token with no email claim, rather than approving with decidedBy \"\"", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-APPR-04");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -828,7 +828,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
   // schema-violating shape -- but nothing at the HTTP layer had ever sent one
   // to prove the route actually surfaces that as a 400, not a 500.
   it("400s a non-object editedInput, rather than 500ing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-APPR-05");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -863,7 +863,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
   // as a 400, before applyApprovedChange is ever reached, so Layer A owns
   // its own pin rather than riding on Layer B's.
   it("400s an editedInput of null, rather than silently discarding the edit and applying the model's original proposal", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-APPR-06");
     const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
     const proposal = (await tool.execute(
@@ -898,7 +898,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/approve", () => {
 
 describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/discard", () => {
   it("400s a discard with no reason, and leaves the proposal PENDING", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-DISC-01");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -923,7 +923,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/discard", () => {
   });
 
   it("discards a proposal with a reason, and records the reason on the stored row", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-DISC-02");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -953,7 +953,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/discard", () => {
   // (the "never records the actor from the request body" test above);
   // discard had the identical hazard and no equivalent test.
   it("never records the actor from the request body, only the verified admin caller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-DISC-04");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -980,7 +980,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/discard", () => {
 
   // task-11-fix-1-review.md B1/M3.
   it("refuses an admin token with no email claim, rather than discarding with decidedBy \"\"", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-DISC-05");
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
     const proposal = (await tool.execute(
@@ -1006,7 +1006,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/discard", () => {
   });
 
   it("rejects an unauthenticated caller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const rejected = await callUnauthenticated(
       router,
@@ -1020,7 +1020,7 @@ describe("PUT /api/v1/admin/crm/agent/proposals/{proposalId}/discard", () => {
 
 describe("GET /api/v1/admin/crm/agent/memories", () => {
   it("returns memories for the requested scope only", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-MEM-01");
     await rememberMemory(
       context,
@@ -1050,7 +1050,7 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
   });
 
   it("resolves USER scope to the verified caller's own identity, isolating it from another user's", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-MEM-02");
     const otherUserEmail = "someone-else@rgs.test";
     await rememberMemory(
@@ -1085,7 +1085,7 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
   // Every plausible alias for "which user" is planted in the query string,
   // all pointed at the attacker's own scope.
   it("ignores a competing identity in the query string, and resolves USER scope to the verified caller regardless", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-MEM-07");
     const attackerEmail = "attacker@rgs.local";
     await rememberMemory(
@@ -1117,7 +1117,7 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
   });
 
   it("400s an unrecognized scope kind rather than 500ing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const response = await call(router, "GET", "/api/v1/admin/crm/agent/memories", undefined, {
       scope: "TENANT",
@@ -1126,7 +1126,7 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
   });
 
   it("400s a PARTNER scope with no partnerId, rather than 500ing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const response = await call(router, "GET", "/api/v1/admin/crm/agent/memories", undefined, {
       scope: "PARTNER",
@@ -1139,7 +1139,7 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
   // actually names something. Mirrors memory.test.ts's own domain-level
   // "names a corrupt memory row" fixture, at the HTTP layer.
   it("names a corrupt memory row in unreadableMemoryKeys instead of 500ing the response", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const scope = memoryScope("ORG");
     // A row the table accepts but CrmMemorySchema refuses on read: an agent
     // memory with no source case.
@@ -1158,7 +1158,7 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
   });
 
   it("rejects an unauthenticated caller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const rejected = await callUnauthenticated(router, "GET", "/api/v1/admin/crm/agent/memories");
     expect(rejected.statusCode).toBe(403);
@@ -1167,7 +1167,7 @@ describe("GET /api/v1/admin/crm/agent/memories", () => {
 
 describe("POST /api/v1/admin/crm/agent/memories", () => {
   it("remembers a memory and stores it under the resolved scope", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-MEM-03");
     const router = buildRouter(context);
 
@@ -1188,7 +1188,7 @@ describe("POST /api/v1/admin/crm/agent/memories", () => {
   });
 
   it("files a USER-scope memory under the verified caller's own identity, never a body-supplied one", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-MEM-04");
     const router = buildRouter(context);
 
@@ -1222,7 +1222,7 @@ describe("POST /api/v1/admin/crm/agent/memories", () => {
   // query string, and proves both halves: the write lands under the verified
   // caller, and NOTHING is written under the spoofed identity's scope at all.
   it("ignores a competing identity in the body and query string, and files the memory under the verified caller only", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const attackerEmail = "attacker@rgs.local";
     const router = buildRouter(context);
 
@@ -1270,7 +1270,7 @@ describe("POST /api/v1/admin/crm/agent/memories", () => {
   // this is the HTTP-level regression proving the fix actually reaches the
   // route.
   it("remembers an ORG-scope memory with no sourceCaseId, now that a human author does not need one", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
 
     const response = await call(router, "POST", "/api/v1/admin/crm/agent/memories", {
@@ -1288,14 +1288,14 @@ describe("POST /api/v1/admin/crm/agent/memories", () => {
   });
 
   it("400s a body missing required fields, rather than 500ing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const response = await call(router, "POST", "/api/v1/admin/crm/agent/memories", { scope: "ORG" });
     expect(response.statusCode).toBe(400);
   });
 
   it("rejects an unauthenticated caller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const rejected = await callUnauthenticated(router, "POST", "/api/v1/admin/crm/agent/memories", {
       scope: "ORG",
@@ -1310,7 +1310,7 @@ describe("POST /api/v1/admin/crm/agent/memories", () => {
 // param's own name now matches what it actually carries.
 describe("DELETE /api/v1/admin/crm/agent/memories/{memoryKey}", () => {
   it("forgets a memory that exists, and honestly reports { forgotten: true }", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-MEM-05");
     await rememberMemory(
       context,
@@ -1345,7 +1345,7 @@ describe("DELETE /api/v1/admin/crm/agent/memories/{memoryKey}", () => {
   // response must say honestly that nothing changed rather than claim a
   // deletion that never happened.
   it("returns { forgotten: false } for a memory key nothing was ever remembered under", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
 
     const response = await call(
@@ -1366,7 +1366,7 @@ describe("DELETE /api/v1/admin/crm/agent/memories/{memoryKey}", () => {
   // that exact same row, leaving it standing. Deleting is the remedy for a
   // corrupt row; it must not require the row to be readable first.
   it("deletes a corrupt memory row instead of 409ing on it, and the row is really gone afterward", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const scope = memoryScope("ORG");
     // Same "half-written" fixture the m1 test uses -- an agent memory with no
     // source case, so CrmMemorySchema refuses it.
@@ -1403,7 +1403,7 @@ describe("DELETE /api/v1/admin/crm/agent/memories/{memoryKey}", () => {
   // the attacker's own copy (same memoryKey, different USER scope) survives
   // completely untouched.
   it("ignores a competing identity in the query string, and forgets only from the verified caller's own scope", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-MEM-08");
     const attackerEmail = "attacker@rgs.local";
     await rememberMemory(
@@ -1442,14 +1442,14 @@ describe("DELETE /api/v1/admin/crm/agent/memories/{memoryKey}", () => {
 
   // task-11-fix-1-review.md B3/M2.
   it("400s a missing scope query param, rather than 500ing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const response = await call(router, "DELETE", "/api/v1/admin/crm/agent/memories/office-hours");
     expect(response.statusCode).toBe(400);
   });
 
   it("400s an invalid scope query param, rather than 500ing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const response = await call(router, "DELETE", "/api/v1/admin/crm/agent/memories/office-hours", undefined, {
       scope: "TENANT",
@@ -1458,7 +1458,7 @@ describe("DELETE /api/v1/admin/crm/agent/memories/{memoryKey}", () => {
   });
 
   it("rejects an unauthenticated caller and forgets nothing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "AGT-MEM-06");
     await rememberMemory(
       context,
@@ -1491,7 +1491,7 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
   }
 
   it("400s a tool_result naming a call no preceding assistant message carries -- C1, arriving from the client", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -1512,7 +1512,7 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
   });
 
   it("400s a tool_result whose preceding assistant turn made a DIFFERENT call", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -1535,7 +1535,7 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
   });
 
   it("400s a tool_result with no toolCallId at all, rather than throwing out of the mapper as a 500", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -1563,7 +1563,7 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
   });
 
   it("still accepts a well-formed replay, including two results batched behind one assistant turn", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "continuing", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -1594,7 +1594,7 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
   });
 
   it("400s a toolCallId longer than the cap, on the call side and on the result side", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
     // Just over the 256-character cap, and nowhere near the 100,000-character
@@ -1635,7 +1635,7 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
   });
 
   it("counts toolCallId toward the conversation cost bound, not only content and input", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -1663,7 +1663,7 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
   });
 
   it("counts a tool_result's own toolCallId too -- the call side alone stays under the bound", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "under the bound", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -1710,7 +1710,7 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
   });
 
   it("treats a client-supplied toolCall as transcript only -- it is history, never an instruction to run anything", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "nothing to do", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -1748,7 +1748,7 @@ describe("agent turn route: the replayed transcript is untrusted input", () => {
 
 describe("agent turn route: an assistant turn must carry something (branch-fix re-review N5)", () => {
   it("400s a replayed assistant message with neither text nor tool calls, which both vendors refuse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "should not be reached", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 
@@ -1763,7 +1763,7 @@ describe("agent turn route: an assistant turn must carry something (branch-fix r
   });
 
   it("still accepts an assistant turn carrying only tool calls -- the shape the loop itself builds", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const provider = new FakeLlmProvider([{ text: "continuing", toolCalls: [] }]);
     const router = buildRouter(contextWithFakeLlm(context, provider));
 

@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { buildSqlTestContext, closeSqlTestContexts } from "../helpers";
+import { buildTestContext, closeTestContexts } from "../helpers";
 import { resolveCaseTravellers } from "../../src/domain/crm/caseTravellers";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 describe("resolveCaseTravellers", () => {
   it("maps each applicant's travellerId to the traveller's name and passport", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const asha = await upsertTraveller(context, "rgs", { fullName: "Asha Rao", passportNumber: "Z1" });
     const ravi = await upsertTraveller(context, "rgs", { fullName: "Ravi Rao" });
 
@@ -23,7 +23,7 @@ describe("resolveCaseTravellers", () => {
   });
 
   it("leaves out a traveller that is missing or corrupt rather than failing the read", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const asha = await upsertTraveller(context, "rgs", { fullName: "Asha Rao" });
     await context.sql.query(
       `insert into crm_travellers (tenant_id, traveller_id, full_name, normalized_name, created_at)

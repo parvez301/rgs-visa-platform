@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { COUNTRY_PRODUCTS, getCountryProduct, labelsForCountryCode } from "@rgs/shared";
-import { buildSqlTestContext, closeSqlTestContexts } from "../helpers";
+import { buildTestContext, closeTestContexts } from "../helpers";
 import { listDestinationCountries } from "../../src/domain/crm/destinationCountries";
 import { upsertCountryProduct } from "../../src/domain/config";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const ADMIN_ID = "admin_1";
 const ADMIN_EMAIL = "admin@rgs.test";
 
 describe("listDestinationCountries", () => {
   it("returns unique country codes with full names, sorted by name", async () => {
-    const destinations = await listDestinationCountries(await buildSqlTestContext());
+    const destinations = await listDestinationCountries(await buildTestContext());
     expect(destinations.length).toBeGreaterThan(0);
 
     const codes = destinations.map((destination) => destination.countryCode);
@@ -38,7 +38,7 @@ describe("listDestinationCountries", () => {
   // The New case drawer previews the stamp from this route, because the Config
   // catalog route is gated on a screen Ops and Finance cannot open.
   it("carries the same document labels create-case will stamp", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, ADMIN_ID, ADMIN_EMAIL, {
       ...getCountryProduct("AE"),
       requiredDocuments: [
@@ -53,7 +53,7 @@ describe("listDestinationCountries", () => {
   });
 
   it("previews an empty list for an active country with no documents configured", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, ADMIN_ID, ADMIN_EMAIL, {
       ...getCountryProduct("AE"),
       tier: "INFO_ONLY",
@@ -67,7 +67,7 @@ describe("listDestinationCountries", () => {
   });
 
   it("applies the shared merge rule, not its own", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const destinations = await listDestinationCountries(context);
     for (const destination of destinations) {
       expect(destination.requiredDocuments, destination.countryCode).toEqual(

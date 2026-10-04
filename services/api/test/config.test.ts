@@ -9,22 +9,22 @@ import {
   seedCountryConfig,
   upsertCountryProduct,
 } from "../src/domain/config";
-import { buildSqlTestContext, closeSqlTestContexts } from "./helpers";
+import { buildTestContext, closeTestContexts } from "./helpers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const uaeSeed = getCountryProduct("AE");
 
 describe("listCountryConfig", () => {
   it("lists the migrated seed catalog on a fresh database", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const catalog = (await listCountryConfig(context)).countryProducts;
     expect(catalog).toHaveLength(COUNTRY_PRODUCTS.length);
     expect(catalog.map((product) => product.countryCode)).toContain("AE");
   });
 
   it("returns DB rows once config exists", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [...uaeSeed.requiredDocuments],
@@ -38,7 +38,7 @@ describe("listCountryConfig", () => {
 
 describe("upsertCountryProduct", () => {
   it("seeds the full catalog on first write so nothing vanishes", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [...uaeSeed.requiredDocuments],
@@ -49,7 +49,7 @@ describe("upsertCountryProduct", () => {
   });
 
   it("rejects invalid config (negative fee, unknown doc type)", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await expect(
       upsertCountryProduct(context, "admin_1", "admin@example.com", {
         ...uaeSeed,
@@ -66,7 +66,7 @@ describe("upsertCountryProduct", () => {
   });
 
   it("logs a CONFIG_CHANGED activity event", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [...uaeSeed.requiredDocuments],
@@ -79,7 +79,7 @@ describe("upsertCountryProduct", () => {
 
 describe("seedCountryConfig", () => {
   it("is idempotent", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await context.sql.query("delete from crm_country_products");
     expect(await seedCountryConfig(context)).toBe(COUNTRY_PRODUCTS.length);
     expect(await seedCountryConfig(context)).toBe(0);
@@ -88,7 +88,7 @@ describe("seedCountryConfig", () => {
 
 describe("config drives pricing and document rules", () => {
   it("createDraft prices from the admin-edited config, not the code seed", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [...uaeSeed.requiredDocuments],
@@ -101,7 +101,7 @@ describe("config drives pricing and document rules", () => {
   });
 
   it("document checklist enforcement follows the admin-edited config", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, "admin_1", "admin@example.com", {
       ...uaeSeed,
       requiredDocuments: [
@@ -123,7 +123,7 @@ describe("config drives pricing and document rules", () => {
   });
 
   it("resolveCountryProduct throws for unknown countries", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await expect(resolveCountryProduct(context, "XX")).rejects.toThrow(
       /No visa product configured/,
     );

@@ -7,20 +7,20 @@ import {
 } from "../src/domain/activityPostgres";
 import { logActivity, type AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "./helpers";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 describe("activity", () => {
   let sql: SqlClient;
-  let context: SqlTestContext;
+  let context: TestContext;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
   });
 
-  afterEach(closeSqlTestContexts);
+  afterEach(closeTestContexts);
 
   it("logs into activity_events", async () => {
     const logged = await logActivity(
@@ -130,8 +130,9 @@ describe("activity", () => {
   });
 
   it("fails loudly when postgres is selected without a SQL client", async () => {
-    const { sql: _removed, ...withoutSql }: AppContext = context;
+    const { sql: _removed, ...rest } = context;
     void _removed;
+    const withoutSql = rest as unknown as AppContext;
     await expect(logActivity(withoutSql, "SIGNED_UP", "user_1", undefined)).rejects.toThrow(
       "AppContext.sql is required",
     );

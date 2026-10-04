@@ -11,7 +11,7 @@ import {
   AwsCognitoAdmins,
   InMemoryCognitoAdmins,
 } from "../../src/lib/cognitoAdmins";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 
 interface ApiResponse {
   statusCode: number;
@@ -45,13 +45,13 @@ function event(
 }
 
 describe("staff admin routes", () => {
-  let context: SqlTestContext;
+  let context: TestContext;
   let cognitoAdmins: InMemoryCognitoAdmins;
 
-  afterEach(closeSqlTestContexts);
+  afterEach(closeTestContexts);
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     cognitoAdmins = new InMemoryCognitoAdmins([
       {
         username: "owner-cognito-username",

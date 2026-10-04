@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createPartner } from "../src/domain/crm/partners";
-import { buildSqlTestContext } from "./helpers";
+import { buildTestContext } from "./helpers";
 
-describe("buildSqlTestContext", () => {
+describe("buildTestContext", () => {
   it("migrates PGlite and writes a partner through CRM_STORE=postgres", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(
       context,
       "rgs",

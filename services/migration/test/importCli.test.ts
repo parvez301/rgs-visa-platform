@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  buildSqlTestContext,
-  closeSqlTestContexts,
+  buildTestContext,
+  closeTestContexts,
   contextRefusingWrites,
   interceptSql,
-  type SqlTestContext,
+  type TestContext,
 } from "@rgs/api/test/helpers";
 import { listCasesByStatus } from "@rgs/api/src/domain/crm/cases";
 import { listReviewItems } from "@rgs/api/src/domain/crm/reviewQueue";
@@ -97,7 +97,7 @@ const WRITE_STATEMENT = /\b(?:insert\s+into|delete\s+from|update\s+[a-z_]+\s+set
  * write after it, the way a dropped connection or timeout would. Reads still
  * work. Returns a function that restores the healthy client.
  */
-function failWritesAfter(context: SqlTestContext, allowedWriteCount: number): () => void {
+function failWritesAfter(context: TestContext, allowedWriteCount: number): () => void {
   const healthyClient = context.sql;
   let writesSoFar = 0;
   interceptSql(context, async ({ text }, run) => {
@@ -112,7 +112,7 @@ function failWritesAfter(context: SqlTestContext, allowedWriteCount: number): ()
   };
 }
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 describe("runImportCli", () => {
   it("refuses to run without --workbook, printing the usage line and a non-zero exit code", async () => {
@@ -145,7 +145,7 @@ describe("runImportCli", () => {
   });
 
   it("writes nothing without --commit, and says so before it starts", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const readOnlyContext = contextRefusingWrites(context, "importCli dry run");
     const { dependencies, output } = buildDependencies({
       buildContext: () => readOnlyContext,
@@ -165,7 +165,7 @@ describe("runImportCli", () => {
   });
 
   it("writes with --commit, and the cases are really there afterwards", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const { dependencies, output } = buildDependencies({
       buildContext: () => context,
       readWorkbookAt: async () => buildWorkbookExtract(3),
@@ -181,7 +181,7 @@ describe("runImportCli", () => {
   });
 
   it("prints createdCaseIds as a count, never the array itself", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const { dependencies, output } = buildDependencies({
       buildContext: () => context,
       readWorkbookAt: async () => buildWorkbookExtract(4),
@@ -229,7 +229,7 @@ describe("runImportCli", () => {
   });
 
   it("does not claim cases were written when the workbook itself could not be read", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const { dependencies, output } = buildDependencies({
       buildContext: () => context,
       readWorkbookAt: async () => {
@@ -245,7 +245,7 @@ describe("runImportCli", () => {
   });
 
   it("DOES claim cases were written when the run died after writing some", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     // Ten rows, and the database stops accepting writes a few writes in -- the
     // real shape of a timed-out --commit at row N.
     const healthyClient = context.sql;
@@ -269,7 +269,7 @@ describe("runImportCli", () => {
   });
 
   it("DOES claim a case may have been written when the very first put times out", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     // allowedWriteCount 0: the FIRST write throws, before any write has ever
     // succeeded. The existing "died after writing some" test above lets five
     // writes land first, so `anyWriteAttempted` is already true no matter
@@ -293,7 +293,7 @@ describe("runImportCli", () => {
   });
 
   it("says nothing was written when a DRY run fails, whatever the cause", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const { dependencies, output } = buildDependencies({
       buildContext: () => context,
       readWorkbookAt: async () => {
@@ -308,7 +308,7 @@ describe("runImportCli", () => {
   });
 
   it("re-running after an aborted --commit finishes the import without duplicating a ref", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const restoreHealthyClient = failWritesAfter(context, 12);
     const { dependencies } = buildDependencies({
       buildContext: () => context,
@@ -343,7 +343,7 @@ describe("runImportCli", () => {
   });
 
   it("passes --tenant and --actor through instead of hard-coding them", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const { dependencies } = buildDependencies({
       buildContext: () => context,
       readWorkbookAt: async () => buildWorkbookExtract(1),

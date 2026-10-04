@@ -14,16 +14,16 @@ import {
 import { listRecentActivity, listUserActivity } from "../src/domain/activity";
 import { CorruptRecordError } from "../src/lib/errors";
 import {
-  buildSqlTestContext,
-  closeSqlTestContexts,
+  buildTestContext,
+  closeTestContexts,
   createSubmittableUaeDraft,
-  type SqlTestContext,
+  type TestContext,
 } from "./helpers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
-async function submittedApplication(context?: SqlTestContext) {
-  context ??= await buildSqlTestContext();
+async function submittedApplication(context?: TestContext) {
+  context ??= await buildTestContext();
   const applicationId = await createSubmittableUaeDraft(context);
   await submitApplication(context, "user_1", applicationId, "asha@example.com");
   return { context, applicationId };
@@ -83,7 +83,7 @@ describe("status queues", () => {
   });
 
   it("answers a typed 409 rather than a 500 when a single application will not parse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await context.sql.query(
       `insert into portal_applications (application_id, user_id, country_code, product_code,
          status, step_reached, travellers, amounts, payment_status, created_at, updated_at)

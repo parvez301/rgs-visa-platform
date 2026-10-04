@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import { readCaseOrThrow } from "../../src/domain/crm/caseStore";
 import { changeCaseStatus, createCase, updateCaseDetails } from "../../src/domain/crm/cases";
 import {
@@ -10,7 +10,7 @@ import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "ops@rgs.test";
@@ -23,7 +23,7 @@ describe("appointmentDatesInReminderWindow", () => {
 
 describe("runAppointmentReminders", () => {
   it("emails the partner for appointments 1-2 days out and is re-runnable", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(
       context,
       TENANT_ID,
@@ -84,7 +84,7 @@ describe("runAppointmentReminders", () => {
   });
 
   it("skips cases with no partner email and cases outside the window", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(
       context,
       TENANT_ID,
@@ -121,7 +121,7 @@ describe("runAppointmentReminders", () => {
 });
 
 async function seedCase(
-  context: SqlTestContext,
+  context: TestContext,
   caseRef: string,
   appointmentDate: string | undefined,
   contactEmail = "desk@skyline.test",
@@ -155,7 +155,7 @@ async function seedCase(
 
 describe("runAppointmentReminders on the stored case rows", () => {
   it("stamps the case with the reminded date and is re-runnable", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const inWindow = await seedCase(context, "PG-REM-1", "2026-09-23");
     context.email.sentEmails.length = 0;
 
@@ -173,7 +173,7 @@ describe("runAppointmentReminders on the stored case rows", () => {
   });
 
   it("covers both window days and ignores appointments outside it or on closed cases", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedCase(context, "PG-DAY-1", "2026-09-23");
     await seedCase(context, "PG-DAY-2", "2026-09-24");
     await seedCase(context, "PG-TODAY", "2026-09-22");
@@ -192,7 +192,7 @@ describe("runAppointmentReminders on the stored case rows", () => {
   });
 
   it("follows a reschedule, not a stale appointment", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, "PG-MOVED", "2026-09-23");
     await updateCaseDetails(
       context,

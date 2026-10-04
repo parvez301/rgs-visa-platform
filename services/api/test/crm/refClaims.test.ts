@@ -9,9 +9,9 @@ import {
   releaseRefKeys,
   staleRefKeys,
 } from "../../src/domain/crm/refClaims";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT_ID = "rgs";
 
@@ -54,7 +54,7 @@ describe("assertApplicantRefNosDistinct", () => {
 
 describe("claimNewRefs / releaseRefKeys", () => {
   it("claims every new key and refuses a key another case holds, case-insensitively", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("rgs-100"));
 
     await expect(
@@ -64,7 +64,7 @@ describe("claimNewRefs / releaseRefKeys", () => {
   });
 
   it("releases what it claimed in the same call when a later key clashes", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("TAKEN"));
 
     await expect(
@@ -77,13 +77,13 @@ describe("claimNewRefs / releaseRefKeys", () => {
     // A putIfAbsent that landed but whose response was lost: the retry sees our
     // own claim. It must come back in the list, or a later writeCase failure
     // would never release it and the REF would be orphaned forever.
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("R-1"));
     await expect(claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("R-1"))).resolves.toEqual(["R-1"]);
   });
 
   it("does not report keys the previous version already held", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("HELD"));
     await expect(
       claimNewRefs(context, TENANT_ID, "case_A", caseShape("HELD"), caseShape("HELD", ["NEW-2"])),
@@ -91,14 +91,14 @@ describe("claimNewRefs / releaseRefKeys", () => {
   });
 
   it("claims only keys the previous version did not have", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const newlyClaimed = await claimNewRefs(context, TENANT_ID, "case_A", caseShape("OLD"), caseShape("OLD", ["NEW-1"]));
     expect(newlyClaimed).toEqual(["NEW-1"]);
     expect(await readRefClaim(context, TENANT_ID, "OLD")).toBeUndefined();
   });
 
   it("retries the claim when the holder released it between our put and our read", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await claimNewRefs(context, TENANT_ID, "case_B", undefined, caseShape("RACE-1"));
 
     // The holder lets go after our insert lost but before our read lands: the
@@ -106,7 +106,7 @@ describe("claimNewRefs / releaseRefKeys", () => {
     // committed in between.
     const realSql = context.sql;
     let intercepted = false;
-    const racingContext: SqlTestContext = {
+    const racingContext: TestContext = {
       ...context,
       sql: {
         ...realSql,
@@ -130,7 +130,7 @@ describe("claimNewRefs / releaseRefKeys", () => {
   });
 
   it("release deletes only claims that name this case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await claimNewRefs(context, TENANT_ID, "case_A", undefined, caseShape("MINE"));
     await claimNewRefs(context, TENANT_ID, "case_B", undefined, caseShape("THEIRS"));
 
@@ -145,7 +145,7 @@ describe("claimNewRefs / releaseRefKeys", () => {
 });
 
 describe("REF claims on Postgres (SQL row assertions)", () => {
-  let context: SqlTestContext;
+  let context: TestContext;
   let sql: SqlClient;
 
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
@@ -154,7 +154,7 @@ describe("REF claims on Postgres (SQL row assertions)", () => {
   }
 
   beforeEach(async () => {
-    context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    context = await buildTestContext({ seedStatusEmailTemplates: false });
     sql = context.sql;
   });
 

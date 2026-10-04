@@ -8,14 +8,14 @@ import { addLineItem } from "../../src/domain/crm/lineItems";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import {
-  buildSqlTestContext,
-  closeSqlTestContexts,
+  buildTestContext,
+  closeTestContexts,
   contextRefusingWrites,
-  type SqlTestContext,
+  type TestContext,
 } from "../helpers";
 import type { ProposedChange } from "../../src/agent/approval";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
@@ -23,7 +23,7 @@ const ACTOR = "desk@rgs.local";
 // caseRef doubles as the partner's name suffix, so a test that needs two
 // independent cases in one context (two calls to this helper) does not trip
 // createPartner's one-canonical-name-per-partner rule.
-async function seedOneCase(context: SqlTestContext, caseRef = "80001") {
+async function seedOneCase(context: TestContext, caseRef = "80001") {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -272,7 +272,7 @@ describe("every WRITE_TOOLS tool proposes without writing", () => {
   it.each(WRITE_TOOL_INPUT_CASES)(
     "$tool.name / $label: execute resolves to a PENDING proposal and never reaches the table",
     async ({ tool, build }) => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const partner = await createPartner(
         context,
         TENANT_ID,
@@ -332,7 +332,7 @@ describe("every WRITE_TOOLS tool proposes without writing", () => {
 
 describe("set_billing", () => {
   it("reads the from value off the stored case, not a placeholder", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     expect(seededCase.billingStatus).toBe("UNBILLED");
 
@@ -352,7 +352,7 @@ describe("set_billing", () => {
   });
 
   it("applies through changeBillingStatus, honouring the billing state machine", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_billing")!;
 
@@ -377,7 +377,7 @@ describe("set_billing", () => {
 
 describe("set_custody", () => {
   it("reads the applicant's from value off the stored case, not the schema default", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     // NOT_HELD is CaseApplicantSchema's default -- moving custody off it first
     // is what stops a hardcoded "NOT_HELD" from passing this assertion.
@@ -397,7 +397,7 @@ describe("set_custody", () => {
   });
 
   it("refuses an applicantRef that is not on the case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_custody")!;
 
@@ -410,7 +410,7 @@ describe("set_custody", () => {
   });
 
   it("applies through changeApplicantCustody, honouring the custody state machine and the auto-CLOSED derivation", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("set_custody")!;
 
@@ -457,7 +457,7 @@ describe("set_custody", () => {
 
 describe("add_line_item", () => {
   it("describes the line being added and reports the stored total, without recomputing it", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     // Seed one real line first -- lineItems: [] / totalInr: 0 is the schema
     // default, and asserting against that default is indistinguishable from a
@@ -488,7 +488,7 @@ describe("add_line_item", () => {
   });
 
   it("applies through addLineItem, which recomputes totalInr from every stored line", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("add_line_item")!;
 
@@ -504,7 +504,7 @@ describe("add_line_item", () => {
 
 describe("update_case", () => {
   it("reports (not set) for a field with no prior value", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     expect(seededCase.appointmentDate).toBeUndefined();
 
@@ -522,7 +522,7 @@ describe("update_case", () => {
   });
 
   it("reports the stored value as from when a prior value exists, not (not set)", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     await updateCaseDetails(context, TENANT_ID, seededCase.caseId, { appointmentDate: "2026-09-09" }, ACTOR);
 
@@ -540,7 +540,7 @@ describe("update_case", () => {
   });
 
   it("reads visaType's from off the stored case too, not only appointmentDate's", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     // seedOneCase sets visaType at creation -- already off the "unset" state,
     // so this covers a second of the six from-branches for free.
@@ -560,7 +560,7 @@ describe("update_case", () => {
   });
 
   it("refuses a call with no fields to change instead of proposing an empty diff", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
 
@@ -570,7 +570,7 @@ describe("update_case", () => {
   });
 
   it("applies through updateCaseDetails, which still ignores the state-machine axes", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     const tool = new ToolRegistry(WRITE_TOOLS).get("update_case")!;
 
@@ -604,7 +604,7 @@ describe("update_case", () => {
 
 describe("create_case", () => {
   it("uses the (new case) sentinel for every from, never the mutation sentinel 'unknown'", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(
       context,
       TENANT_ID,
@@ -637,7 +637,7 @@ describe("create_case", () => {
   });
 
   it("applies through createCase and produces a real, readable case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(
       context,
       TENANT_ID,

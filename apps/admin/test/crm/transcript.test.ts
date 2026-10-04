@@ -1,9 +1,8 @@
-import { describe, expect, it } from "vitest";
 import { RunTurnBody } from "@rgs/api/src/http/agentApi";
 import { MAX_TOOL_ITERATIONS as ROUTE_MAX_TOOL_ITERATIONS } from "@rgs/api/src/agent/loop";
 import { registerAgentRoutes } from "@rgs/api/src/http/agentApi";
 import { Router } from "@rgs/api/src/http/router";
-import { buildTestContext } from "@rgs/api/test/helpers";
+import { buildTestContext, closeTestContexts } from "@rgs/api/test/helpers";
 import type { AppContext } from "@rgs/api/src/lib/context";
 import type {
   LlmCompletionRequest,
@@ -130,12 +129,14 @@ describe("the iteration-cap sentence", () => {
 });
 
 describe("the transcript survives a real turn through the real route", () => {
+  afterEach(closeTestContexts);
+
   it("is accepted by the router, not just by the schema", async () => {
     // The schema is the contract; the router is where the contract is
     // enforced in production. Driving the panel's transcript through
     // registerAgentRoutes with a scripted provider is what makes this test
     // about the system rather than about a zod object.
-    const { router } = buildAgentRouterForTest();
+    const { router } = await buildAgentRouterForTest();
     let transcript: TranscriptMessage[] = [];
 
     const firstResponse = await dispatch(router, "POST", "/api/v1/admin/crm/agent/turn", {
@@ -226,7 +227,7 @@ function buildScriptedLlm(): LlmProvider {
   };
 }
 
-function buildAgentRouterForTest(): { router: Router; context: AppContext } {
-  const context: AppContext = { ...buildTestContext(), llm: buildScriptedLlm() };
+async function buildAgentRouterForTest(): Promise<{ router: Router; context: AppContext }> {
+  const context: AppContext = { ...(await buildTestContext()), llm: buildScriptedLlm() };
   return { router: registerAgentRoutes(new Router(), context), context };
 }

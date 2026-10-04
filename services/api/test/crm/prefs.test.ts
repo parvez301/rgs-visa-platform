@@ -7,7 +7,7 @@ import {
 } from "../../src/agent/prefs";
 import { readUserPrefsPostgres, writeUserPrefsPostgres } from "../../src/domain/crm/prefsPostgres";
 import type { SqlClient } from "../../src/lib/sql";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 
 const TENANT_ID = "rgs";
 const ALICE = "alice@rgs.local";
@@ -15,7 +15,7 @@ const BOB = "bob@rgs.local";
 
 describe("CRM user prefs", () => {
   let sql: SqlClient;
-  let context: SqlTestContext;
+  let context: TestContext;
 
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
     const result = await sql.query<{ value: T }>(text, values);
@@ -23,11 +23,11 @@ describe("CRM user prefs", () => {
   }
 
   beforeEach(async () => {
-    context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    context = await buildTestContext({ seedStatusEmailTemplates: false });
     sql = context.sql;
   });
 
-  afterEach(closeSqlTestContexts);
+  afterEach(closeTestContexts);
 
   it("reads nothing for a user with no row, and the safe defaults through readUserPrefs", async () => {
     expect(await readUserPrefsPostgres(sql, TENANT_ID, ALICE)).toBeUndefined();

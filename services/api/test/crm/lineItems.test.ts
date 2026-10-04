@@ -3,17 +3,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { addLineItem } from "../../src/domain/crm/lineItems";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
 import { writeCase } from "../../src/domain/crm/caseStore";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { createCase } from "../../src/domain/crm/cases";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
 
-async function seedOneCase(context: SqlTestContext) {
+async function seedOneCase(context: TestContext) {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -39,7 +39,7 @@ async function seedOneCase(context: SqlTestContext) {
 
 describe("addLineItem", () => {
   it("appends the item and recomputes totalInr from every line, not by adding to the old total", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
 
     const afterFirst = await addLineItem(
@@ -63,7 +63,7 @@ describe("addLineItem", () => {
   });
 
   it("stores amountInr as the unit price and multiplies by quantity for the total, rather than folding quantity into amountInr", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
 
     const afterAdd = await addLineItem(
@@ -83,7 +83,7 @@ describe("addLineItem", () => {
   });
 
   it("refuses a code that is not in the catalog, as a 400 ApiError rather than a bare Error", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     await expect(
       addLineItem(
@@ -100,7 +100,7 @@ describe("addLineItem", () => {
   });
 
   it("rejects a quantity that fails LineItemSchema as a 400 ApiError, not an unhandled ZodError", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
 
     // quantity: 0 clears the catalog-membership check (VISA_SERVICE_FEE is
@@ -120,7 +120,7 @@ describe("addLineItem", () => {
   });
 
   it("records an auditable event naming the code, quantity, unit amount, and line total", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
     await addLineItem(
       context,
@@ -147,7 +147,7 @@ describe("addLineItem", () => {
   });
 
   it("recomputes totalInr from the full line-item list rather than incrementing an already-wrong stored total", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context);
 
     // Force the stored totalInr to disagree with the one real line item it

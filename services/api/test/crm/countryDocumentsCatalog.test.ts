@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getCountryProduct } from "@rgs/shared";
-import { buildSqlTestContext, closeSqlTestContexts } from "../helpers";
+import { buildTestContext, closeTestContexts } from "../helpers";
 import { listDestinationCountries } from "../../src/domain/crm/destinationCountries";
 import {
   coerceLegacyCountryProduct,
@@ -9,7 +9,7 @@ import {
   upsertCountryProduct,
 } from "../../src/domain/config";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const ADMIN_ID = "admin_1";
 const ADMIN_EMAIL = "admin@example.com";
@@ -17,7 +17,7 @@ const seedUae = getCountryProduct("AE");
 
 describe("listActiveCountryConfig reads requiredDocuments straight from the product", () => {
   it("returns requiredDocuments labels from the product with no CRM merge", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, ADMIN_ID, ADMIN_EMAIL, {
       ...seedUae,
       requiredDocuments: [{ label: "Emirates ID copy" }, { label: "Photo", portalDocType: "PHOTO" }],
@@ -33,7 +33,7 @@ describe("listActiveCountryConfig reads requiredDocuments straight from the prod
   });
 
   it("omits inactive products", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, ADMIN_ID, ADMIN_EMAIL, { ...seedUae, active: false });
 
     const listing = await listActiveCountryConfig(context);
@@ -61,7 +61,7 @@ describe("legacy docsRequired attributes", () => {
 
 describe("destination picker", () => {
   it("still omits inactive countries from the destination picker", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, ADMIN_ID, ADMIN_EMAIL, { ...seedUae, active: false });
 
     const destinations = await listDestinationCountries(context);
@@ -71,7 +71,7 @@ describe("destination picker", () => {
 
 describe("upsertCountryProduct with legacy or read-time attributes on the input", () => {
   it("neither persists docsRequired / requiredDocumentLabels nor returns them", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
 
     const upserted = await upsertCountryProduct(context, ADMIN_ID, ADMIN_EMAIL, {
       ...seedUae,
@@ -91,7 +91,7 @@ describe("upsertCountryProduct with legacy or read-time attributes on the input"
   });
 
   it("rejects an input that only carries the legacy docsRequired", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const { requiredDocuments: _dropped, ...withoutDocuments } = seedUae;
 
     await expect(

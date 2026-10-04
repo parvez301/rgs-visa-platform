@@ -2,14 +2,14 @@ import { crm } from "@rgs/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SqlClient } from "../../src/lib/sql";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import { Router } from "../../src/http/router";
 import { registerCrmRoutes } from "../../src/http/crmApi";
 import { writeCase } from "../../src/domain/crm/caseStore";
 import { recordReviewItem } from "../../src/domain/crm/reviewQueue";
 import type { AppContext } from "../../src/lib/context";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 function buildRouter(context: AppContext): Router {
   return registerCrmRoutes(new Router(), context);
@@ -128,7 +128,7 @@ async function callWithoutEmailClaim(
 }
 
 async function seedLedgerCase(
-  context: SqlTestContext,
+  context: TestContext,
   caseId: string,
   caseStatus: crm.CaseStatus,
   partnerId = "partner_1",
@@ -158,7 +158,7 @@ async function seedLedgerCase(
 
 describe("crm admin routes", () => {
   it("creates a partner then a case, and reads the case back", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
 
     const partnerResponse = await call(router, "POST", "/api/v1/admin/crm/partners", {
@@ -187,7 +187,7 @@ describe("crm admin routes", () => {
   });
 
   it("lists cases by status from the query parameter", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -212,7 +212,7 @@ describe("crm admin routes", () => {
   });
 
   it("moves the case status through PUT", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -239,7 +239,7 @@ describe("crm admin routes", () => {
   });
 
   it("returns 409 for an illegal transition", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -272,7 +272,7 @@ describe("crm admin routes", () => {
   // SENT_BACK applicant could only be got rid of by CLOSING a file the embassy
   // had actually returned.
   it("reopens a decided case when a passport comes back, then works and closes it normally", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -341,7 +341,7 @@ describe("crm admin routes", () => {
   });
 
   it("returns 400 for a body that fails validation", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const bad = await call(router, "PUT", "/api/v1/admin/crm/cases/case_1/status", {
       toStatus: "NOT_A_STATUS",
@@ -350,14 +350,14 @@ describe("crm admin routes", () => {
   });
 
   it("returns 404 for a case that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const missing = await call(router, "GET", "/api/v1/admin/crm/cases/nope");
     expect(missing.statusCode).toBe(404);
   });
 
   it("exposes the audit trail for a case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -382,7 +382,7 @@ describe("crm admin routes", () => {
   });
 
   it("creates a traveller and finds the same one again by passport", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const created = await call(router, "POST", "/api/v1/admin/crm/travellers", {
       fullName: "Umesh Kumar Yadav",
@@ -405,7 +405,7 @@ describe("crm admin routes", () => {
   // ApiError — the router maps it to a 500. The status code is the assertion:
   // `.rejects.toThrow()` passes for any error, including the 500 shape.
   it("returns 400, not 500, for a traveller name that is only whitespace", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const blankName = await call(router, "POST", "/api/v1/admin/crm/travellers", {
       fullName: "   ",
@@ -415,7 +415,7 @@ describe("crm admin routes", () => {
   });
 
   it("returns 404 looking up a passport with no traveller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const missing = await call(
       router,
@@ -426,7 +426,7 @@ describe("crm admin routes", () => {
   });
 
   it("moves applicant custody through PUT", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -452,7 +452,7 @@ describe("crm admin routes", () => {
   });
 
   it("returns 404 moving custody for an applicant that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -481,7 +481,7 @@ describe("crm admin routes", () => {
   // only dedup path available through the API for that majority — this is
   // the route Plan 3's migration importer needs.
   it("creates a traveller with no passport and finds it again by name", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const created = await call(router, "POST", "/api/v1/admin/crm/travellers", {
       fullName: "No Passport Person",
@@ -498,7 +498,7 @@ describe("crm admin routes", () => {
   });
 
   it("returns 404 looking up a name with no traveller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const missing = await call(
       router,
@@ -512,7 +512,7 @@ describe("crm admin routes", () => {
   // Task 7 gave the CRM a way to record a visa's outcome; the brief predates
   // it and has no route, so this exercises the route added for it.
   it("changes an applicant's outcome through PUT and derives the case status", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -543,7 +543,7 @@ describe("crm admin routes", () => {
   });
 
   it("returns 404 changing the outcome of an applicant that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -568,7 +568,7 @@ describe("crm admin routes", () => {
   });
 
   it("lists the cases belonging to one partner, and only that partner's", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const ozzy = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -611,7 +611,7 @@ describe("crm admin routes", () => {
   });
 
   it("rejects an unauthenticated caller on the by-partner route", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const rejected = await callUnauthenticated(
       router,
@@ -622,7 +622,7 @@ describe("crm admin routes", () => {
   });
 
   it("returns 404 creating a case for a traveller that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -640,7 +640,7 @@ describe("crm admin routes", () => {
   });
 
   it("creates a case for an admin token that carries no email claim", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -661,7 +661,7 @@ describe("crm admin routes", () => {
 
   // --- One half-written case partition must not take the whole queue down. ---
   it("still lists the healthy cases when one case partition lost its applicants", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -712,7 +712,7 @@ describe("crm admin routes", () => {
   // The partner list carries the same blast radius the case queue was fixed
   // for: one bad row used to 500 the list for the whole tenant.
   it("still serves the partner list, naming the row it skipped, when one stored partner will not parse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const healthy = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Luxe Escape",
@@ -738,7 +738,7 @@ describe("crm admin routes", () => {
   // typed 409 over HTTP, not a 500. Asserted on the real router response,
   // because the status code is the part that was wrong.
   it("answers 409 rather than 500 when a stored traveller record will not parse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     // Indexed under its passport, but the body has lost its normalizedName —
     // the shape a half-written row or an older importer leaves behind.
@@ -762,14 +762,14 @@ describe("crm admin routes", () => {
   // verified statically elsewhere — these two prove the reject path actually
   // fires on a CRM route itself: one read route, one mutating route.
   it("rejects an unauthenticated caller on a CRM read route", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const rejected = await callUnauthenticated(router, "GET", "/api/v1/admin/crm/partners");
     expect(rejected.statusCode).toBe(403);
   });
 
   it("rejects an unauthenticated caller on a CRM write route", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const rejected = await callUnauthenticated(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -785,7 +785,7 @@ describe("crm admin routes", () => {
   // a *users* authorizer; a consolidation would remove the only thing guarding
   // this route with nothing going red.
   it("rejects an unauthenticated caller on the single review-item route", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
     const rejected = await callUnauthenticated(
@@ -815,7 +815,7 @@ describe("crm admin routes", () => {
   }
 
   it("lists open review items and resolves one", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
 
@@ -848,7 +848,7 @@ describe("crm admin routes", () => {
   // asked for OPEN would still pass the test above, so this asks for the
   // partition a resolved item actually moved to.
   it("lists a resolved item under the status named in the query parameter", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
     const dismissal = await call(
@@ -872,7 +872,7 @@ describe("crm admin routes", () => {
   });
 
   it("rejects an unknown review status with a 400 rather than silently listing OPEN", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const response = await call(router, "GET", "/api/v1/admin/crm/review", undefined, {
       status: "NONSENSE",
@@ -882,7 +882,7 @@ describe("crm admin routes", () => {
   });
 
   it("reads a single review item back by id", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
 
@@ -896,7 +896,7 @@ describe("crm admin routes", () => {
   });
 
   it("answers /review/groups with grouped open items, not a 404 for review item \"groups\"", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     await recordReviewItem(context, "rgs", {
       reason: "UNMAPPED_COUNTRY",
@@ -914,7 +914,7 @@ describe("crm admin routes", () => {
   });
 
   it("POST /review/groups/resolve dismisses a group and reports the chunk", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     await recordReviewItem(context, "rgs", {
       reason: "SUSPECT_PHONE",
@@ -935,7 +935,7 @@ describe("crm admin routes", () => {
   });
 
   it("POST /review/groups/resolve rejects an unknown reason as a 400", async () => {
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
     const response = await call(router, "POST", "/api/v1/admin/crm/review/groups/resolve", {
       reason: "NOT_A_REASON",
       fieldName: "Phone",
@@ -946,7 +946,7 @@ describe("crm admin routes", () => {
   });
 
   it("returns 404 for an unknown review item", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const response = await call(router, "GET", "/api/v1/admin/crm/review/nope");
     expect(response.statusCode).toBe(404);
@@ -957,7 +957,7 @@ describe("crm admin routes", () => {
   // so an unwrapped ZodError on request input escapes as a 500 where the
   // caller deserves a 400.
   it("rejects an unknown reviewStatus in the resolve body with 400, not 500", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
 
@@ -972,7 +972,7 @@ describe("crm admin routes", () => {
   });
 
   it("rejects a resolve call with no body at all with 400, not 500", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
 
@@ -988,7 +988,7 @@ describe("crm admin routes", () => {
   // Two reviewers working the queue at once is the expected case, so the
   // second decision is a 409 rather than a silent overwrite of the first.
   it("answers 409 when an already resolved item is resolved again", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
     const resolvePath = `/api/v1/admin/crm/review/${recorded.reviewItemId}/resolve`;
@@ -1006,7 +1006,7 @@ describe("crm admin routes", () => {
   // and an item silently missing from the queue looks exactly like an item
   // that was never imported — the failure this shape exists to prevent.
   it("names an unreadable review row in the listing instead of dropping it", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const healthy = await recordReviewItem(context, "rgs", baseReviewInput);
     // Indexed in the OPEN partition, but the body has lost its caseRef — the
@@ -1027,7 +1027,7 @@ describe("crm admin routes", () => {
 
   // 409 and not 404 on the single read: the item is on file, it is unreadable.
   it("answers 409 rather than 500 when a stored review item will not parse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     await context.sql.query(
       `insert into crm_review_items (
@@ -1043,7 +1043,7 @@ describe("crm admin routes", () => {
   });
 
   it("rejects an unauthenticated caller on the review listing route", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const rejected = await callUnauthenticated(router, "GET", "/api/v1/admin/crm/review");
     expect(rejected.statusCode).toBe(403);
@@ -1055,7 +1055,7 @@ describe("crm admin routes", () => {
   // reviewer. A guard that ran after resolveReviewItem would 403 the response
   // and still have written the decision.
   it("rejects an unauthenticated caller on the review resolve route without writing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
 
@@ -1075,7 +1075,7 @@ describe("crm admin routes", () => {
   // resolve route would pass its unit tests and then 404 in deployment. Assert
   // the absence, so adding one goes red here rather than in production.
   it("exposes no PATCH route for resolving a review item", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const recorded = await recordReviewItem(context, "rgs", baseReviewInput);
 
@@ -1089,7 +1089,7 @@ describe("crm admin routes", () => {
   });
 
   it("attaches resolved traveller names to GET /cases/{caseId}", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const { payload: partner } = await call(router, "POST", "/api/v1/admin/crm/partners", { canonicalName: "Skyline Travels" });
     const { payload: traveller } = await call(router, "POST", "/api/v1/admin/crm/travellers", { fullName: "Asha Rao", passportNumber: "Z1" });
@@ -1115,7 +1115,7 @@ describe("crm admin routes", () => {
 
 describe("PUT /api/v1/admin/crm/cases/{caseId}", () => {
   it("updates an appointment date", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedLedgerCase(context, "case_1", "NEW");
 
     const { statusCode, payload } = await call(
@@ -1130,7 +1130,7 @@ describe("PUT /api/v1/admin/crm/cases/{caseId}", () => {
   });
 
   it("refuses to move caseStatus through this route", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedLedgerCase(context, "case_1", "NEW");
 
     const { payload } = await call(buildRouter(context), "PUT", "/api/v1/admin/crm/cases/case_1", {
@@ -1149,7 +1149,7 @@ describe("PUT /api/v1/admin/crm/cases/{caseId}", () => {
   });
 
   it("400s a date that is not a date", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedLedgerCase(context, "case_1", "NEW");
 
     const { statusCode, payload } = await call(
@@ -1177,7 +1177,7 @@ describe("PUT /api/v1/admin/crm/cases/{caseId}", () => {
 
   it("404s an unknown case", async () => {
     const { statusCode } = await call(
-      buildRouter(await buildSqlTestContext()),
+      buildRouter(await buildTestContext()),
       "PUT",
       "/api/v1/admin/crm/cases/case_nope",
       { appointmentDate: "2026-04-01" },
@@ -1188,7 +1188,7 @@ describe("PUT /api/v1/admin/crm/cases/{caseId}", () => {
 
   it("refuses an unauthenticated caller", async () => {
     const { statusCode } = await callUnauthenticated(
-      buildRouter(await buildSqlTestContext()),
+      buildRouter(await buildTestContext()),
       "PUT",
       "/api/v1/admin/crm/cases/case_1",
       { appointmentDate: "2026-04-01" },
@@ -1203,7 +1203,7 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
     // Router.match returns the FIRST route whose segment count and literals
     // match, and both paths are six segments. Registration order is the whole
     // defence, so it is asserted directly rather than inferred from a 200.
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
     const registeredPaths = router.registeredRoutes
       .filter((route) => route.method === "GET")
       .map((route) => route.path);
@@ -1215,7 +1215,7 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
   });
 
   it("answers rows, not a case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedLedgerCase(context, "case_1", "NEW");
     const router = buildRouter(context);
 
@@ -1228,7 +1228,7 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
   });
 
   it("parses a comma-joined repeated status parameter", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedLedgerCase(context, "case_1", "NEW");
     await seedLedgerCase(context, "case_2", "CLOSED");
     const router = buildRouter(context);
@@ -1242,7 +1242,7 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
   });
 
   it("400s an unknown status rather than quietly returning everything", async () => {
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
 
     const { statusCode, payload } = await call(
       router,
@@ -1257,7 +1257,7 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
   });
 
   it("names a blank status token rather than leaving the message empty", async () => {
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
 
     const { statusCode, payload } = await call(
       router,
@@ -1272,7 +1272,7 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
   });
 
   it("400s a limit outside the allowed range", async () => {
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
 
     expect(
       (await call(router, "GET", "/api/v1/admin/crm/cases/ledger", undefined, { limit: "0" }))
@@ -1289,7 +1289,7 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
   });
 
   it("applies status and partner together, and says so in appliedQuery", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedLedgerCase(context, "case_new", "NEW", "partner_a");
     await seedLedgerCase(context, "case_closed", "CLOSED", "partner_a");
     const router = buildRouter(context);
@@ -1307,7 +1307,7 @@ describe("GET /api/v1/admin/crm/cases/ledger", () => {
 
   it("refuses an unauthenticated caller", async () => {
     const { statusCode } = await callUnauthenticated(
-      buildRouter(await buildSqlTestContext()),
+      buildRouter(await buildTestContext()),
       "GET",
       "/api/v1/admin/crm/cases/ledger",
     );
@@ -1345,7 +1345,7 @@ describe("GET /api/v1/admin/crm/cases/ledger filters over Postgres", () => {
   const LEDGER_PATH = "/api/v1/admin/crm/cases/ledger";
   it("serves combined status, partner, country and search filters from Postgres", async () => {
     // Dynamo is left empty: a row can only come back through the SQL path.
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const sql = context.sql;
     await seedPostgresLedgerCase(sql, "match", { searchText: "asha rao" });
     await seedPostgresLedgerCase(sql, "wrong_status", { caseStatus: "CLOSED", searchText: "asha rao" });
@@ -1373,7 +1373,7 @@ describe("GET /api/v1/admin/crm/cases/ledger filters over Postgres", () => {
   });
 
   it("applies caseType, billingStatus and date filters, and reports them", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const sql = context.sql;
     await seedPostgresLedgerCase(sql, "case_1");
     await sql.query(
@@ -1396,7 +1396,7 @@ describe("GET /api/v1/admin/crm/cases/ledger filters over Postgres", () => {
   });
 
   it("400s an unknown caseType, billingStatus, or impossible date on the Postgres path", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const sql = context.sql;
     const router = buildRouter(context);
 
@@ -1414,7 +1414,7 @@ describe("GET /api/v1/admin/crm/cases/ledger filters over Postgres", () => {
 
 describe("GET /api/v1/admin/crm/review/summary", () => {
   it("is matched before the {reviewItemId} route", async () => {
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
     const registeredPaths = router.registeredRoutes
       .filter((route) => route.method === "GET")
       .map((route) => route.path);
@@ -1425,7 +1425,7 @@ describe("GET /api/v1/admin/crm/review/summary", () => {
   });
 
   it("answers the caseRefs with open items", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await recordReviewItem(context, "rgs", {
       reason: "UNMAPPED_STATUS",
       sourceSheet: "2026",
@@ -1448,7 +1448,7 @@ describe("GET /api/v1/admin/crm/review/summary", () => {
 
   it("refuses an unauthenticated caller", async () => {
     const { statusCode } = await callUnauthenticated(
-      buildRouter(await buildSqlTestContext()),
+      buildRouter(await buildTestContext()),
       "GET",
       "/api/v1/admin/crm/review/summary",
     );
@@ -1458,7 +1458,7 @@ describe("GET /api/v1/admin/crm/review/summary", () => {
 
 describe("crm cases family group fields over HTTP", () => {
   it("trims groupName, clientEmail and applicant refNo on create", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Skyline Travels",
@@ -1484,7 +1484,7 @@ describe("crm cases family group fields over HTTP", () => {
   });
 
   it("clears groupName and clientEmail over PUT when sent as null", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Skyline Travels",
@@ -1514,7 +1514,7 @@ describe("crm cases family group fields over HTTP", () => {
   });
 
   it("returns 400 for a malformed clientEmail on PUT", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Skyline Travels",
@@ -1539,7 +1539,7 @@ describe("crm cases family group fields over HTTP", () => {
   });
 
   it("returns 400 for an applicant refNo over 40 characters on create", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Skyline Travels",
@@ -1560,7 +1560,7 @@ describe("crm cases family group fields over HTTP", () => {
   });
 
   it("updates a partner's contact email through PUT /partners/{partnerId}/contact", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const { payload: partner } = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Skyline Travels",
@@ -1578,7 +1578,7 @@ describe("crm cases family group fields over HTTP", () => {
   });
 
   it("rejects a malformed contact email on the partner contact route with 400", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const { payload: partner } = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Skyline Travels",
@@ -1592,7 +1592,7 @@ describe("crm cases family group fields over HTTP", () => {
   });
 
   it("POST /cases answers 409 with a readable message for a duplicate REF", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -1616,7 +1616,7 @@ describe("crm cases family group fields over HTTP", () => {
   });
 
   it("PUT /cases/{caseId} accepts caseRef and null-clears remarks, and still ignores caseStatus", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
       canonicalName: "Ozzy Travels",
@@ -1648,7 +1648,7 @@ describe("crm cases family group fields over HTTP", () => {
 
 describe("applicant routes", () => {
   it("PUT edits, POST adds, and DELETE removes an applicant", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", { canonicalName: "Family Tours" });
     const firstTravellerId = await seedTraveller(router, "Anil Sharma");
@@ -1691,7 +1691,7 @@ describe("applicant routes", () => {
   });
 
   it("POST /cases/export-rows refuses an empty or oversized batch and is not shadowed by /cases/{caseId}", async () => {
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
     expect((await call(router, "POST", "/api/v1/admin/crm/cases/export-rows", { caseIds: [] })).statusCode).toBe(400);
     const tooMany = Array.from({ length: 501 }, (_, index) => `case_${index}`);
     expect((await call(router, "POST", "/api/v1/admin/crm/cases/export-rows", { caseIds: tooMany })).statusCode).toBe(400);
@@ -1743,7 +1743,7 @@ describe("status email template routes", () => {
   const templatesBase = "/api/v1/admin/crm/status-email-templates";
 
   it("lists every status with stored-or-default rows", async () => {
-    const context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    const context = await buildTestContext({ seedStatusEmailTemplates: false });
     const router = buildRouter(context);
     const { statusCode, payload } = await call(router, "GET", templatesBase);
     expect(statusCode).toBe(200);
@@ -1754,7 +1754,7 @@ describe("status email template routes", () => {
   });
 
   it("GET by status returns default without a stored row", async () => {
-    const context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    const context = await buildTestContext({ seedStatusEmailTemplates: false });
     const router = buildRouter(context);
     const { statusCode, payload } = await call(router, "GET", `${templatesBase}/NEW`);
     expect(statusCode).toBe(200);
@@ -1766,7 +1766,7 @@ describe("status email template routes", () => {
   });
 
   it("PUT upserts then reset restores the seeded default", async () => {
-    const context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    const context = await buildTestContext({ seedStatusEmailTemplates: false });
     const router = buildRouter(context);
     const putResponse = await call(router, "PUT", `${templatesBase}/NEW`, {
       subject: "Custom subject",
@@ -1784,14 +1784,14 @@ describe("status email template routes", () => {
   });
 
   it("rejects an unknown case status in the path", async () => {
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
     const { statusCode, payload } = await call(router, "GET", `${templatesBase}/NOT_A_STATUS`);
     expect(statusCode).toBe(400);
     expect(payload.message).toMatch(/case status/i);
   });
 
   it("rejects an invalid upsert body with 400, not 500", async () => {
-    const router = buildRouter(await buildSqlTestContext({ seedStatusEmailTemplates: false }));
+    const router = buildRouter(await buildTestContext({ seedStatusEmailTemplates: false }));
     const { statusCode } = await call(router, "PUT", `${templatesBase}/NEW`, {
       subject: "s",
       body: "   ",
@@ -1801,7 +1801,7 @@ describe("status email template routes", () => {
   });
 
   it("403s Viewer on PUT", async () => {
-    const router = buildRouter(await buildSqlTestContext({ seedStatusEmailTemplates: false }));
+    const router = buildRouter(await buildTestContext({ seedStatusEmailTemplates: false }));
     const { statusCode } = await callWithRole(router, "Viewer", "PUT", `${templatesBase}/NEW`, {
       subject: "s",
       body: "b",
@@ -1813,7 +1813,7 @@ describe("status email template routes", () => {
 
 describe("CRM destination countries", () => {
   it("lists destinations with full country names for CRM readers", async () => {
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
     const response = await call(router, "GET", "/api/v1/admin/crm/destination-countries");
     expect(response.statusCode).toBe(200);
     expect(response.payload.countries.length).toBeGreaterThan(0);
@@ -1827,7 +1827,7 @@ describe("CRM destination countries", () => {
   });
 
   it("does not register country-checklists admin routes", async () => {
-    const router = buildRouter(await buildSqlTestContext());
+    const router = buildRouter(await buildTestContext());
     for (const [method, path] of [
       ["GET", "/api/v1/admin/crm/country-checklists"],
       ["GET", "/api/v1/admin/crm/country-checklists/AE"],
@@ -1844,7 +1844,7 @@ describe("CRM destination countries", () => {
   });
 
   it("400s an impossible calendar date on the write routes instead of storing or 500ing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const router = buildRouter(context);
     const { payload: partner } = await call(router, "POST", "/api/v1/admin/crm/partners", { canonicalName: "Date Tours" });
     const { payload: traveller } = await call(router, "POST", "/api/v1/admin/crm/travellers", { fullName: "Dee Date" });

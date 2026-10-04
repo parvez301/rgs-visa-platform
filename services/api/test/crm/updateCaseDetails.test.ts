@@ -3,14 +3,14 @@ import { createCase, updateCaseDetails } from "../../src/domain/crm/cases";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
 
-async function seedOneCase(context: SqlTestContext) {
+async function seedOneCase(context: TestContext) {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -36,7 +36,7 @@ async function seedOneCase(context: SqlTestContext) {
 
 describe("updateCaseDetails", () => {
   it("changes only the six permitted fields", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
 
     const updated = await updateCaseDetails(
@@ -72,7 +72,7 @@ describe("updateCaseDetails", () => {
   });
 
   it("stores remarks and names them when they change", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
 
     const updated = await updateCaseDetails(
@@ -93,7 +93,7 @@ describe("updateCaseDetails", () => {
   });
 
   it("records a CASE_UPDATED event naming exactly which fields moved", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
 
     // Both fields start unset on a freshly seeded case, so "moved" and
@@ -117,7 +117,7 @@ describe("updateCaseDetails", () => {
   });
 
   it("names only the field that actually moved when one supplied value already matches storage", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
     await updateCaseDetails(context, TENANT_ID, seeded.caseId, { appointmentDate: "2026-10-01" }, ACTOR);
 
@@ -145,7 +145,7 @@ describe("updateCaseDetails", () => {
   });
 
   it("is a no-op -- no write, no event -- when nothing actually changes", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
 
     const resultOnEmptyInput = await updateCaseDetails(context, TENANT_ID, seeded.caseId, {}, ACTOR);
@@ -169,7 +169,7 @@ describe("updateCaseDetails", () => {
   // `as never` is how the test defeats the compile-time guard the input type
   // already gives this route, to prove the RUNTIME behaviour holds too.
   it("ignores an attempt to move a state-machine axis through the details route", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
     const updated = await updateCaseDetails(
       context,
@@ -184,7 +184,7 @@ describe("updateCaseDetails", () => {
   });
 
   it("rejects a malformed date instead of a bare 500", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
     // toMatchObject({ statusCode }), not a bare rejects.toThrow(): an
     // unwrapped ZodError throws too, so a bare toThrow() cannot tell the 400
@@ -195,14 +195,14 @@ describe("updateCaseDetails", () => {
   });
 
   it("404s on a caseId that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await expect(
       updateCaseDetails(context, TENANT_ID, "case_missing", { appointmentDate: "2026-10-01" }, ACTOR),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("rejects a collection date earlier than the case's received date", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
 
     await expect(
@@ -214,7 +214,7 @@ describe("updateCaseDetails", () => {
   });
 
   it("sets and then clears groupName and clientEmail", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
 
     const withFields = await updateCaseDetails(
@@ -246,7 +246,7 @@ describe("updateCaseDetails", () => {
   });
 
   it("treats clearing an already-absent clientEmail as no change", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
 
     const unchanged = await updateCaseDetails(context, TENANT_ID, seeded.caseId, { clientEmail: null }, ACTOR);
@@ -257,7 +257,7 @@ describe("updateCaseDetails", () => {
   });
 
   it("rejects a malformed clientEmail with a 400 naming the field", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
 
     await expect(
@@ -268,7 +268,7 @@ describe("updateCaseDetails", () => {
 
 describe("updateCaseDetails — every stage, every field", () => {
   it("changes REF, partner, country, received date and type, and records them", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
     const otherPartner = await createPartner(context, TENANT_ID, { canonicalName: "Blue Sky", partnerType: "AGENCY" }, ACTOR);
 
@@ -303,7 +303,7 @@ describe("updateCaseDetails — every stage, every field", () => {
   });
 
   it("clears an optional field when sent null", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
     await updateCaseDetails(context, TENANT_ID, seeded.caseId, { remarks: "call first", processing: "EXPRESS" }, ACTOR);
 
@@ -313,7 +313,7 @@ describe("updateCaseDetails — every stage, every field", () => {
   });
 
   it("frees the old REF after a rename, and refuses a REF another case holds", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
     await updateCaseDetails(context, TENANT_ID, seeded.caseId, { caseRef: "RENAMED-1" }, ACTOR);
 
@@ -339,7 +339,7 @@ describe("updateCaseDetails — every stage, every field", () => {
   });
 
   it("checks the collection date against the NEW received date", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
     await updateCaseDetails(context, TENANT_ID, seeded.caseId, { expectedCollectionDate: "2026-09-10" }, ACTOR);
 
@@ -349,7 +349,7 @@ describe("updateCaseDetails — every stage, every field", () => {
   });
 
   it("404s on an unknown partner and 400s on VISA without a visa type", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seeded = await seedOneCase(context);
     await expect(
       updateCaseDetails(context, TENANT_ID, seeded.caseId, { partnerId: "ptn_missing" }, ACTOR),

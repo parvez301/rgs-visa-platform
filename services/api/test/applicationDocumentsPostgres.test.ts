@@ -19,12 +19,12 @@ import { presignOwnedDocumentDownload, recordDocumentUpload } from "../src/domai
 import type { AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
 import {
-  buildSqlTestContext,
-  closeSqlTestContexts,
+  buildTestContext,
+  closeTestContexts,
   completeEssentials,
   completeTraveller,
   createSubmittableUaeDraft,
-  type SqlTestContext,
+  type TestContext,
 } from "./helpers";
 
 const USER_EMAIL = "user_1@example.com";
@@ -32,14 +32,14 @@ const ADMIN_EMAIL = "admin@example.com";
 
 describe("application documents", () => {
   let sql: SqlClient;
-  let context: SqlTestContext;
+  let context: TestContext;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
   });
 
-  afterEach(closeSqlTestContexts);
+  afterEach(closeTestContexts);
 
   it("records an upload in Postgres, lists it", async () => {
     const draft = await createDraft(context, "user_1", "AE", USER_EMAIL);

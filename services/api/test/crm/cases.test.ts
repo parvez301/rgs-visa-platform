@@ -1,6 +1,6 @@
 import { crm } from "@rgs/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import { readCaseOrThrow, writeCase } from "../../src/domain/crm/caseStore";
 import type { SqlClient } from "../../src/lib/sql";
 import { addApplicant, removeApplicant, updateApplicantDetails } from "../../src/domain/crm/applicantEdits";
@@ -22,9 +22,9 @@ import {
   listCasesByStatus,
 } from "../../src/domain/crm/cases";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
-async function seedPartner(context: SqlTestContext): Promise<string> {
+async function seedPartner(context: TestContext): Promise<string> {
   const partner = await createPartner(
     context,
     "rgs",
@@ -35,12 +35,12 @@ async function seedPartner(context: SqlTestContext): Promise<string> {
 }
 
 /** Cases point at travellers on file, so every case fixture needs one first. */
-async function seedTraveller(context: SqlTestContext, fullName: string): Promise<string> {
+async function seedTraveller(context: TestContext, fullName: string): Promise<string> {
   const traveller = await upsertTraveller(context, "rgs", { fullName });
   return traveller.travellerId;
 }
 
-async function seedCase(context: SqlTestContext, partnerId: string, caseRef = "31377") {
+async function seedCase(context: TestContext, partnerId: string, caseRef = "31377") {
   const travellerId = await seedTraveller(context, `Traveller ${caseRef}`);
   return createCase(
     context,
@@ -60,7 +60,7 @@ async function seedCase(context: SqlTestContext, partnerId: string, caseRef = "3
   );
 }
 
-async function seedTwoApplicantCase(context: SqlTestContext, partnerId: string, caseRef = "31377") {
+async function seedTwoApplicantCase(context: TestContext, partnerId: string, caseRef = "31377") {
   const firstTravellerId = await seedTraveller(context, `Traveller ${caseRef}-1`);
   const secondTravellerId = await seedTraveller(context, `Traveller ${caseRef}-2`);
   return createCase(
@@ -85,7 +85,7 @@ async function seedTwoApplicantCase(context: SqlTestContext, partnerId: string, 
 }
 
 async function seedThreeApplicantCase(
-  context: SqlTestContext,
+  context: TestContext,
   partnerId: string,
   caseRef = "31377",
 ) {
@@ -116,7 +116,7 @@ async function seedThreeApplicantCase(
 
 describe("crm cases", () => {
   it("creates a case on all three axes at their starting values", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     expect(created.caseStatus).toBe("NEW");
     expect(created.billingStatus).toBe("UNBILLED");
@@ -126,7 +126,7 @@ describe("crm cases", () => {
   });
 
   it("stores an optional collection date and remarks, and still opens New and Unbilled", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const travellerId = await seedTraveller(context, "Asha Rao");
     const created = await createCase(
@@ -154,7 +154,7 @@ describe("crm cases", () => {
   });
 
   it("records a creation event", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const events = await listCaseEvents(context, "rgs", created.caseId);
     expect(events).toHaveLength(1);
@@ -163,14 +163,14 @@ describe("crm cases", () => {
   });
 
   it("rejects a case whose partner does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await expect(seedCase(context, "no_such_partner")).rejects.toMatchObject({
       statusCode: 404,
     });
   });
 
   it("creates a case for an admin whose token carries no email claim", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const travellerId = await seedTraveller(context, "Umesh Kumar Yadav");
     // router.ts defaults a missing `email` claim to "". Every other admin route
@@ -195,13 +195,13 @@ describe("crm cases", () => {
   });
 
   it("records the caller's email on the case when the claim is present", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     expect(created.createdByEmail).toBe("ops@rgs.test");
   });
 
   it("rejects a case whose traveller does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await expect(
       createCase(
@@ -222,7 +222,7 @@ describe("crm cases", () => {
   });
 
   it("rejects a case when only the second applicant's traveller is unknown", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const knownTravellerId = await seedTraveller(context, "Umesh Kumar Yadav");
     await expect(
@@ -247,7 +247,7 @@ describe("crm cases", () => {
   });
 
   it("rejects a collection date earlier than the received date", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const travellerId = await seedTraveller(context, "Asha Rao");
     await expect(
@@ -273,7 +273,7 @@ describe("crm cases", () => {
   });
 
   it("rejects a VISA case with no visa type", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     // A real traveller, so the 400 below is the missing visaType and nothing else.
     const travellerId = await seedTraveller(context, "Umesh Kumar Yadav");
@@ -295,7 +295,7 @@ describe("crm cases", () => {
   });
 
   it("allows a non-visa case with no visa type", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const travellerId = await seedTraveller(context, "Aman Kapoor");
     const attestation = await createCase(
@@ -316,7 +316,7 @@ describe("crm cases", () => {
   });
 
   it("moves the case status through a legal transition and logs it", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const moved = await changeCaseStatus(context, "rgs", created.caseId, "DOCS_UNDER_REVIEW", "ops@rgs.test");
     expect(moved.caseStatus).toBe("DOCS_UNDER_REVIEW");
@@ -328,7 +328,7 @@ describe("crm cases", () => {
   });
 
   it("refuses an illegal case-status transition with a 409", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await changeCaseStatus(context, "rgs", created.caseId, "WITHDRAWN", "ops@rgs.test");
     // WITHDRAWN is terminal — nothing may leave it.
@@ -338,7 +338,7 @@ describe("crm cases", () => {
   });
 
   it("moves custody on a single applicant without touching the case status", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     const updated = await changeApplicantCustody(
@@ -355,7 +355,7 @@ describe("crm cases", () => {
   });
 
   it("refuses an illegal custody transition with a 409", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     // NOT_HELD may only go to WITH_RGS.
@@ -365,7 +365,7 @@ describe("crm cases", () => {
   });
 
   it("rejects a custody change for an applicant ref that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await expect(
       changeApplicantCustody(
@@ -380,7 +380,7 @@ describe("crm cases", () => {
   });
 
   it("moves billing independently of the other two axes", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const billed = await changeBillingStatus(context, "rgs", created.caseId, "BILL_SENT", "ops@rgs.test");
     expect(billed.billingStatus).toBe("BILL_SENT");
@@ -389,7 +389,7 @@ describe("crm cases", () => {
   });
 
   it("lists cases by status, and the index follows the case when it moves", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const created = await seedCase(context, partnerId);
     expect((await listCasesByStatus(context, "rgs", "NEW")).cases).toHaveLength(1);
@@ -401,7 +401,7 @@ describe("crm cases", () => {
   });
 
   it("lists cases by partner", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     await seedCase(context, partnerId, "31378");
@@ -409,7 +409,7 @@ describe("crm cases", () => {
   });
 
   it("keeps listing the healthy cases when one partition lost its applicants", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const healthyCase = await seedCase(context, partnerId, "31377");
     const corruptedCase = await seedCase(context, partnerId, "31378");
@@ -423,7 +423,7 @@ describe("crm cases", () => {
   });
 
   it("reports the cases it had to skip in the result, not only in a log line", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const healthyCase = await seedCase(context, partnerId, "31377");
     const corruptedCase = await seedCase(context, partnerId, "31378");
@@ -438,7 +438,7 @@ describe("crm cases", () => {
   });
 
   it("reports nothing skipped when every case in the queue is healthy", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     const listed = await listCasesByStatus(context, "rgs", "NEW");
@@ -446,7 +446,7 @@ describe("crm cases", () => {
   });
 
   it("reports the cases it had to skip on the by-partner listing too", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     const corruptedCase = await seedCase(context, partnerId, "31378");
@@ -458,7 +458,7 @@ describe("crm cases", () => {
   });
 
   it("warns with the caseId of a case it had to skip", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     const corruptedCase = await seedCase(context, partnerId, "31378");
@@ -477,7 +477,7 @@ describe("crm cases", () => {
   });
 
   it("still surfaces a corrupt case as a typed error on the single-case read", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const corruptedCase = await seedCase(context, partnerId, "31378");
     await writeCase(context, { ...corruptedCase, applicants: [] });
@@ -493,7 +493,7 @@ describe("crm cases", () => {
   // CLOSED, so the file would become impossible to resubmit and would vanish
   // from the queue ops is actively working it from.
   it("keeps the case workable when the embassy sends one of three files back", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const created = await seedThreeApplicantCase(context, partnerId);
     await changeCaseStatus(context, "rgs", created.caseId, "SUBMITTED", "ops@rgs.test");
@@ -546,19 +546,19 @@ describe("crm cases", () => {
   });
 
   it("keeps one tenant's cases out of another's queries", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId);
     expect((await listCasesByStatus(context, "other-tenant", "NEW")).cases).toEqual([]);
   });
 
   it("throws a 404 reading a case that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await expect(getCase(context, "rgs", "nope")).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("changes an applicant's outcome and logs the from/to values", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -580,7 +580,7 @@ describe("crm cases", () => {
   });
 
   it("rejects an unknown applicant outcome with a 400", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     await expect(
@@ -596,7 +596,7 @@ describe("crm cases", () => {
   });
 
   it("rejects an outcome change for an applicant ref that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await expect(
       changeApplicantOutcome(
@@ -611,7 +611,7 @@ describe("crm cases", () => {
   });
 
   it("refuses to rewrite a decided outcome, an edge the spec never granted", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     await changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "APPROVED", "ops@rgs.test");
@@ -631,7 +631,7 @@ describe("crm cases", () => {
   });
 
   it("logs the from/to values when a returned file is resubmitted", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     await changeApplicantOutcome(context, "rgs", created.caseId, applicantRef, "SENT_BACK", "ops@rgs.test");
@@ -656,7 +656,7 @@ describe("crm cases", () => {
   });
 
   it("refuses to un-decide an applicant with a 409, leaving the recorded outcome intact", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     const decided = await changeApplicantOutcome(
@@ -681,7 +681,7 @@ describe("crm cases", () => {
   });
 
   it("derives VISA_REFUSED for a single rejected applicant and logs the transition", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     const refused = await changeApplicantOutcome(
@@ -699,7 +699,7 @@ describe("crm cases", () => {
   });
 
   it("moves a desk-marked DECIDED individual case on to VISA_GRANTED when the applicant is approved", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await changeCaseStatus(context, "rgs", created.caseId, "DECIDED", "ops@rgs.test");
     const granted = await changeApplicantOutcome(
@@ -714,7 +714,7 @@ describe("crm cases", () => {
   });
 
   it("widens an individual VISA_GRANTED case to DECIDED once a second applicant is added and approved", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const granted = await changeApplicantOutcome(
       context,
@@ -756,7 +756,7 @@ describe("crm cases", () => {
   });
 
   it("refuses a no-op outcome change with a 409", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     // PENDING -> PENDING, the same no-op the custody and billing gates refuse.
@@ -768,7 +768,7 @@ describe("crm cases", () => {
   });
 
   it("does not become DECIDED until every applicant is decided, then does", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedTwoApplicantCase(context, await seedPartner(context));
     const [firstApplicant, secondApplicant] = created.applicants;
 
@@ -794,7 +794,7 @@ describe("crm cases", () => {
   });
 
   it("becomes CLOSED once every applicant is returned and billing is paid", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -814,7 +814,7 @@ describe("crm cases", () => {
   });
 
   it("closes via the custody path when billing already reached PAID first", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -845,7 +845,7 @@ describe("crm cases", () => {
   });
 
   it("does not close a case while billing is still unpaid", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -864,7 +864,7 @@ describe("crm cases", () => {
   });
 
   it("does not close a case when billing is UNKNOWN, even with every passport returned", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
 
@@ -888,7 +888,7 @@ describe("crm cases", () => {
   });
 
   it("does not drag a terminal case back into CLOSED by a later derivation", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     const applicantRef = created.applicants[0]!.applicantRef;
     await changeCaseStatus(context, "rgs", created.caseId, "WITHDRAWN", "ops@rgs.test");
@@ -904,7 +904,7 @@ describe("crm cases", () => {
 
 describe("listCaseRefsByStatus", () => {
   it("reads every stored ref off the case rows, without reassembling a case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     await seedCase(context, partnerId, "31378");
@@ -915,7 +915,7 @@ describe("listCaseRefsByStatus", () => {
   });
 
   it("still reports the ref of a case that will not reassemble", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     const corruptedCase = await seedCase(context, partnerId, "31378");
     // META with no applicant items — what a non-transactional writeCase leaves
@@ -932,7 +932,7 @@ describe("listCaseRefsByStatus", () => {
 
 describe("countCasesByField", () => {
   it("counts cases by caseStatus without reassembling any of them", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     await seedCase(context, partnerId, "31378");
@@ -946,7 +946,7 @@ describe("countCasesByField", () => {
   });
 
   it("counts by destinationCountry, billingStatus and partnerId too", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377"); // seedCase's destinationCountry is BH
 
@@ -956,7 +956,7 @@ describe("countCasesByField", () => {
   });
 
   it("names a case whose counted field is empty, instead of dropping it or counting it as 'undefined'", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partnerId = await seedPartner(context);
     await seedCase(context, partnerId, "31377");
     const blank = await seedCase(context, partnerId, "31378");
@@ -971,7 +971,7 @@ describe("countCasesByField", () => {
 
 describe("createCase family group fields", () => {
   it("stores groupName, clientEmail and each applicant's refNo", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(context, "rgs", { canonicalName: "Skyline Travels" }, "ops@rgs.test");
     const first = await upsertTraveller(context, "rgs", { fullName: "Rahul Sharma" });
     const second = await upsertTraveller(context, "rgs", { fullName: "Priya Sharma" });
@@ -1006,7 +1006,7 @@ describe("createCase family group fields", () => {
 });
 
 describe("createCase reference uniqueness", () => {
-  async function seedPartnerAndTraveller(context: SqlTestContext) {
+  async function seedPartnerAndTraveller(context: TestContext) {
     const partner = await createPartner(context, "rgs", { canonicalName: "Unique Travels", partnerType: "AGENCY" }, "desk@rgs.local");
     const traveller = await upsertTraveller(context, "rgs", { fullName: "RAVI KUMAR" });
     return { partnerId: partner.partnerId, travellerId: traveller.travellerId };
@@ -1025,7 +1025,7 @@ describe("createCase reference uniqueness", () => {
   }
 
   it("refuses a second case with the same REF, ignoring case and spaces", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const ids = await seedPartnerAndTraveller(context);
     await createCase(context, "rgs", caseInput(ids, "rgs-100"), "desk@rgs.local");
 
@@ -1035,7 +1035,7 @@ describe("createCase reference uniqueness", () => {
   });
 
   it("refuses a REF NO that is another case's REF", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const ids = await seedPartnerAndTraveller(context);
     await createCase(context, "rgs", caseInput(ids, "50001"), "desk@rgs.local");
 
@@ -1045,7 +1045,7 @@ describe("createCase reference uniqueness", () => {
   });
 
   it("lets exactly one of two racing creates win the same REF", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const ids = await seedPartnerAndTraveller(context);
     const outcomes = await Promise.allSettled([
       createCase(context, "rgs", caseInput(ids, "RACE-1"), "desk@rgs.local"),
@@ -1055,11 +1055,11 @@ describe("createCase reference uniqueness", () => {
   });
 
   it("releases its claims when the case write fails, so the REF is not burned", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const ids = await seedPartnerAndTraveller(context);
     // Fail only the case write (one transaction). The REF claims are separate
     // inserts, so they still land -- exactly the state the rollback must undo.
-    const failingContext: SqlTestContext = {
+    const failingContext: TestContext = {
       ...context,
       sql: {
         ...context.sql,
@@ -1082,10 +1082,10 @@ const ACTOR = "desk@rgs.local";
 
 describe("CRM case mutators on Postgres", () => {
   let sql: SqlClient;
-  let context: SqlTestContext;
+  let context: TestContext;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
   });
 
@@ -1464,10 +1464,10 @@ describe("CRM case mutators on Postgres", () => {
 
 describe("CRM case lists / counts / refs on Postgres", () => {
   let sql: SqlClient;
-  let context: SqlTestContext;
+  let context: TestContext;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
   });
 

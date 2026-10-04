@@ -61,8 +61,8 @@ async function* appointmentCandidateRows(
  * re-run for the same appointment date is a no-op.
  *
  * Every case/partner/event read and write below goes through the store seams
- * (`readCase`, `writeCase`, `getPartnerOrThrow`, `recordCrmEvent`), so the job
- * follows `context.crmStore`.
+ * (`readCase`, `writeCase`, `getPartnerOrThrow`, `recordCrmEvent`), all of
+ * which run against `context.sql`.
  */
 export async function runAppointmentReminders(
   context: AppContext,

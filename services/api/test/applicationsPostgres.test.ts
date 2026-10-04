@@ -23,26 +23,26 @@ import type { AppContext } from "../src/lib/context";
 import { ApiError, CorruptRecordError } from "../src/lib/errors";
 import type { SqlClient } from "../src/lib/sql";
 import {
-  buildSqlTestContext,
-  closeSqlTestContexts,
+  buildTestContext,
+  closeTestContexts,
   completeEssentials,
   completeTraveller,
   createSubmittableUaeDraft,
-  type SqlTestContext,
+  type TestContext,
 } from "./helpers";
 
 const USER_EMAIL = "user_1@example.com";
 
 describe("portal applications", () => {
   let sql: SqlClient;
-  let context: SqlTestContext;
+  let context: TestContext;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
   });
 
-  afterEach(closeSqlTestContexts);
+  afterEach(closeTestContexts);
 
   it("creates a draft in Postgres", async () => {
     const draft = await createDraft(context, "user_1", "AE", USER_EMAIL);

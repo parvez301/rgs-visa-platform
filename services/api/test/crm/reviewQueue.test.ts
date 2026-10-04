@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CorruptRecordError } from "../../src/lib/errors";
 import type { SqlClient } from "../../src/lib/sql";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import {
   getReviewItemOrThrow,
   listReviewItems,
@@ -10,7 +10,7 @@ import {
   summariseOpenReviewItems,
 } from "../../src/domain/crm/reviewQueue";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const baseInput = {
   reason: "UNMAPPED_STATUS" as const,
@@ -28,7 +28,7 @@ const baseInput = {
  * partner rows that used to 500 the whole partner list.
  */
 async function seedUnparseableReviewItem(
-  context: SqlTestContext,
+  context: TestContext,
   tenantId: string,
   reviewItemId = "rev_half_written",
 ): Promise<string> {
@@ -43,7 +43,7 @@ async function seedUnparseableReviewItem(
   return reviewItemId;
 }
 
-async function countReviewRows(context: SqlTestContext): Promise<number> {
+async function countReviewRows(context: TestContext): Promise<number> {
   const result = await context.sql.query<{ value: number }>(
     "select count(*)::int as value from crm_review_items",
   );
@@ -52,7 +52,7 @@ async function countReviewRows(context: SqlTestContext): Promise<number> {
 
 describe("crm review queue", () => {
   it("records an item as OPEN and reads it back", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await recordReviewItem(context, "rgs", baseInput);
     expect(created.reviewStatus).toBe("OPEN");
     expect(created.rawValue).toBe("DEU/DEL/190126/");
@@ -69,7 +69,7 @@ describe("crm review queue", () => {
   });
 
   it("stores exactly one row per item and hands back the domain object unchanged", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await recordReviewItem(context, "rgs", baseInput);
     expect(await countReviewRows(context)).toBe(1);
     // No storage columns leak into the object, before or after the round trip.
@@ -91,7 +91,7 @@ describe("crm review queue", () => {
   });
 
   it("carries the optional fields through when they are supplied", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await recordReviewItem(context, "rgs", {
       ...baseInput,
       proposedValue: "DOCS_UNDER_REVIEW",
@@ -109,7 +109,7 @@ describe("crm review queue", () => {
   });
 
   it("omits the optional fields entirely rather than storing them undefined", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await recordReviewItem(context, "rgs", baseInput);
     // `proposedValue: undefined` is not the same as no proposal: the review
     // screen renders an empty suggestion box for a key that merely exists, and
@@ -127,7 +127,7 @@ describe("crm review queue", () => {
   });
 
   it("lists only the requested status", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const first = await recordReviewItem(context, "rgs", baseInput);
     await recordReviewItem(context, "rgs", { ...baseInput, sourceRow: 43 });
     await resolveReviewItem(
@@ -147,7 +147,7 @@ describe("crm review queue", () => {
   });
 
   it("moves an item out of the OPEN queue when it is resolved, in place", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await recordReviewItem(context, "rgs", baseInput);
     expect((await listReviewItems(context, "rgs", "OPEN")).reviewItems).toHaveLength(1);
 
@@ -172,7 +172,7 @@ describe("crm review queue", () => {
   });
 
   it("stamps the resolution with the clock at resolution time, not creation time", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await recordReviewItem(context, "rgs", baseInput);
     context.advanceClock(90 * 60 * 1000);
 
@@ -191,7 +191,7 @@ describe("crm review queue", () => {
   });
 
   it("refuses to resolve the same item twice with a 409", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await recordReviewItem(context, "rgs", baseInput);
     await resolveReviewItem(
       context,
@@ -222,7 +222,7 @@ describe("crm review queue", () => {
   });
 
   it("throws a 404 for an unknown review item", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await expect(getReviewItemOrThrow(context, "rgs", "nope")).rejects.toMatchObject({
       statusCode: 404,
       code: "NOT_FOUND",
@@ -230,20 +230,20 @@ describe("crm review queue", () => {
   });
 
   it("throws a 404 when resolving an item that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await expect(
       resolveReviewItem(context, "rgs", "nope", { reviewStatus: "APPLIED" }, "ops@rgs.test"),
     ).rejects.toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
   });
 
   it("does not return another tenant's items", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await recordReviewItem(context, "rgs", baseInput);
     expect((await listReviewItems(context, "other", "OPEN")).reviewItems).toHaveLength(0);
   });
 
   it("does not read another tenant's item by id", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const created = await recordReviewItem(context, "rgs", baseInput);
     await expect(
       getReviewItemOrThrow(context, "other", created.reviewItemId),
@@ -251,7 +251,7 @@ describe("crm review queue", () => {
   });
 
   it("caps the listing at the requested limit", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     for (const sourceRow of [42, 43, 44, 45]) {
       await recordReviewItem(context, "rgs", { ...baseInput, sourceRow });
     }
@@ -265,7 +265,7 @@ describe("crm review queue", () => {
   // --- 200, so an operator who works what they can see has no way to learn
   // --- that the rest exists.
   it("says so when the partition holds more items than the page returned", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     for (const sourceRow of [42, 43, 44]) {
       await recordReviewItem(context, "rgs", { ...baseInput, sourceRow });
       // Distinct createdAt values, so the queue's oldest-first order is a
@@ -284,7 +284,7 @@ describe("crm review queue", () => {
   // --- ApiError, so it surfaced as a 500 from the API and as an unhandled
   // --- abort from the middle of a 7,156-row import.
   it("refuses an out-of-range confidence with a typed 400 rather than a raw ZodError", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const write = recordReviewItem(context, "rgs", { ...baseInput, confidence: -0.2 });
     await expect(write).rejects.toMatchObject({ statusCode: 400, code: "BAD_REQUEST" });
     // The field has to be named, or the operator is told only that something
@@ -293,7 +293,7 @@ describe("crm review queue", () => {
   });
 
   it("does not claim more when the last item exactly fills the page", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     for (const sourceRow of [42, 43]) {
       await recordReviewItem(context, "rgs", { ...baseInput, sourceRow });
     }
@@ -312,7 +312,7 @@ describe("crm review queue", () => {
   // infrastructure failure as a queue that is simply empty -- an operator
   // would conclude the migration had nothing left to review.
   it("lets a failure that is not a corrupt row propagate rather than skipping it", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await recordReviewItem(context, "rgs", baseInput);
     // A database failure is not a ZodError, so it must not be mistaken for a
     // corrupt row: a widened catch would render an infrastructure failure as a
@@ -332,7 +332,7 @@ describe("crm review queue", () => {
   // --- A stored review item that will not parse is a 409, never a raw 500. ---
   describe("a stored review item that no longer parses", () => {
     it("surfaces as a typed 409 from the single read, naming the bad field", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const reviewItemId = await seedUnparseableReviewItem(context, "rgs");
 
       const singleRead = getReviewItemOrThrow(context, "rgs", reviewItemId);
@@ -349,7 +349,7 @@ describe("crm review queue", () => {
     });
 
     it("names a row with an unknown reason, not just a blank field", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       await context.sql.query(
         `insert into crm_review_items
            (tenant_id, review_item_id, reason, source_sheet, source_row, case_ref,
@@ -369,7 +369,7 @@ describe("crm review queue", () => {
   // The identical blast radius already fixed for the case queue and the
   // partner list: one half-written row 500'd the screen for the whole tenant.
   it("still lists the healthy items when one stored row will not parse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const healthy = await recordReviewItem(context, "rgs", baseInput);
     const corruptReviewItemId = await seedUnparseableReviewItem(context, "rgs");
 
@@ -383,7 +383,7 @@ describe("crm review queue", () => {
   });
 
   it("warns with the id of the review row it had to skip", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await recordReviewItem(context, "rgs", baseInput);
     const corruptReviewItemId = await seedUnparseableReviewItem(context, "rgs");
 
@@ -403,7 +403,7 @@ describe("crm review queue", () => {
   });
 
   it("keeps listing when every row in the tenant is corrupt", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const firstCorruptId = await seedUnparseableReviewItem(context, "rgs", "rev_bad_one");
     const secondCorruptId = await seedUnparseableReviewItem(context, "rgs", "rev_bad_two");
 
@@ -419,7 +419,7 @@ describe("crm review queue", () => {
 
 describe("summariseOpenReviewItems", () => {
   it("groups open items by caseRef, keeping merge candidates apart from field problems", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const unmapped = await recordReviewItem(context, "rgs", {
       reason: "UNMAPPED_STATUS",
       sourceSheet: "2026",
@@ -456,7 +456,7 @@ describe("summariseOpenReviewItems", () => {
   });
 
   it("leaves the importer's guesses off the grid: PROPOSED_GROUP, SUSPECT_PHONE and MISSING_REQUIRED_FIELD stay OPEN but draw no marker", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     for (const reason of ["PROPOSED_GROUP", "SUSPECT_PHONE", "MISSING_REQUIRED_FIELD"] as const) {
       await recordReviewItem(context, "rgs", {
         reason,
@@ -497,7 +497,7 @@ describe("summariseOpenReviewItems", () => {
   });
 
   it("forgets a resolved item, because a cleaned row must lose its marker", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const item = await recordReviewItem(context, "rgs", {
       reason: "UNMAPPED_STATUS",
       sourceSheet: "2026",
@@ -514,7 +514,7 @@ describe("summariseOpenReviewItems", () => {
   });
 
   it("names an item it could not read rather than dropping it from the count", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await recordReviewItem(context, "rgs", baseInput);
     const corruptReviewItemId = await seedUnparseableReviewItem(context, "rgs", "rev_broken");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -532,7 +532,7 @@ describe("summariseOpenReviewItems", () => {
   });
 
   it("names a row whose reason the schema no longer knows, and summarises the rest", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const field = await recordReviewItem(context, "rgs", baseInput);
     context.advanceClock(1000);
     const merge = await recordReviewItem(context, "rgs", {
@@ -564,7 +564,7 @@ describe("summariseOpenReviewItems", () => {
   });
 
   it("keeps tenants apart", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await recordReviewItem(context, "rgs", baseInput);
     expect((await summariseOpenReviewItems(context, "other")).entries).toEqual([]);
   });

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  buildSqlTestContext,
-  closeSqlTestContexts,
+  buildTestContext,
+  closeTestContexts,
   interceptSql,
-  type SqlTestContext,
+  type TestContext,
 } from "@rgs/api/test/helpers";
 import { readCase } from "@rgs/api/src/domain/crm/caseStore";
 import {
@@ -21,7 +21,7 @@ import { passthroughResidueResolver } from "../src/residueResolver";
 import type { ResidueResolution, ResidueResolver } from "../src/residueResolver";
 import type { MappedRow } from "../src/mapRow";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 function buildMappedRow(overrides: Partial<MappedRow> = {}): MappedRow {
   return {
@@ -61,7 +61,7 @@ const baseInput = {
 
 describe("runImport", () => {
   it("imports a row into a case, partner and traveller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
     expect(summary.casesCreated).toBe(1);
     expect(summary.partnersCreated).toBe(1);
@@ -69,7 +69,7 @@ describe("runImport", () => {
   });
 
   it("is idempotent: a second run creates nothing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const rows = [buildMappedRow()];
     await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
     const secondSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
@@ -80,7 +80,7 @@ describe("runImport", () => {
   });
 
   it("reuses one partner across spelling variants instead of creating two", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -94,7 +94,7 @@ describe("runImport", () => {
   });
 
   it("imports every migrated case with UNKNOWN billing, never UNBILLED", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
 
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
@@ -104,7 +104,7 @@ describe("runImport", () => {
   });
 
   it("keeps provenance on every imported case so any value traces back", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ legacyRaw: { "Additional Items": "PHOTO, HOTEL" } })],
@@ -124,7 +124,7 @@ describe("runImport", () => {
   // The structured field has to go, or the parse aborts the whole run. The
   // value must not go with it: legacyRaw is the only place it survives.
   it("keeps a dropped visa type in legacyRaw when the case type says it cannot be structured", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -153,7 +153,7 @@ describe("runImport", () => {
   // structured field and must NOT also duplicate it into legacyRaw, or every
   // one of the 7,140 well-formed rows grows a redundant provenance key.
   it("does not copy a visa type into legacyRaw when the structured field keeps it", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
 
     const importedCase = await readCase(context, "rgs", summary.createdCaseIds[0]!);
@@ -162,7 +162,7 @@ describe("runImport", () => {
   });
 
   it("records pass-1 review items in the queue", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -178,7 +178,7 @@ describe("runImport", () => {
   });
 
   it("records proposed groups as review items rather than applying them", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow()],
@@ -192,7 +192,7 @@ describe("runImport", () => {
   });
 
   it("does not re-record a PROPOSED_GROUP on an unchanged second run, once every member case is already imported", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const input = {
       ...baseInput,
       mappedRows: [
@@ -227,7 +227,7 @@ describe("runImport", () => {
   });
 
   it("re-records a PROPOSED_GROUP when a new row extends an already-imported group", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const proposedGroups = [
       {
         caseRefs: ["50001", "50002"],
@@ -261,7 +261,7 @@ describe("runImport", () => {
   });
 
   it("writes nothing on a dry run but still reports what it would do", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow()],
@@ -275,7 +275,7 @@ describe("runImport", () => {
   // --- Ruling (task-9): findPartnerByName must be memoised, not scanned per row ---
 
   it("looks up a shared partner name at most a constant number of times, not once per row", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     let partnerListQueryCount = 0;
     interceptSql(context, async ({ text }, run) => {
       if (/\bfrom\s+crm_partners\b/i.test(text)) partnerListQueryCount += 1;
@@ -305,7 +305,7 @@ describe("runImport", () => {
   // --- J5: the traveller lookup must be memoised the way the partner one is ---
 
   it("looks a repeat traveller up once, not once per row", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     let travellerLookupCount = 0;
     interceptSql(context, async ({ text }, run) => {
       if (/\bfrom\s+crm_travellers\b/i.test(text) && /(?:normalized_name|passport_number)\s*=/i.test(text)) {
@@ -340,12 +340,12 @@ describe("runImport", () => {
       buildMappedRow({ caseRef: "3", sourceRow: 4, travellerFullName: "PRIYA DESAI", passportNumber: "P7654321" }),
     ];
 
-    const dryRunSummary = await runImport(await buildSqlTestContext(), "rgs", {
+    const dryRunSummary = await runImport(await buildTestContext(), "rgs", {
       ...baseInput,
       mappedRows: rows,
       dryRun: true,
     });
-    const committedSummary = await runImport(await buildSqlTestContext(), "rgs", {
+    const committedSummary = await runImport(await buildTestContext(), "rgs", {
       ...baseInput,
       mappedRows: rows,
     });
@@ -362,7 +362,7 @@ describe("runImport", () => {
   // --- Ruling (task-9): partner names are passed RAW, not canonicalized ---
 
   it("passes the partner name to the API raw, preserving its exact casing", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ partnerName: "VWI Mumbai" })],
@@ -379,7 +379,7 @@ describe("runImport", () => {
   // --- JoinedContactDetails: phone / trackingNumber / flaggedPhoneRaw ---
 
   it("records a phone recovered from the 2025 YEAR join on a newly-created traveller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const contactDetails = new Map([["31376", { phone: "9876543210" }]]);
     const summary = await runImport(context, "rgs", {
       ...baseInput,
@@ -397,7 +397,7 @@ describe("runImport", () => {
   });
 
   it("carries the tracking number from the phone join onto the case's applicant", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const contactDetails = new Map([["31376", { trackingNumber: "DTDC9911" }]]);
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()], contactDetails });
 
@@ -406,7 +406,7 @@ describe("runImport", () => {
   });
 
   it("records a SUSPECT_PHONE review item and keeps the flagged phone in legacyRaw", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const contactDetails = new Map([["31376", { flaggedPhoneRaw: "Mukesh Kumar" }]]);
     const summary = await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()], contactDetails });
 
@@ -422,7 +422,7 @@ describe("runImport", () => {
   // --- Schema-required fields the workbook does not always supply --------
 
   it("substitutes a sentinel destinationCountry when the country is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ caseDraft: { ...buildMappedRow().caseDraft, destinationCountry: "" } })],
@@ -438,7 +438,7 @@ describe("runImport", () => {
   });
 
   it("substitutes a sentinel receivedDate when the date is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ caseDraft: { ...buildMappedRow().caseDraft, receivedDate: undefined } })],
@@ -462,7 +462,7 @@ describe("runImport", () => {
   });
 
   it("puts a sentinel-dated case at the END of its partner's listing, as the review item claims", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -489,7 +489,7 @@ describe("runImport", () => {
   });
 
   it("substitutes a per-row sentinel travellerFullName when the name is blank, and raises a MISSING_REQUIRED_FIELD review item", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ travellerFullName: "  ", passportNumber: undefined, sourceRow: 4435 })],
@@ -507,7 +507,7 @@ describe("runImport", () => {
   });
 
   it("does not merge two different blank-name rows onto the same traveller", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -535,7 +535,7 @@ describe("runImport", () => {
   // --- Written-but-never-read field audit: applicantCount, Status note ---
 
   it("surfaces a headcount above one in legacyRaw", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ applicantCount: 3 })],
@@ -545,7 +545,7 @@ describe("runImport", () => {
   });
 
   it("does not clutter legacyRaw with a headcount of exactly one", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ applicantCount: 1, legacyRaw: {} })],
@@ -555,7 +555,7 @@ describe("runImport", () => {
   });
 
   it("surfaces the Status column's note text in legacyRaw", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -571,7 +571,7 @@ describe("runImport", () => {
   // --- Residue resolver seam (pass 2) -------------------------------------
 
   it("auto-applies a high-confidence residue resolution to the draft instead of queuing it", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const highConfidenceResolver: ResidueResolver = {
       async resolve(): Promise<ResidueResolution[]> {
         return [{ fieldName: "Status", proposedValue: "SUBMITTED", confidence: 0.95 }];
@@ -597,7 +597,7 @@ describe("runImport", () => {
   // review item, where a bare .parse() threw an untyped ZodError out of the
   // middle of a run that had already written cases -- straight into C1.
   it("does not let a resolver's out-of-range confidence abort the run", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const misbehavingResolver: ResidueResolver = {
       async resolve(): Promise<ResidueResolution[]> {
         return [{ fieldName: "Status", proposedValue: "SUBMITTED", confidence: -0.2 }];
@@ -623,7 +623,7 @@ describe("runImport", () => {
   });
 
   it("queues a low-confidence residue resolution with its proposed value and confidence attached", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const lowConfidenceResolver: ResidueResolver = {
       async resolve(): Promise<ResidueResolution[]> {
         return [{ fieldName: "Status", proposedValue: "SUBMITTED", confidence: 0.4 }];
@@ -651,7 +651,7 @@ describe("runImport", () => {
   // --- CORRUPT_RECORD on a write path: one bad partner row must not abort the run ---
 
   it("isolates a corrupt stored partner record to one row instead of aborting the whole run", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     // Deliberately missing partner_type, which PartnerSchema requires.
     await context.sql.query(
       `insert into crm_partners (tenant_id, partner_id, canonical_name, canonical_key, updated_at)
@@ -683,7 +683,7 @@ describe("runImport", () => {
   // --- listCasesByStatus's own default limit (50) must not cap the sweep ---
 
   it("seeds idempotency past listCasesByStatus's own default page limit of 50", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const rowCount = 55;
     const rows = Array.from({ length: rowCount }, (_unused, rowIndex) =>
       buildMappedRow({
@@ -703,7 +703,7 @@ describe("runImport", () => {
   });
 
   it("sweeps past the default page limit when deciding a group is unchanged", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const rowCount = 55;
     const rows = Array.from({ length: rowCount }, (_unused, rowIndex) =>
       buildMappedRow({
@@ -751,7 +751,7 @@ describe("runImport", () => {
   // --- J1: the four Mini CRM columns nothing used to read -------------------
 
   it("prefers Mini CRM's own TRACKING NO. over the 2025 YEAR join", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow({ trackingNumber: "8288303" })],
@@ -766,7 +766,7 @@ describe("runImport", () => {
   });
 
   it("still falls back to the 2025 YEAR tracking number when Mini CRM has none", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [buildMappedRow()],
@@ -778,7 +778,7 @@ describe("runImport", () => {
   });
 
   it("imports the billing status the payment column actually recorded", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -795,7 +795,7 @@ describe("runImport", () => {
   });
 
   it("writes the courier date the sheet recorded onto the case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const summary = await runImport(context, "rgs", {
       ...baseInput,
       mappedRows: [
@@ -818,7 +818,7 @@ describe("runImport", () => {
   // below builds one of those states directly.
 
   /** Makes every statement matching `shouldFail` reject, as a timeout would. */
-  function failStatements(context: SqlTestContext, shouldFail: (text: string) => boolean): () => void {
+  function failStatements(context: TestContext, shouldFail: (text: string) => boolean): () => void {
     const healthyClient = context.sql;
     interceptSql(context, async ({ text }, run) => {
       if (shouldFail(text)) throw new Error("simulated write timeout");
@@ -832,7 +832,7 @@ describe("runImport", () => {
   const isCaseInsert = (text: string): boolean => /insert\s+into\s+crm_cases\b/i.test(text);
 
   async function storedCaseRefsInStatus(
-    context: SqlTestContext,
+    context: TestContext,
     caseStatus: "CLOSED",
   ): Promise<string[]> {
     const listing = await listCaseRefsByStatus(context, "rgs", caseStatus, 1000);
@@ -843,7 +843,7 @@ describe("runImport", () => {
    * Leaves a case row whose applicants are gone, and its reservation reopened:
    * the state a run that died mid-repair, or hand damage, would leave.
    */
-  async function damageCaseKeepingReservationOpen(context: SqlTestContext, caseId: string, caseRef: string): Promise<void> {
+  async function damageCaseKeepingReservationOpen(context: TestContext, caseId: string, caseRef: string): Promise<void> {
     await context.sql.query("delete from crm_applicants where tenant_id = $1 and case_id = $2", ["rgs", caseId]);
     await context.sql.query(
       "update crm_case_ref_reservations set completed_at = null where tenant_id = $1 and case_ref = $2",
@@ -852,7 +852,7 @@ describe("runImport", () => {
   }
 
   it("never re-imports the ref of an unreadable reserved case, and flags it instead", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const rows = [buildMappedRow()];
     const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
     await damageCaseKeepingReservationOpen(context, firstSummary.createdCaseIds[0]!, "31376");
@@ -888,7 +888,7 @@ describe("runImport", () => {
   // case under it. The sweep reads `case_ref` straight off the raw case row
   // for exactly this reason -- a Zod parse of the case would fail here.
   it("never re-imports a ref held by a pre-reservation case whose applicants are gone", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const rows = [buildMappedRow()];
     const firstSummary = await runImport(context, "rgs", { ...baseInput, mappedRows: rows });
     const caseId = firstSummary.createdCaseIds[0]!;
@@ -917,7 +917,7 @@ describe("runImport", () => {
   });
 
   it("repairs a ref that was reserved before a run died, under the reserved caseId", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const rows = [buildMappedRow()];
 
     // The case's own insert fails, so the ref is reserved and no case exists
@@ -954,7 +954,7 @@ describe("runImport", () => {
   // operator already has an UNREADABLE_STORED_CASE item naming it -- so it
   // must count as settled here exactly like an already-imported ref does.
   it("does not re-propose a group whose only unsettled member is an unreadable case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const unreadableRow = buildMappedRow({ caseRef: "31376", sourceRow: 2 });
     const cleanlyImportedRow = buildMappedRow({
       caseRef: "31377",
@@ -1007,7 +1007,7 @@ describe("runImport", () => {
    * what the abort message tells the operator to do.
    */
   it("resumes from the reservation index after a part-way death, repairing rather than duplicating", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const rows = Array.from({ length: 6 }, (_unused, rowIndex) =>
       buildMappedRow({
         caseRef: String(60_001 + rowIndex),
@@ -1069,7 +1069,7 @@ describe("runImport", () => {
   });
 
   it("completes each reservation, so a re-run reads no case at all", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const rows = [
       buildMappedRow({ caseRef: "1", sourceRow: 2, passportNumber: "P1111111" }),
       buildMappedRow({ caseRef: "2", sourceRow: 3, passportNumber: "P2222222" }),
@@ -1101,7 +1101,7 @@ describe("runImport", () => {
   });
 
   it("still re-proposes a group extended by a newly imported row", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const firstRow = buildMappedRow({ caseRef: "1", sourceRow: 2, passportNumber: "P1111111" });
     const secondRow = buildMappedRow({ caseRef: "2", sourceRow: 3, passportNumber: "P2222222" });
     const proposedGroups = [
@@ -1126,7 +1126,7 @@ describe("runImport", () => {
   });
 
   it("flags a stored case whose row carries no readable ref", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await runImport(context, "rgs", { ...baseInput, mappedRows: [buildMappedRow()] });
 
     // A hand-repaired row: still a case, no longer naming its ref.

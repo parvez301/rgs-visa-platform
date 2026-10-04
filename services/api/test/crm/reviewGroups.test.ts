@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import { completeCaseRefReservation, reserveCaseRef } from "../../src/domain/crm/caseRefIndex";
 import { createCase, getCase, listCasesByPartner } from "../../src/domain/crm/cases";
 import { listCaseEvents } from "../../src/domain/crm/crmEvents";
@@ -8,7 +8,7 @@ import { listOpenReviewGroups, resolveReviewGroup } from "../../src/domain/crm/r
 import { getReviewItemOrThrow, listReviewItems, recordReviewItem } from "../../src/domain/crm/reviewQueue";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT = "rgs";
 const ACTOR = "ops@rgs.test";
@@ -18,7 +18,7 @@ const ACTOR = "ops@rgs.test";
  * the review screen uses to find it. `createCase` alone writes no
  * reservation, and every review item points at a case the importer wrote.
  */
-async function seedCase(context: SqlTestContext, partnerId: string, caseRef: string) {
+async function seedCase(context: TestContext, partnerId: string, caseRef: string) {
   const traveller = await upsertTraveller(context, TENANT, { fullName: `Traveller ${caseRef}` });
   const created = await createCase(
     context,
@@ -39,7 +39,7 @@ async function seedCase(context: SqlTestContext, partnerId: string, caseRef: str
   return created;
 }
 
-async function seedPartnerItem(context: SqlTestContext, caseRef: string, rawValue: string, proposedValue?: string) {
+async function seedPartnerItem(context: TestContext, caseRef: string, rawValue: string, proposedValue?: string) {
   return recordReviewItem(context, TENANT, {
     reason: "UNMAPPED_PARTNER",
     sourceSheet: "Mini CRM",
@@ -53,7 +53,7 @@ async function seedPartnerItem(context: SqlTestContext, caseRef: string, rawValu
 
 describe("listOpenReviewGroups", () => {
   it("groups open items by exact (reason, column, raw text), biggest group first, with a sample of refs", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedPartnerItem(context, "38001", "GALAXY");
     await seedPartnerItem(context, "38002", "GALAXY", "partner_galaxy");
     await seedPartnerItem(context, "38003", "Galaxy Travels");
@@ -90,7 +90,7 @@ describe("listOpenReviewGroups", () => {
   });
 
   it("does not group a resolved item", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await seedPartnerItem(context, "38001", "GALAXY");
     await resolveReviewGroup(
       context,
@@ -104,7 +104,7 @@ describe("listOpenReviewGroups", () => {
 
 describe("resolveReviewGroup", () => {
   it("dismisses in chunks and reports what is left, so a 15-second Lambda can work a 300-item group", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     for (let index = 0; index < 5; index += 1) await seedPartnerItem(context, `3800${index}`, "GALAXY");
     await seedPartnerItem(context, "38999", "OTHER");
 
@@ -130,7 +130,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("APPLIED on a partner group moves every case to that partner, re-keys the partner index, and closes the items", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const sentinel = await createPartner(context, TENANT, { canonicalName: "(no referrer recorded)" }, ACTOR);
     const galaxy = await createPartner(context, TENANT, { canonicalName: "Galaxy Travels" }, ACTOR);
     const firstCase = await seedCase(context, sentinel.partnerId, "38001");
@@ -179,7 +179,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("writes an unparseable date into the case field its workbook column maps to", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(context, TENANT, { canonicalName: "Galaxy Travels" }, ACTOR);
     const seeded = await seedCase(context, partner.partnerId, "38001");
     await recordReviewItem(context, TENANT, {
@@ -210,7 +210,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("refuses a bad value for the whole group before touching any case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await recordReviewItem(context, TENANT, {
       reason: "UNMAPPED_COUNTRY",
       sourceSheet: "Mini CRM",
@@ -230,7 +230,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("refuses APPLIED on a reason that has nothing to write back", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const attempt = resolveReviewGroup(
       context,
       TENANT,
@@ -241,7 +241,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("refuses an unknown partner id before touching any case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const attempt = resolveReviewGroup(
       context,
       TENANT,
@@ -252,7 +252,7 @@ describe("resolveReviewGroup", () => {
   });
 
   it("names a case it could not rewrite and leaves that item OPEN, while the rest of the group still closes", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(context, TENANT, { canonicalName: "Galaxy Travels" }, ACTOR);
     const filed = await seedCase(context, partner.partnerId, "38001");
     const filedItem = await seedPartnerItem(context, "38001", "GALAXY");
@@ -287,7 +287,7 @@ describe("resolveReviewGroup", () => {
 
 describe("a review row the group sweep cannot read", () => {
   it("is named in the listing and is left alone, while the readable rows still group", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       await seedPartnerItem(context, "38001", "GALAXY");

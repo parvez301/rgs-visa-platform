@@ -20,9 +20,8 @@ describe("buildProductionContext sql wiring", () => {
     vi.restoreAllMocks();
   });
 
-  it("boots with postgres stores when store flags are unset", async () => {
+  it("boots with a Postgres client when legacy store flags are unset", async () => {
     Object.assign(process.env, requiredEnv);
-    delete process.env["TABLE_NAME"];
     delete process.env["CRM_STORE"];
     delete process.env["LEDGER_STORE"];
 
@@ -31,14 +30,11 @@ describe("buildProductionContext sql wiring", () => {
 
     expect(context.sql).toBeDefined();
     expect(typeof context.sql?.query).toBe("function");
-    expect(context.crmStore).toBe("postgres");
-    expect(context.ledgerStore).toBe("postgres");
     await context.sql?.end();
   });
 
-  it("boots when CRM_STORE=postgres and LEDGER_STORE=postgres", async () => {
+  it("boots with a Postgres client when legacy store flags are set", async () => {
     Object.assign(process.env, requiredEnv);
-    delete process.env["TABLE_NAME"];
     process.env["CRM_STORE"] = "postgres";
     process.env["LEDGER_STORE"] = "postgres";
 
@@ -46,8 +42,6 @@ describe("buildProductionContext sql wiring", () => {
     const context = buildProductionContext();
 
     expect(context.sql).toBeDefined();
-    expect(context.crmStore).toBe("postgres");
-    expect(context.ledgerStore).toBe("postgres");
     await context.sql?.end();
   });
 

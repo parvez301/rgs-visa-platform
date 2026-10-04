@@ -5,9 +5,9 @@ import {
   listPublicNotices,
   upsertNotice,
 } from "../src/domain/notices";
-import { buildSqlTestContext, closeSqlTestContexts } from "./helpers";
+import { buildTestContext, closeTestContexts } from "./helpers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const baseNoticeInput = {
   title: "UAE processing update",
@@ -19,7 +19,7 @@ const baseNoticeInput = {
 
 describe("upsertNotice", () => {
   it("sets createdAt and updatedAt on create", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const notice = await upsertNotice(context, "admin@example.com", {
       ...baseNoticeInput,
       status: "DRAFT",
@@ -31,7 +31,7 @@ describe("upsertNotice", () => {
   });
 
   it("sets publishedAt once and does not move it on later edits", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const draftNotice = await upsertNotice(context, "admin@example.com", {
       ...baseNoticeInput,
       status: "DRAFT",
@@ -57,7 +57,7 @@ describe("upsertNotice", () => {
 
 describe("listPublicNotices", () => {
   it("excludes DRAFT/ARCHIVED and expired notices", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertNotice(context, "admin@example.com", {
       ...baseNoticeInput,
       title: "Draft notice here",
@@ -87,7 +87,7 @@ describe("listPublicNotices", () => {
   });
 
   it("returns country-specific notices plus globals, pinned first", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const globalNotice = await upsertNotice(context, "admin@example.com", {
       title: "Global announcement",
       body: "Applies to all destinations.",
@@ -122,7 +122,7 @@ describe("listPublicNotices", () => {
 
 describe("deleteNotice", () => {
   it("removes a notice from the partition", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const notice = await upsertNotice(context, "admin@example.com", {
       ...baseNoticeInput,
       status: "DRAFT",

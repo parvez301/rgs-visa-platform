@@ -3,7 +3,7 @@ import { createLead, listNewLeads } from "../src/domain/leads";
 import { insertLeadPostgres, listNewLeadsPostgres } from "../src/domain/leadsPostgres";
 import type { AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "./helpers";
 
 const LEAD_INPUT = {
   fullName: "Smoke Lead",
@@ -14,14 +14,14 @@ const LEAD_INPUT = {
 
 describe("leads", () => {
   let sql: SqlClient;
-  let context: SqlTestContext;
+  let context: TestContext;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
   });
 
-  afterEach(closeSqlTestContexts);
+  afterEach(closeTestContexts);
 
   it("creates a lead in Postgres", async () => {
     const lead = await createLead(context, LEAD_INPUT);
@@ -61,8 +61,9 @@ describe("leads", () => {
   });
 
   it("throws when sql is missing", async () => {
-    const { sql: _removed, ...withoutSql }: AppContext = context;
+    const { sql: _removed, ...rest } = context;
     void _removed;
+    const withoutSql = rest as unknown as AppContext;
     await expect(createLead(withoutSql, LEAD_INPUT)).rejects.toThrow(
       "AppContext.sql is required",
     );

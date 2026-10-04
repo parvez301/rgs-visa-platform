@@ -55,28 +55,15 @@ function tryBuildLlmProvider(): LlmProvider | undefined {
   }
 }
 
-function removedDynamoTableClient(): AppContext["table"] {
-  const reject = (): Promise<never> =>
-    Promise.reject(new Error("DynamoDB client removed"));
-  return {
-    get: () => reject(),
-    put: () => reject(),
-    putIfAbsent: () => reject(),
-    delete: () => reject(),
-    query: () => reject(),
-    queryGsi: () => reject(),
-    queryGsiPage: () => reject(),
-  };
-}
-
 /**
  * Exported so `services/migration/src/cli.ts` can reuse the exact same
  * production wiring rather than assembling a second `AppContext` builder by
  * hand.
  */
 export function buildProductionContext(): AppContext {
-  const ledgerStore = ledgerStoreFromEnvironment(process.env);
-  const crmStore = crmStoreFromEnvironment(process.env);
+  // Postgres is the only store; these only reject a stale CRM_STORE/LEDGER_STORE=dynamo at cold start.
+  ledgerStoreFromEnvironment(process.env);
+  crmStoreFromEnvironment(process.env);
   const databaseUrl = databaseUrlFromEnvironment(process.env);
   if (databaseUrl === undefined) {
     throw new Error("DATABASE_URL is not configured");
@@ -93,7 +80,6 @@ export function buildProductionContext(): AppContext {
   const adminsUserPoolId = process.env["ADMINS_USER_POOL_ID"];
   const sqlClient = createPgSqlClient(databaseUrl);
   return {
-    table: removedDynamoTableClient(),
     documents: new S3DocumentStore(documentsBucket),
     email: new BestEffortEmailSender(
       SesEmailSender.fromOptions({
@@ -116,8 +102,6 @@ export function buildProductionContext(): AppContext {
         }
       : {}),
     sql: sqlClient,
-    ledgerStore,
-    crmStore,
   };
 }
 

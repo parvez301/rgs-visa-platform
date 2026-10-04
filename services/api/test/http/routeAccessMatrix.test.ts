@@ -3,7 +3,7 @@ import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildAdminRouter } from "../../src/http/adminApi";
 import { InMemoryCognitoAdmins } from "../../src/lib/cognitoAdmins";
-import { buildSqlTestContext, closeSqlTestContexts } from "../helpers";
+import { buildTestContext, closeTestContexts } from "../helpers";
 
 interface RouteAccess {
   method: string;
@@ -133,7 +133,7 @@ describe("admin route access matrix", () => {
   let router: ReturnType<typeof buildAdminRouter>;
 
   beforeAll(async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     context.cognitoAdmins = new InMemoryCognitoAdmins([
       {
         username: "x",
@@ -146,7 +146,7 @@ describe("admin route access matrix", () => {
     router = buildAdminRouter(context);
   });
 
-  afterAll(closeSqlTestContexts);
+  afterAll(closeTestContexts);
 
   it("classifies every registered route exactly once", () => {
     const registeredRouteKeys = router.registeredRoutes.map(routeKey).sort();

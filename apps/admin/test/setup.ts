@@ -129,3 +129,22 @@ Object.defineProperty(globalThis, "localStorage", {
 afterEach(() => {
   localStorageBackingStore.clear();
 });
+
+/**
+ * jsdom's `Blob` has no `arrayBuffer()`. PGlite (the in-process Postgres
+ * `@rgs/api/test/helpers` builds for the agent-route test in
+ * test/crm/transcript.test.ts) calls it while starting up, so without this
+ * shim any test that builds an API test context dies inside PGlite. Same
+ * reason as the shims above: jsdom lacks a platform capability the code
+ * under test depends on.
+ */
+if (typeof Blob.prototype.arrayBuffer !== "function") {
+  Blob.prototype.arrayBuffer = function arrayBuffer(this: Blob): Promise<ArrayBuffer> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(this);
+    });
+  };
+}

@@ -7,7 +7,7 @@ import type { AgentMessage } from "../../src/agent/providers/types";
 import { createCase } from "../../src/domain/crm/cases";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 
 /**
  * The seam test this branch never had (branch review C1 / M3).
@@ -37,7 +37,7 @@ import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
 
-async function seedOneCase(context: SqlTestContext, caseRef: string) {
+async function seedOneCase(context: TestContext, caseRef: string) {
   const partner = await createPartner(
     context,
     TENANT_ID,
@@ -72,7 +72,7 @@ async function messagesSentOnRequest(
   requestIndex: number,
   seedCaseRef: string,
 ): Promise<AgentMessage[]> {
-  const context = await buildSqlTestContext();
+  const context = await buildTestContext();
   const seededCase = await seedOneCase(context, seedCaseRef);
   const contextWithLlm = Object.assign(context, {
     llm: new FakeLlmProvider(buildScriptedTurns(seededCase)),
@@ -101,7 +101,7 @@ import {
   type GeminiContent,
 } from "../pairingWalkers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 describe("the loop -> adapter seam: every tool result reaches the provider paired with its call", () => {
   it("pairs a single tool call with its result, through both real mappers", async () => {
@@ -219,7 +219,7 @@ describe("the loop -> adapter seam: every tool result reaches the provider paire
   });
 
   it("pairs a staged write tool's result, not only read tools' results", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const seededCase = await seedOneCase(context, "PAIR-05");
     const contextWithLlm = Object.assign(context, {
       llm: new FakeLlmProvider([

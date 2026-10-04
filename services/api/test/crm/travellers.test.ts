@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 import type { SqlClient } from "../../src/lib/sql";
 import { resolveCaseTravellers } from "../../src/domain/crm/caseTravellers";
 import { CorruptRecordError } from "../../src/lib/errors";
@@ -12,7 +12,7 @@ import {
   upsertTraveller,
 } from "../../src/domain/crm/travellers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 /**
  * Writes a traveller row that every lookup reaches but whose body no longer
@@ -21,7 +21,7 @@ afterEach(closeSqlTestContexts);
  * an importer writing an older shape can.
  */
 async function seedUnparseableTravellerItem(
-  context: SqlTestContext,
+  context: TestContext,
   options: { travellerId: string; fullName: string; passportNumber: string },
 ): Promise<void> {
   await context.sql.query(
@@ -34,7 +34,7 @@ async function seedUnparseableTravellerItem(
 
 describe("crm travellers", () => {
   it("creates a traveller and indexes the passport", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const traveller = await upsertTraveller(context, "rgs", {
       fullName: "Umesh Kumar Yadav",
       passportNumber: "Z6931368",
@@ -48,7 +48,7 @@ describe("crm travellers", () => {
   });
 
   it("returns the SAME traveller for a repeat passport rather than duplicating", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const first = await upsertTraveller(context, "rgs", {
       fullName: "Umesh Kumar Yadav",
       passportNumber: "Z6931368",
@@ -64,7 +64,7 @@ describe("crm travellers", () => {
   });
 
   it("rejects a whitespace-only name with a typed 400 rather than a raw ZodError", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     // buildLookupKey trims "   " to "", which no schema accepts. Unwrapped, the
     // ZodError escapes the router's ApiError mapping and becomes a 500.
     await expect(upsertTraveller(context, "rgs", { fullName: "   " })).rejects.toMatchObject({
@@ -74,7 +74,7 @@ describe("crm travellers", () => {
   });
 
   it("creates separate travellers when the passport differs", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const yadav = await upsertTraveller(context, "rgs", {
       fullName: "Umesh Kumar Yadav",
       passportNumber: "Z6931368",
@@ -105,7 +105,7 @@ describe("crm travellers", () => {
   });
 
   it("creates a new traveller each time when no passport is recorded", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     // 74% of workbook rows carry no passport number, so this path is the common one.
     const first = await upsertTraveller(context, "rgs", { fullName: "No Passport Person" });
     context.advanceClock(1_000);
@@ -125,7 +125,7 @@ describe("crm travellers", () => {
   });
 
   it("does not match a passport across tenants", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertTraveller(context, "rgs", {
       fullName: "Umesh Kumar Yadav",
       passportNumber: "Z6931368",
@@ -161,7 +161,7 @@ describe("crm travellers", () => {
     const CORRUPT_TRAVELLER_ID = "trv_half_written";
 
     it("surfaces as a typed 409 from the passport lookup", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       await seedUnparseableTravellerItem(context, {
         travellerId: CORRUPT_TRAVELLER_ID,
         fullName: "Umesh Kumar Yadav",
@@ -179,7 +179,7 @@ describe("crm travellers", () => {
     });
 
     it("surfaces as a typed 409 from the fuzzy name lookup", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       await seedUnparseableTravellerItem(context, {
         travellerId: CORRUPT_TRAVELLER_ID,
         fullName: "Umesh Kumar Yadav",
@@ -196,7 +196,7 @@ describe("crm travellers", () => {
     });
 
     it("surfaces as a typed 409 from the single-traveller read, naming the bad field", async () => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       await seedUnparseableTravellerItem(context, {
         travellerId: CORRUPT_TRAVELLER_ID,
         fullName: "Umesh Kumar Yadav",
@@ -216,7 +216,7 @@ describe("crm travellers", () => {
   });
 
   it("throws a 404 for a traveller that does not exist", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await expect(getTravellerOrThrow(context, "rgs", "nope")).rejects.toMatchObject({
       statusCode: 404,
     });
@@ -226,7 +226,7 @@ describe("crm travellers", () => {
 const TENANT_ID = "rgs";
 
 describe("travellers on Postgres (SQL row assertions)", () => {
-  let context: SqlTestContext;
+  let context: TestContext;
   let sql: SqlClient;
 
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
@@ -235,7 +235,7 @@ describe("travellers on Postgres (SQL row assertions)", () => {
   }
 
   beforeEach(async () => {
-    context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    context = await buildTestContext({ seedStatusEmailTemplates: false });
     sql = context.sql;
   });
 

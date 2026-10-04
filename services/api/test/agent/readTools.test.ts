@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { READ_TOOLS } from "../../src/agent/tools/readTools";
 import { ToolRegistry } from "../../src/agent/tools/registry";
 import {
-  buildSqlTestContext,
-  closeSqlTestContexts,
+  buildTestContext,
+  closeTestContexts,
   contextRefusingWrites,
-  type SqlTestContext,
+  type TestContext,
 } from "../helpers";
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
@@ -14,7 +14,7 @@ import { CASE_COUNT_GROUP_BY_FIELDS, createCase } from "../../src/domain/crm/cas
 import { writeCase } from "../../src/domain/crm/caseStore";
 import { upsertCountryProduct } from "../../src/domain/config";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT_ID = "rgs";
 const ACTOR = "desk@rgs.local";
@@ -26,7 +26,7 @@ const ACTOR = "desk@rgs.local";
  * produce this shape; only a half-written row or an older importer format can.
  */
 async function seedUnparseablePartnerItem(
-  context: SqlTestContext,
+  context: TestContext,
   tenantId: string,
   canonicalName: string,
   partnerId: string,
@@ -169,7 +169,7 @@ describe("every READ_TOOLS tool resolves without ever issuing a write", () => {
   it.each(READ_TOOL_INPUT_CASES)(
     "$tool.name / $label: execute resolves without issuing a write",
     async ({ tool, build }) => {
-      const context = await buildSqlTestContext();
+      const context = await buildTestContext();
       const partner = await createPartner(
         context,
         TENANT_ID,
@@ -212,7 +212,7 @@ describe("every READ_TOOLS tool resolves without ever issuing a write", () => {
 
 describe("get_case", () => {
   it("returns the stored case", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(context, TENANT_ID, { canonicalName: "Ozzy Travels", partnerType: "AGENCY" }, ACTOR);
     const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "ASHA RAO" });
     const createdCase = await createCase(context, TENANT_ID, {
@@ -234,7 +234,7 @@ describe("get_case", () => {
 
 describe("find_traveller", () => {
   it("finds by passport when one is given, and by name otherwise", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertTraveller(context, TENANT_ID, { fullName: "RAVI KUMAR", passportNumber: "Z1234567" });
 
     const tool = new ToolRegistry(READ_TOOLS).get("find_traveller");
@@ -254,7 +254,7 @@ describe("get_country_checklist", () => {
   const tool = () => new ToolRegistry(READ_TOOLS).get("get_country_checklist")!;
 
   it("answers from the Config checklist the desk edits, free-text rows included", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await upsertCountryProduct(context, "admin_1", ACTOR, {
       ...getCountryProduct("AE"),
       requiredDocuments: [
@@ -270,7 +270,7 @@ describe("get_country_checklist", () => {
 
   it("returns an empty list for a country with nothing configured", async () => {
     await expect(
-      tool().execute(await buildSqlTestContext(), TENANT_ID, { countryCode: "ZZ" }, ACTOR),
+      tool().execute(await buildTestContext(), TENANT_ID, { countryCode: "ZZ" }, ACTOR),
     ).resolves.toEqual({ countryCode: "ZZ", requiredDocuments: [] });
   });
 });
@@ -284,7 +284,7 @@ describe("get_country_checklist", () => {
 // desk operator downstream. These two tests exist to keep that from happening.
 describe("search_cases", () => {
   it("surfaces unreadableCaseIds instead of dropping the row that would not parse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const partner = await createPartner(context, TENANT_ID, { canonicalName: "Ozzy Travels", partnerType: "AGENCY" }, ACTOR);
     const healthyTraveller = await upsertTraveller(context, TENANT_ID, { fullName: "HEALTHY TRAVELLER" });
     const healthyCase = await createCase(context, TENANT_ID, {
@@ -317,7 +317,7 @@ describe("search_cases", () => {
 
 describe("list_partners", () => {
   it("surfaces unreadablePartnerIds instead of dropping the row that would not parse", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const healthyPartner = await createPartner(
       context,
       TENANT_ID,

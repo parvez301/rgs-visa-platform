@@ -10,7 +10,7 @@ import { listUserActivityPostgres } from "../src/domain/activityPostgres";
 import { getNoticePostgres } from "../src/domain/noticesPostgres";
 import type { AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "./helpers";
 
 const BASE_INPUT = {
   title: "UAE fee change notice",
@@ -21,14 +21,14 @@ const BASE_INPUT = {
 
 describe("notices", () => {
   let sql: SqlClient;
-  let context: SqlTestContext;
+  let context: TestContext;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
   });
 
-  afterEach(closeSqlTestContexts);
+  afterEach(closeTestContexts);
 
   it("upserts a draft then publishes", async () => {
     const draft = await upsertNotice(context, "admin@example.com", {
@@ -136,8 +136,9 @@ describe("notices", () => {
   });
 
   it("throws when sql is missing", async () => {
-    const { sql: _removed, ...withoutSql }: AppContext = context;
+    const { sql: _removed, ...rest } = context;
     void _removed;
+    const withoutSql = rest as unknown as AppContext;
     await expect(listNotices(withoutSql)).rejects.toThrow(
       "AppContext.sql is required",
     );

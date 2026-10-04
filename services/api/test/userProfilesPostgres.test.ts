@@ -8,18 +8,18 @@ import {
 } from "../src/domain/userProfilesPostgres";
 import type { AppContext } from "../src/lib/context";
 import type { SqlClient } from "../src/lib/sql";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "./helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "./helpers";
 
 describe("user profiles", () => {
   let sql: SqlClient;
-  let context: SqlTestContext;
+  let context: TestContext;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
   });
 
-  afterEach(closeSqlTestContexts);
+  afterEach(closeTestContexts);
 
   it("ensures a profile in Postgres once", async () => {
     const first = await ensureUserProfile(context, "user_1", "priya@example.com", {

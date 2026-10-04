@@ -238,8 +238,8 @@ export function rollbackOptimisticCaseWrite(
  * The case query keeps refetching actively on purpose: `getCase` is a
  * strongly consistent GetItem on the base table, so it has no race to lose.
  *
- * No test can see this. `InMemoryTableClient` is strongly consistent by
- * construction, so `queryGsiPage` there always reflects the preceding `put`
+ * No test can see this. The in-memory test backend is strongly consistent by
+ * construction, so a ledger read there always reflects the preceding write
  * (G5) -- this comment is the record of the decision, which is why it is this
  * long. What `mutations.test.tsx` CAN pin, and does, is the mechanism: after a
  * settled write the ledger entry is invalidated and no second ledger GET went

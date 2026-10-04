@@ -574,7 +574,7 @@ describe("useLedgerEdit", () => {
     // race to lose and keeps refetching actively.
     //
     // G5 is explicit that no test can observe the race itself
-    // (`InMemoryTableClient` is strongly consistent), so what is pinned here is
+    // (the in-memory test backend is strongly consistent), so what is pinned here is
     // the MECHANISM: invalidated, but no second ledger GET.
     const { queryClient, countGetsMatching, commitEdit } = renderLedgerEditWithLiveQueries();
 

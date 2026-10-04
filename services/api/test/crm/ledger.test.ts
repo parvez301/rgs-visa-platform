@@ -4,9 +4,9 @@ import { ApiError } from "../../src/lib/errors";
 import type { SqlClient } from "../../src/lib/sql";
 import { writeCase } from "../../src/domain/crm/caseStore";
 import { listLedgerRowsFromPostgres } from "../../src/domain/crm/ledgerPostgres";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const APPLICANT_SUMMARY = { count: 1, custody: { WITH_RGS: 1 }, outcome: { PENDING: 1 } };
 
@@ -69,11 +69,11 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
 }
 
 describe("listLedgerRowsFromPostgres", () => {
-  let context: SqlTestContext;
+  let context: TestContext;
   let sql: SqlClient;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
     sql = context.sql;
     await seedPartner(sql, "partner_1", "Acme Travel");
     await seedPartner(sql, "partner_2", "Zenith Visas");
@@ -390,10 +390,10 @@ function buildCase(overrides: Partial<crm.CrmCase> & { caseId: string }): crm.Cr
 }
 
 describe("listLedgerRowsFromPostgres over cases written through writeCase", () => {
-  let context: SqlTestContext;
+  let context: TestContext;
 
   beforeEach(async () => {
-    context = await buildSqlTestContext();
+    context = await buildTestContext();
   });
 
   async function seedCases(cases: crm.CrmCase[]): Promise<void> {

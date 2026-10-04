@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { listUserActivity } from "../src/domain/activity";
 import { ensureUserProfile, getUserProfile, listUserProfiles } from "../src/domain/users";
 import { createDraft } from "../src/domain/applications";
-import { buildSqlTestContext, closeSqlTestContexts } from "./helpers";
+import { buildTestContext, closeTestContexts } from "./helpers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 describe("ensureUserProfile", () => {
   it("creates a profile and logs SIGNED_UP once", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const firstProfile = await ensureUserProfile(
       context,
       "user_1",
@@ -37,7 +37,7 @@ describe("ensureUserProfile", () => {
   });
 
   it("defaults fullName from the email local-part", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     const userProfile = await ensureUserProfile(context, "user_2", "asha@example.com");
     expect(userProfile.fullName).toBe("asha");
   });
@@ -45,7 +45,7 @@ describe("ensureUserProfile", () => {
 
 describe("listUserProfiles", () => {
   it("returns profiles created via ensureUserProfile", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await ensureUserProfile(context, "user_1", "one@example.com", { fullName: "One" });
     await ensureUserProfile(context, "user_2", "two@example.com", { fullName: "Two" });
     const profiles = (await listUserProfiles(context)).users;
@@ -58,7 +58,7 @@ describe("listUserProfiles", () => {
 
 describe("createDraft profile side-effect", () => {
   it("creates a user profile the first time a draft is started", async () => {
-    const context = await buildSqlTestContext();
+    const context = await buildTestContext();
     await createDraft(context, "user_1", "AE", "user_1@example.com");
     const userProfile = await getUserProfile(context, "user_1");
     expect(userProfile?.email).toBe("user_1@example.com");

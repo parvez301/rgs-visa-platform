@@ -1,17 +1,15 @@
 import type { ActivityEvent, ActivityEventType, ActivityActorRole } from "@rgs/shared";
 import type { LlmProvider } from "../agent/providers/types";
-import type { TableClient } from "./db";
 import type { CognitoAdminsClient } from "./cognitoAdmins";
 import type { DocumentStore } from "./documentStore";
 import type { EmailSender } from "./email";
-import type { CrmStore, LedgerStore, SqlClient } from "./sql";
+import type { SqlClient } from "./sql";
 import { newId } from "./ids";
 import { requireSql } from "../domain/crm/postgresClient";
 import { insertActivityEventPostgres } from "../domain/activityPostgres";
 
 /** Everything a domain function needs, injected once at handler startup. */
 export interface AppContext {
-  table: TableClient;
   documents: DocumentStore;
   email: EmailSender;
   adminNotificationAddress: string;
@@ -24,12 +22,8 @@ export interface AppContext {
   llm?: LlmProvider;
   /** Staff administration seam; supplied by admin handlers that manage Cognito. */
   cognitoAdmins?: CognitoAdminsClient;
-  /** Postgres pool when DATABASE_URL is configured (Supabase transaction pooler). */
-  sql?: SqlClient;
-  /** Where the CRM ledger is read from. Absent means "dynamo". */
-  ledgerStore?: LedgerStore;
-  /** Where CRM case data is read/written. Absent means "dynamo". */
-  crmStore?: CrmStore;
+  /** Postgres pool (Supabase transaction pooler in production, PGlite in tests). */
+  sql: SqlClient;
 }
 
 export async function logActivity(

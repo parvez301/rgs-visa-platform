@@ -4,15 +4,15 @@ import {
   readCaseRefReservation,
   reserveCaseRef,
 } from "../../src/domain/crm/caseRefIndex";
-import { buildSqlTestContext, closeSqlTestContexts, type SqlTestContext } from "../helpers";
+import { buildTestContext, closeTestContexts, type TestContext } from "../helpers";
 
-afterEach(closeSqlTestContexts);
+afterEach(closeTestContexts);
 
 const TENANT_ID = "rgs";
 const NOW_ISO = "2026-07-23T10:00:00.000Z";
 
 describe("caseRefIndex", () => {
-  let context: SqlTestContext;
+  let context: TestContext;
 
   async function scalar<T>(text: string, values: unknown[] = []): Promise<T> {
     const result = await context.sql.query<{ value: T }>(text, values);
@@ -20,7 +20,7 @@ describe("caseRefIndex", () => {
   }
 
   beforeEach(async () => {
-    context = await buildSqlTestContext({ seedStatusEmailTemplates: false });
+    context = await buildTestContext({ seedStatusEmailTemplates: false });
   });
 
   it("reports nothing for a ref nothing has reserved", async () => {

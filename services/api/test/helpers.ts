@@ -1,26 +1,14 @@
-import { crm, type Traveller } from "@rgs/shared";
+import type { Traveller } from "@rgs/shared";
 import { PGlite } from "@electric-sql/pglite";
 import type { AppContext } from "../src/lib/context";
-import { InMemoryTableClient } from "../src/lib/db";
 import { InMemoryDocumentStore } from "../src/lib/documentStore";
 import { InMemoryEmailSender } from "../src/lib/email";
 import type { SqlClient, SqlQueryable, SqlQueryResult } from "../src/lib/sql";
 import { createDraft, patchDraft } from "../src/domain/applications";
 import { recordDocumentUpload } from "../src/domain/documents";
-import { META_SORT_KEY, statusEmailTemplatePartitionKey } from "../src/domain/crm/keys";
 import { seedStatusEmailTemplatesIfAbsent } from "../src/domain/crm/statusEmailTemplates";
 import { applyMigrations } from "../src/db/migrate";
 import { pgliteAsSqlClient } from "./pgliteSqlClient";
-
-export interface TestContext extends AppContext {
-  table: InMemoryTableClient;
-  documents: InMemoryDocumentStore;
-  email: InMemoryEmailSender;
-  advanceClock(milliseconds: number): void;
-}
-
-/** The tenant every CRM test runs as. */
-const TEST_TENANT_ID = "rgs";
 
 export interface BuildTestContextOptions {
   /**
@@ -32,72 +20,30 @@ export interface BuildTestContextOptions {
   seedStatusEmailTemplates?: boolean;
 }
 
-/**
- * `buildTestContext` is synchronous, so this cannot await
- * `seedStatusEmailTemplatesIfAbsent`. `InMemoryTableClient.put` has no `await`
- * in its body, so it mutates the map during the call itself; firing the puts
- * un-awaited therefore leaves every row in place before the caller gets the
- * context.
- */
-function seedStatusEmailTemplatesNow(table: InMemoryTableClient): void {
-  for (const caseStatus of crm.CASE_STATUSES) {
-    const template: crm.StatusEmailTemplate = {
-      tenantId: TEST_TENANT_ID,
-      caseStatus,
-      ...crm.defaultStatusEmailTemplate(caseStatus),
-      updatedAt: "2026-07-23T10:00:00.000Z",
-      updatedBy: "seed@rgs.local",
-    };
-    void table.put({
-      PK: statusEmailTemplatePartitionKey(TEST_TENANT_ID, caseStatus),
-      SK: META_SORT_KEY,
-      ...template,
-    });
-  }
-}
-
-export function buildTestContext(options: BuildTestContextOptions = {}): TestContext {
-  let currentTimeMs = new Date("2026-07-23T10:00:00.000Z").getTime();
-  const table = new InMemoryTableClient();
-  if (options.seedStatusEmailTemplates !== false) seedStatusEmailTemplatesNow(table);
-  return {
-    table,
-    documents: new InMemoryDocumentStore(),
-    email: new InMemoryEmailSender(),
-    adminNotificationAddress: "info@raysglobalservices.com",
-    now: () => new Date(currentTimeMs),
-    advanceClock(milliseconds: number) {
-      currentTimeMs += milliseconds;
-    },
-  };
-}
-
-export interface SqlTestContext extends AppContext {
-  sql: SqlClient;
+export interface TestContext extends AppContext {
   documents: InMemoryDocumentStore;
   email: InMemoryEmailSender;
   advanceClock(milliseconds: number): void;
 }
 
-const openSqlContexts = new Set<SqlTestContext>();
+const openTestContexts = new Set<TestContext>();
 
-/** Close every PGlite opened by `buildSqlTestContext`; wire into `afterEach`. */
-export async function closeSqlTestContexts(): Promise<void> {
-  const open = [...openSqlContexts];
-  openSqlContexts.clear();
+/** Close every PGlite opened by `buildTestContext`; wire into `afterEach`. */
+export async function closeTestContexts(): Promise<void> {
+  const open = [...openTestContexts];
+  openTestContexts.clear();
   await Promise.all(open.map((context) => context.sql.end().catch(() => undefined)));
 }
 
-export async function buildSqlTestContext(
+export async function buildTestContext(
   options: BuildTestContextOptions = {},
-): Promise<SqlTestContext> {
+): Promise<TestContext> {
   const database = new PGlite();
   const sql = pgliteAsSqlClient(database);
   await applyMigrations(sql);
 
   let currentTimeMs = new Date("2026-07-23T10:00:00.000Z").getTime();
-  const context: SqlTestContext = {
-    table: new InMemoryTableClient(),
+  const context: TestContext = {
     documents: new InMemoryDocumentStore(),
     email: new InMemoryEmailSender(),
     adminNotificationAddress: "info@raysglobalservices.com",
@@ -105,12 +51,10 @@ export async function buildSqlTestContext(
     advanceClock(milliseconds: number) {
       currentTimeMs += milliseconds;
     },
-    crmStore: "postgres",
-    ledgerStore: "postgres",
     sql,
   };
 
-  openSqlContexts.add(context);
+  openTestContexts.add(context);
   if (options.seedStatusEmailTemplates !== false) {
     await seedStatusEmailTemplatesIfAbsent(context, "rgs", "seed@rgs.local");
   }

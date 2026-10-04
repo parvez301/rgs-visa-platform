@@ -1,5 +1,4 @@
 import {
-  ApplicationSchema,
   ApplicationEssentialsSchema,
   CompleteTravellerSchema,
   TravellerSchema,
@@ -13,10 +12,8 @@ import {
 import { ZodError, z } from "zod";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
-import type { TableItem } from "../lib/db";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { newId } from "../lib/ids";
-import { parseStoredRecord, storedRecordId } from "../lib/storedRecords";
 import { resolveCountryProduct } from "./config";
 import { requireSql } from "./crm/postgresClient";
 import {
@@ -30,31 +27,6 @@ import {
   upsertApplicationDocumentPostgres,
 } from "./applicationDocumentsPostgres";
 import { ensureUserProfile } from "./users";
-
-/**
- * Dynamo row shape and parser, kept only for the legacy backfill in
- * `services/migration` (removed with the migration tooling).
- */
-export function applicationToItem(application: Application): TableItem {
-  return {
-    PK: `USER#${application.userId}`,
-    SK: `APP#${application.applicationId}`,
-    GSI1PK: `STATUS#${application.status}`,
-    GSI1SK: application.updatedAt,
-    GSI3PK: `APP#${application.applicationId}`,
-    GSI3SK: "A",
-    ...application,
-  };
-}
-
-export function itemToApplication(item: TableItem): Application {
-  return parseStoredRecord(
-    ApplicationSchema,
-    "Application",
-    storedRecordId(item, "applicationId"),
-    item,
-  );
-}
 
 /** Persists an application. */
 export async function saveApplication(
