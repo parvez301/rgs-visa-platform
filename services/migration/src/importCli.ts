@@ -170,10 +170,10 @@ export async function runImportCli(
   const writeObservation: WriteObservation = { anyWriteAttempted: false };
   try {
     const context = dependencies.buildContext();
-    const observedContext: AppContext =
-      context.sql === undefined
-        ? context
-        : { ...context, sql: sqlRecordingWrites(context.sql, writeObservation) };
+    const observedContext: AppContext = {
+      ...context,
+      sql: sqlRecordingWrites(context.sql, writeObservation),
+    };
     const workbookExtract = await dependencies.readWorkbookAt(parsedValues.workbook);
     const mappedRows = workbookExtract.miniCrmRows.map(mapRow);
 

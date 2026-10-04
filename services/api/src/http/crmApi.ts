@@ -1,7 +1,7 @@
 import { crm } from "@rgs/shared";
 import { z } from "zod";
 import type { AppContext } from "../lib/context";
-import { badRequest, notFound, serviceUnavailable } from "../lib/errors";
+import { badRequest, notFound } from "../lib/errors";
 import { isRealIsoDate } from "../lib/isoDate";
 import {
   changeApplicantCustody,
@@ -398,11 +398,6 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
       );
       const cursor = requestContext.queryParams["cursor"];
 
-      if (context.sql === undefined) {
-        throw serviceUnavailable(
-          "Ledger Postgres is enabled but DATABASE_URL is not configured",
-        );
-      }
       const postgresFilters = parsePostgresLedgerFilters(requestContext.queryParams);
       const postgresPage = await listLedgerRowsFromPostgres(context.sql, tenantId, {
         statuses,

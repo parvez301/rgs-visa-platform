@@ -385,13 +385,12 @@ export async function applyApprovedChange(
   // a duplicated charge on a real client's bill.
   //
   // Closing it needs the proposal to be CLAIMED before `apply` runs, with a
-  // conditional write that fails if the row is no longer PENDING.
-  // `TableClient` (lib/db.ts) has no conditional-write primitive at all --
-  // `put(item)` is the whole write surface -- so this cannot be done from
-  // here; it is a port change with blast radius across three services and it
-  // belongs to Plan 5, not to a fix round. Until then this window is real,
-  // and it is documented here rather than discovered later from a duplicated
-  // line item.
+  // conditional write that fails if the row is no longer PENDING. Proposals
+  // live in Postgres now, so a claim such as
+  // `UPDATE ... SET status = ... WHERE status = 'PENDING'` (checking the
+  // affected-row count) can close this race; it is not implemented yet, and
+  // until it is this window is real. It is documented here rather than
+  // discovered later from a duplicated line item.
   const proposal = await readProposalOrThrow(context, tenantId, proposalId);
   if (proposal.status !== "PENDING") {
     throw conflict(`Proposal ${proposalId} is already ${proposal.status}`);

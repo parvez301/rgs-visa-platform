@@ -11,13 +11,6 @@ import {
   upsertNoticePostgres,
 } from "./noticesPostgres";
 
-// Legacy Dynamo key shape, kept only for the backfill in `services/migration`.
-export const NOTICE_PARTITION_KEY = "NOTICE";
-
-export function noticeSortKey(createdAt: string, noticeId: string): string {
-  return `${createdAt}#${noticeId}`;
-}
-
 export type PublicNotice = Omit<Notice, "createdByEmail" | "status" | "updatedAt">;
 
 function toPublicNotice(notice: Notice): PublicNotice {

@@ -8,24 +8,18 @@ import {
 } from "@rgs/shared";
 import type { AppContext } from "../lib/context";
 import { logActivity } from "../lib/context";
-import { badRequest, corruptRecord } from "../lib/errors";
+import { badRequest } from "../lib/errors";
 import {
   listCountryProductsPostgres,
   seedCountryProductsPostgres,
   upsertCountryProductPostgres,
 } from "./configCountryProductsPostgres";
 import { requireSql } from "./crm/postgresClient";
-import {
-  describeFirstZodIssue,
-  storedRecordId,
-  stripStorageKeys,
-} from "../lib/storedRecords";
 
 /**
  * Rows written before `requiredDocuments` existed carry `docsRequired` (portal
- * DocTypes) instead. Until the `backfill:country-catalog-postgres` backfill
- * has run, read such a row as if it had been migrated: one checklist line per
- * legacy DocType. A row that already has a non-empty `requiredDocuments` wins,
+ * DocTypes) instead. Read such a row as if it had been migrated: one
+ * checklist line per legacy DocType. A row that already has a non-empty `requiredDocuments` wins,
  * and the legacy/read-time-only attributes are dropped either way so they never
  * reach the schema or the response.
  */
@@ -51,40 +45,6 @@ export function coerceLegacyCountryProduct(raw: Record<string, unknown>): unknow
   }
   const { docsRequired: _legacyDocTypes, requiredDocumentLabels: _readTimeLabels, ...rest } = raw;
   return { ...rest, requiredDocuments: raw["requiredDocuments"] ?? [] };
-}
-
-/**
- * Turns a legacy Dynamo `CONFIG#COUNTRY` row into a CountryProduct; kept only
- * for the legacy backfill in `services/migration` (removed with it).
- */
-export function itemToCountryProduct(item: Record<string, unknown>): CountryProduct {
-  const productAttributes = coerceLegacyCountryProduct(stripStorageKeys(item)) as Record<
-    string,
-    unknown
-  >;
-  const directParse = CountryProductSchema.safeParse(productAttributes);
-  if (directParse.success) return directParse.data;
-  // Schema evolution: rows written before newer fields existed are healed by
-  // merging defaults from the code catalog; admin-edited values still win.
-  const seedDefaults = COUNTRY_PRODUCTS.find(
-    (seedProduct) => seedProduct.productCode === productAttributes["productCode"],
-  );
-  if (seedDefaults) {
-    const hasStoredDocuments =
-      Array.isArray(productAttributes["requiredDocuments"]) &&
-      productAttributes["requiredDocuments"].length > 0;
-    const mergedParse = CountryProductSchema.safeParse({
-      ...seedDefaults,
-      ...productAttributes,
-      ...(hasStoredDocuments ? {} : { requiredDocuments: seedDefaults.requiredDocuments }),
-    });
-    if (mergedParse.success) return mergedParse.data;
-  }
-  throw corruptRecord(
-    "Country product",
-    storedRecordId(item, "productCode"),
-    describeFirstZodIssue(directParse.error),
-  );
 }
 
 export interface CountryConfigListing {

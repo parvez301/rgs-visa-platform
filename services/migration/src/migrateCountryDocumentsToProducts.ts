@@ -2,7 +2,6 @@ import { z } from "zod";
 import {
   DOC_TYPES,
   RequiredDocumentSchema,
-  docTypeForLabel,
   type DocType,
   type RequiredDocument,
 } from "@rgs/shared";
@@ -60,46 +59,4 @@ export function parseCountryProductForMigration(
     parsedProduct.requiredDocuments = requiredParse.data;
   }
   return parsedProduct;
-}
-
-function normalizeLabel(label: string): string {
-  return label.trim().toLowerCase();
-}
-
-/** Checklist order wins; known labels regain their portal upload slot, free text stays label-only. */
-export function requiredDocumentsFromChecklistLabels(checklistLabels: readonly string[]): RequiredDocument[] {
-  const requiredDocuments: RequiredDocument[] = [];
-  const seenLabels = new Set<string>();
-  for (const checklistLabel of checklistLabels) {
-    const normalizedLabel = normalizeLabel(checklistLabel);
-    if (normalizedLabel === "" || seenLabels.has(normalizedLabel)) continue;
-    seenLabels.add(normalizedLabel);
-    const portalDocType = docTypeForLabel(checklistLabel);
-    requiredDocuments.push(
-      portalDocType === undefined
-        ? { label: checklistLabel.trim() }
-        : { label: checklistLabel.trim(), portalDocType },
-    );
-  }
-  return requiredDocuments;
-}
-
-/**
- * The checklist merge rule used by the Postgres backfill (the Dynamo-era
- * migration CLI that shared it has been retired):
- * a country's checklist, when it has labels, replaces the product's baseline
- * wholesale; otherwise a legacy row's baseline is kept (converted
- * label-for-label). Returns `undefined` when there is nothing to write -- the
- * row is already converted (it has documents, or it is converted and the
- * checklist adds none).
- */
-export function mergeChecklistIntoDocuments(args: {
-  isLegacyRow: boolean;
-  baselineDocuments: readonly RequiredDocument[];
-  checklistDocuments: readonly RequiredDocument[];
-}): RequiredDocument[] | undefined {
-  const { isLegacyRow, baselineDocuments, checklistDocuments } = args;
-  if (!isLegacyRow && baselineDocuments.length > 0) return undefined;
-  if (checklistDocuments.length > 0) return [...checklistDocuments];
-  return isLegacyRow ? [...baselineDocuments] : undefined;
 }

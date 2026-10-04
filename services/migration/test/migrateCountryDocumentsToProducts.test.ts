@@ -44,7 +44,7 @@ describe("parseCountryProductForMigration", () => {
 });
 
 describe("runMigrateCountryDocumentsToProductsCli (retired)", () => {
-  it("exits 1 and points operators at backfill:country-catalog-postgres", () => {
+  it("exits 1 and says there is nothing to do", () => {
     const errorLines: string[] = [];
 
     const { exitCode } = runMigrateCountryDocumentsToProductsCli({
@@ -53,6 +53,8 @@ describe("runMigrateCountryDocumentsToProductsCli (retired)", () => {
 
     expect(exitCode).toBe(1);
     expect(errorLines).toHaveLength(1);
-    expect(errorLines[0]).toContain("backfill:country-catalog-postgres");
+    expect(errorLines[0]).toContain("retired");
+    expect(errorLines[0]).toContain("nothing to do");
+    expect(errorLines[0]).not.toContain("backfill:");
   });
 });
