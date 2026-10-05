@@ -3,7 +3,7 @@ import { createPartner } from "../src/domain/crm/partners";
 import { buildTestContext } from "./helpers";
 
 describe("buildTestContext", () => {
-  it("migrates PGlite and writes a partner through CRM_STORE=postgres", async () => {
+  it("migrates PGlite and writes a partner", async () => {
     const context = await buildTestContext();
     const partner = await createPartner(
       context,

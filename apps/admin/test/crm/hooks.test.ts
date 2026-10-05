@@ -1,5 +1,5 @@
 import { crm } from "@rgs/shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { crmQueryKeys } from "../../src/crm/api/hooks";
 import { toServerLedgerFilters } from "../../src/crm/ledger/filters";
 
@@ -43,17 +43,7 @@ describe("crmQueryKeys.ledger filter fingerprint", () => {
 });
 
 describe("toServerLedgerFilters", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("sends nothing while the combined-filters flag is off, so the Dynamo ledger is not refetched per keystroke", () => {
-    vi.stubEnv("VITE_LEDGER_COMBINED_FILTERS", "");
-    expect(toServerLedgerFilters({ search: "asha", destinationCountry: "AE" })).toEqual({});
-  });
-
-  it("resolves the __TODAY__ sentinel and drops blanks when the flag is on", () => {
-    vi.stubEnv("VITE_LEDGER_COMBINED_FILTERS", "true");
+  it("resolves the __TODAY__ sentinel and drops blanks", () => {
     expect(
       toServerLedgerFilters(
         {

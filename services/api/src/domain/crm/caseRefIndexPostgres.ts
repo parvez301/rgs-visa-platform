@@ -5,8 +5,8 @@ import type { CaseRefReservation } from "./caseRefIndex";
 /**
  * Postgres storage for case ref reservations (`crm_case_ref_reservations`,
  * migration 004), distinct from `crm_ref_claims`. Keyed on (tenant_id,
- * case_ref). A Postgres read is always strongly consistent, so the Dynamo
- * `ConsistentRead` concern does not apply. The reserve-before-write /
+ * case_ref). A Postgres read is current; there is no lagging secondary
+ * index. The reserve-before-write /
  * complete-after contract is unchanged: `writeCaseRefReservationPostgres`
  * is called once to reserve (no `completedAt`) and again to complete.
  */

@@ -342,71 +342,8 @@ describe("LedgerPage — the partial-ledger banner", () => {
   });
 });
 
-describe("LedgerPage — the status/partner filter exclusion", () => {
-  it("clears the status selection when a partner is chosen, and back again", async () => {
-    const user = userEvent.setup();
-    stubLedgerLoad();
-    stubPartners();
-
-    renderLedgerPage();
-
-    await user.click(screen.getByRole("button", { name: /Status ·/ }));
-    // Live work is the default open view, so Application Received starts pressed.
-    expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "true");
-
-    await user.selectOptions(screen.getByRole("combobox", { name: "Partner" }), "partner_1");
-    // Selecting a partner must clear the status filter -- the server only
-    // ever honors one of the two (LedgerAppliedQuery is a union), so a
-    // status chip left highlighted here would be lying about what is
-    // actually being filtered.
-    expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "false");
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], "partner_1", expect.any(Object));
-
-    // Not stuck: choosing "All partners" clears the partner filter and
-    // leaves status filtering selectable again.
-    await user.selectOptions(screen.getByRole("combobox", { name: "Partner" }), "");
-    expect(screen.getByRole("combobox", { name: "Partner" })).toHaveValue("");
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], undefined, expect.any(Object));
-
-    await user.click(screen.getByRole("button", { name: "Application Received" }));
-    expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "true");
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["NEW"], undefined, expect.any(Object));
-  });
-
-  it("clears the partner selection the moment a status is chosen -- the reverse direction", async () => {
-    const user = userEvent.setup();
-    stubLedgerLoad();
-    stubPartners();
-
-    renderLedgerPage();
-
-    await user.selectOptions(screen.getByRole("combobox", { name: "Partner" }), "partner_1");
-    expect(screen.getByRole("combobox", { name: "Partner" })).toHaveValue("partner_1");
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith([], "partner_1", expect.any(Object));
-
-    // The reverse of the first test's transition, starting from partner mode
-    // rather than ending there: a status button must not be a dead end.
-    // Nothing else in this component disables it while a partner is
-    // selected, so this click alone must both select the status and drop
-    // the partner filter in the same step.
-    await user.click(screen.getByRole("button", { name: /Status ·/ }));
-    await user.click(screen.getByRole("button", { name: "Documents Under Review" }));
-    expect(screen.getByRole("combobox", { name: "Partner" })).toHaveValue("");
-    expect(screen.getByRole("button", { name: "Documents Under Review" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(["DOCS_UNDER_REVIEW"], undefined, expect.any(Object));
-  });
-});
-
-describe("LedgerPage — combined filters on the Postgres ledger (VITE_LEDGER_COMBINED_FILTERS)", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
+describe("LedgerPage — combined status, partner and extra filters", () => {
   it("keeps the status chips when a partner is chosen, and the other way round", async () => {
-    vi.stubEnv("VITE_LEDGER_COMBINED_FILTERS", "true");
     const user = userEvent.setup();
     stubLedgerLoad();
     stubPartners();
@@ -433,7 +370,6 @@ describe("LedgerPage — combined filters on the Postgres ledger (VITE_LEDGER_CO
   });
 
   it("hands the client filters to the hook, with the search settled after a pause", async () => {
-    vi.stubEnv("VITE_LEDGER_COMBINED_FILTERS", "true");
     const user = userEvent.setup();
     stubLedgerLoad();
     stubPartners();

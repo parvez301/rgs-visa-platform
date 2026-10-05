@@ -453,10 +453,9 @@ describe("runImport", () => {
     expect(missingFieldItem?.proposedValue).toBe("1970-01-01");
 
     // The detail text is the only thing telling a reviewer where to look for
-    // the row, so it has to be true. listCasesByPartner reads GSI2 with
-    // scanForward: false -- descending -- and 1970-01-01 is the GSI2 sort
-    // key, so a sentinel-dated case sorts LAST, not first. The shipped text
-    // said "front" and was false on all 225 of them.
+    // the row, so it has to be true. Partner listings are newest-first, and
+    // 1970-01-01 sorts LAST, not first. The shipped text said "front" and was
+    // false on all 225 of them.
     expect(missingFieldItem?.detail).toContain("END");
     expect(missingFieldItem?.detail).not.toContain("front");
   });

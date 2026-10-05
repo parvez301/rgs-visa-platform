@@ -51,7 +51,7 @@ describe("crm events", () => {
     expect(await listCaseEvents(context, "other-tenant", "case_1")).toEqual([]);
   });
 
-  it("records an event and returns it with the same shape Dynamo returns", async () => {
+  it("records an event and returns it", async () => {
     const context = await buildTestContext();
     const recorded = await recordCrmEvent(context, "rgs", "case_1", "CASE_CREATED", "a@rgs.test", {
       note: "hello",
@@ -88,7 +88,7 @@ describe("crm events", () => {
     ]);
   });
 
-  it("breaks created_at ties by eventId, like the Dynamo sort key", async () => {
+  it("breaks created_at ties by eventId", async () => {
     const context = await buildTestContext();
     await context.sql.query(
       `insert into crm_events (tenant_id, event_id, case_id, event_type, actor_email, meta, created_at)

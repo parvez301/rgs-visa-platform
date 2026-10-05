@@ -120,9 +120,8 @@ const UNREADABLE_CASE_REF_PLACEHOLDER = "(ref not readable)";
  * every substitution raises a `MISSING_REQUIRED_FIELD` review item carrying
  * the sentinel on `proposedValue`, so a human sees exactly which of the 452 /
  * 225 rows carry a placeholder instead of a real value. "1970-01-01" is the
- * most important of these to flag, since it is also `GSI2SK` and
- * `listCasesByPartner` reads GSI2 with `scanForward: false` -- descending --
- * so an unflagged placeholder date sorts its 225 cases to the very END of
+ * most important of these to flag: partner listings are newest-first, so an
+ * unflagged placeholder date sorts its 225 cases to the very END of
  * their partners' listings, not the front. Measured on the busiest partner
  * (785 cases) that puts a sentinel-dated case on page 16 at the route's
  * default limit of 50: invisible rather than prominent, which is why the
@@ -352,13 +351,10 @@ type CaseRefClaim =
  * under which id.
  *
  * The ref's own reservation item is the authority, not the status sweep.
- * GSI1 is eventually consistent and cannot be read consistently, so "the
- * sweep did not see it" genuinely means "the sweep did not see it", not "it
- * is not there" — and an operator whose `--commit` aborted at row 5,000 and
- * who re-runs immediately is the ordinary case, with the last several hundred
- * writes exactly the ones the index has not caught up with. The reservation
- * is a base-table GetItem, so it is strongly consistent and never lies about
- * what a previous run did.
+ * "The sweep did not see it" means that, not "it is not there" -- an operator
+ * whose `--commit` aborted at row 5,000 and who re-runs immediately is the
+ * ordinary case. The reservation read is current and never lies about what
+ * a previous run did.
  *
  * A completed reservation ends it there: one read per row, and no reassembly
  * of the case at all. Every other answer is rare enough to afford a real
@@ -534,13 +530,10 @@ async function resolvePartner(
  * Memoised per run on both lookup keys, the same way `resolvePartner` is, and
  * for two separate reasons.
  *
- * Correctness in production: `findTravellerByPassport` reads GSI3 and
- * `findTravellerByName` reads GSI2, and neither index can be read
- * consistently. Row n creates traveller "RAHUL SHARMA"; row n+1, milliseconds
- * later, queries GSI2 for the same normalized name, misses because
- * replication has not landed, and creates a SECOND record for one person --
- * splitting their case history and making the passport lookup return
- * whichever propagated first. The in-run map answers before the index is
+ * Correctness: `findTravellerByPassport` and `findTravellerByName` are
+ * looked up once per key. Row n creates traveller "RAHUL SHARMA"; row n+1,
+ * milliseconds later, must not create a SECOND record for one person,
+ * splitting their case history. The in-run map answers before storage is
  * asked, so the race has nowhere to happen.
  *
  * Honesty in the dry run: with nothing written, every lookup missed, so the
@@ -757,18 +750,17 @@ export async function runImport(
   const caseRefResolutionBySourceRow = resolveDuplicateCaseRefs(input.mappedRows);
   /**
    * Refs this run PROVED were already held by a stored case, by the only
-   * mechanism on this branch that can prove it: the per-ref reservation item,
-   * read from the base table with `ConsistentRead: true` (see `claimCaseRef`).
+   * mechanism on this branch that can prove it: the per-ref reservation
+   * (see `claimCaseRef`).
    *
    * The group loop at the bottom needs "which of this group's members existed
    * before this run", and the sweep above cannot answer that after an aborted
-   * run -- GSI1 lag makes every recently written ref look never-imported.
-   * That is finding NEW-3: the cases were correctly skipped and their groups
-   * were re-proposed anyway, up to 1,476 duplicate PROPOSED_GROUP items on
-   * the real workbook, in front of a human who had already reviewed them.
+   * run. That is finding NEW-3: the cases were correctly skipped and their
+   * groups were re-proposed anyway, up to 1,476 duplicate PROPOSED_GROUP items
+   * on the real workbook, in front of a human who had already reviewed them.
    *
    * Filled as the row loop goes, so by the time the group loop runs every row
-   * of this import has contributed its consistent answer.
+   * of this import has contributed its answer.
    */
   const caseRefsHeldByStoredCases = new Set<string>();
   const partnerIdByCanonicalKey = new Map<string, string>();
@@ -1182,7 +1174,7 @@ export async function runImport(
         fieldName: "C",
         rawValue: "",
         proposedValue: receivedDateForCase,
-        detail: `receivedDate is required by the schema but the sheet did not record one; the placeholder "${receivedDateForCase}" was written pending a real value. This placeholder is also the case's GSI2 sort key, and partner listings are read newest-first, so an unresolved row sorts to the very END of its partner's listing -- on the busiest partner that is page 16 at the default page size of 50. It will not be found by scrolling; work it from this queue.`,
+        detail: `receivedDate is required by the schema but the sheet did not record one; the placeholder "${receivedDateForCase}" was written pending a real value. Partner listings are newest-first, so an unresolved row sorts to the very END of its partner's listing -- on the busiest partner that is page 16 at the default page size of 50. It will not be found by scrolling; work it from this queue.`,
       });
     }
     if (travellerFullNameIsMissing) {
@@ -1213,11 +1205,10 @@ export async function runImport(
   // per group on a path that already has enough of them, and would not notice
   // a group whose membership changed.
   //
-  // NEW-3: that check used to consult the GSI1 sweep ALONE, and the sweep is
-  // an eventually consistent index read. Every case skipped as
-  // already-imported on the strength of its reservation -- the strongly
-  // consistent path C1/C2 exist to provide -- was simultaneously invisible to
-  // the sweep, so the very re-run those findings made safe for cases
+  // NEW-3: that check used to consult the status sweep ALONE. Every case
+  // skipped as already-imported on the strength of its reservation -- the
+  // path C1/C2 exist to provide -- was simultaneously invisible to the
+  // sweep, so the very re-run those findings made safe for cases
   // re-queued every one of its groups. The reservation-backed set is
   // therefore the primary authority here, exactly as it is for the cases
   // themselves.

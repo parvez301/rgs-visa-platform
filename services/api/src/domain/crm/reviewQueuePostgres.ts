@@ -14,7 +14,7 @@ import {
 /**
  * Postgres storage for the migration review queue (`crm_review_items`,
  * migration 004). Rows are parsed through the same `crm.ReviewItemSchema` as
- * the Dynamo path, so a half-written row is a `CorruptRecordError` either way
+ * a half-written row is a `CorruptRecordError`
  * and a listing names it in `unreadableReviewItemIds` instead of failing.
  */
 
@@ -59,7 +59,7 @@ function parseReviewItemRow(dbRow: DbRow): crm.ReviewItem {
 /**
  * The single place a review item reaches Postgres. An upsert on the primary
  * key, because resolving an item rewrites the same row (status, resolution)
- * exactly as the Dynamo `put` overwrites its item; `created_at` is never
+ * `created_at` is never
  * touched on update, so a resolved item keeps its place in the queue.
  */
 export async function insertReviewItemPostgres(
@@ -125,7 +125,7 @@ export async function getReviewItemPostgres(
 }
 
 /**
- * One page of a status, oldest first (the order GSI1SK = createdAt gave).
+ * One page of a status, oldest first.
  * Reads `limit + 1` so `hasMore` is known without a count.
  */
 export async function listReviewItemsPostgres(

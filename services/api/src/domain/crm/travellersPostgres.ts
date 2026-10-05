@@ -15,7 +15,7 @@ import {
  *
  * Passport uniqueness is a partial unique index on (tenant_id, passport_number)
  * -- the database refuses a second holder, so two concurrent upserts of one
- * passport cannot both win the way two Dynamo `put`s could. Rows come back as
+ * passport cannot both win the way two concurrent writers could. Rows come back as
  * candidates for `crm.CrmTravellerSchema`; `travellers.ts` parses them.
  */
 
@@ -60,7 +60,7 @@ export async function findTravellerByPassportPostgres(
   return selectOneTraveller(sql, "passport_number = $2", [tenantId, passportNumber]);
 }
 
-/** Earliest match by traveller id, like GSI2's sort key. Names are not unique. */
+/** Earliest match by traveller id. Names are not unique. */
 export async function findTravellerByNamePostgres(
   sql: SqlClient,
   tenantId: string,

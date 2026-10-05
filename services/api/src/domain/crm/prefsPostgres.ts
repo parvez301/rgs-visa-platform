@@ -6,7 +6,7 @@ import { parseStoredRecord } from "../../lib/storedRecords";
 /**
  * Postgres storage for CRM user prefs (`crm_user_prefs`, migration 004),
  * primary key `(tenant_id, email)`. Rows are parsed through the same
- * `crm.CrmUserPrefsSchema` as the Dynamo path. `default_filters` is jsonb.
+ * `crm.CrmUserPrefsSchema` . `default_filters` is jsonb.
  */
 
 const PREFS_COLUMNS: ReadonlyArray<readonly [string, string]> = [

@@ -7,7 +7,7 @@ import { collectReadableRecords, describeFirstZodIssue } from "../lib/storedReco
 /**
  * Postgres storage for the country catalog (`crm_country_products`, migration
  * 005), primary key `(country_code, product_code)`. Rows parse through the same
- * `CountryProductSchema` as the Dynamo path. The table is seeded by the
+ * `CountryProductSchema`. The table is seeded by the
  * migration, so an empty table is a real (empty) catalog, not a cue to fall
  * back to the in-memory seed.
  */

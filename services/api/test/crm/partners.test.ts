@@ -520,7 +520,7 @@ describe("partners on Postgres (SQL row assertions)", () => {
     sql = context.sql;
   });
 
-  it("creates a partner row and reads it back identically, without touching Dynamo", async () => {
+  it("creates a partner row and reads it back identically", async () => {
     const created = await createPartner(
       context,
       TENANT_ID,

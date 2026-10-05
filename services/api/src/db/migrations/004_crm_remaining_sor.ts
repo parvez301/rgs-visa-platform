@@ -3,8 +3,7 @@ export const MIGRATION_FILENAME = "004_crm_remaining_sor.sql";
 // NOTE: applyMigrations splits this text on ";" -- keep semicolons out of
 // comments, string literals and dollar-quoted bodies.
 //
-// The remaining Dynamo-backed CRM records, so CRM_STORE=postgres can serve them
-// without Dynamo: importer ref reservations, the import review queue, staged
+// Importer ref reservations, the import review queue, staged
 // agent proposals, agent memory, per-user agent prefs and status-email
 // templates. Column names are the snake_case of the Zod / interface fields.
 // Timestamps are timestamptz and the ISO strings the domain code holds are

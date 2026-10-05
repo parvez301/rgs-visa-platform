@@ -3,7 +3,7 @@ export interface MigrateCountryDocumentsCliDependencies {
 }
 
 /**
- * Retired: the Dynamo-era fold of CRM checklists + `docsRequired` into
+ * Retired: the fold of CRM checklists + `docsRequired` into
  * `CountryProduct.requiredDocuments` is finished and its code is gone; the
  * country catalog now lives in Postgres. Nothing to run. Always exits 1 so a
  * scripted run notices it did nothing.

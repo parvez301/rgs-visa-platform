@@ -16,7 +16,7 @@ import { collectReadableRecords, describeFirstZodIssue } from "../lib/storedReco
 /**
  * Postgres storage for application document metadata
  * (`portal_application_documents`, migration 006). The bytes stay in S3; this
- * is only the `s3_key` plus review state that Dynamo kept as `APP#/DOC#` items.
+ * is only the `s3_key` plus review state plus review state.
  * Rows parse through `ApplicationDocumentSchema`, and an unparseable row is a
  * `CorruptRecordError` that listings skip and name.
  */

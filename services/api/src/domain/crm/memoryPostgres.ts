@@ -11,7 +11,7 @@ import { collectReadableRecords, parseStoredRecord } from "../../lib/storedRecor
 /**
  * Postgres storage for agent/desk memory (`crm_memories`, migration 004),
  * primary key `(tenant_id, scope, memory_key)`. Rows are parsed through the
- * same `crm.CrmMemorySchema` as the Dynamo path, so a row that breaks the
+ * same `crm.CrmMemorySchema`, so a row that breaks the
  * provenance refinement is a `CorruptRecordError` either way and a listing
  * names it in `unreadableMemoryKeys` instead of failing the recall.
  */
@@ -46,7 +46,7 @@ function parseMemoryRow(dbRow: DbRow): crm.CrmMemory {
 
 /**
  * An upsert on the primary key: re-remembering a key overwrites the row in
- * place, exactly as the Dynamo `put` does. The caller has already validated
+ * place, The caller has already validated
  * the memory.
  */
 export async function upsertMemoryPostgres(sql: SqlClient, memory: crm.CrmMemory): Promise<void> {
@@ -105,7 +105,7 @@ export async function memoryRowExistsPostgres(
   return result.rows.length > 0;
 }
 
-/** One scope, `memory_key` ascending (the order the Dynamo sort key gave), capped at `limit`. */
+/** One scope, `memory_key` ascending, capped at `limit`. */
 export async function listMemoriesByScopePostgres(
   sql: SqlClient,
   tenantId: string,

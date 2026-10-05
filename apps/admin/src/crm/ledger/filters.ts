@@ -38,36 +38,21 @@ export interface LedgerFilters {
 }
 
 /**
- * The slice of `LedgerFilters` beyond `statuses`/`partnerId`: what the Ledger
- * page holds as client state and, when the Postgres ledger is on, also sends
- * to the API.
+ * The slice of `LedgerFilters` beyond `statuses`/`partnerId`: held as client
+ * state and also sent to the API.
  */
 export type ClientOnlyLedgerFilters = Omit<LedgerFilters, "statuses" | "partnerId">;
 
 /**
- * True on admin builds pointed at an API running LEDGER_STORE=postgres
- * (VITE_LEDGER_COMBINED_FILTERS="true"). Only then does the server answer
- * status + partner together and the filters in `ClientOnlyLedgerFilters`;
- * the Dynamo handler answers partner XOR status and ignores the rest, so the
- * UI keeps its mutually-exclusive chips and the client-only filters stay
- * client-only (no refetch of the whole ledger per keystroke) when this is off.
- * Read at call time so tests can stub the env.
- */
-export function isCombinedLedgerFiltersEnabled(): boolean {
-  return import.meta.env.VITE_LEDGER_COMBINED_FILTERS === "true";
-}
-
-/**
- * The query-string filters for the client-only slice, or `{}` when the
- * combined-filters flag is off. Resolves the `__TODAY__` sentinel to a real
- * date (the server only understands YYYY-MM-DD) and drops blank values, so
- * the result doubles as the React Query cache-key fingerprint input.
+ * The query-string filters for the extra slice. Resolves the `__TODAY__`
+ * sentinel to a real date (the server only understands YYYY-MM-DD) and drops
+ * blank values, so the result doubles as the React Query cache-key fingerprint.
  */
 export function toServerLedgerFilters(
   filters: ClientOnlyLedgerFilters | undefined,
   todayIso: string = localTodayIso(),
 ): Omit<LedgerQueryFilters, "statuses" | "partnerId"> {
-  if (filters === undefined || !isCombinedLedgerFiltersEnabled()) return {};
+  if (filters === undefined) return {};
   const search = filters.search?.trim();
   const appointmentDateOn = resolveDateOnFilter(filters.appointmentDateOn, todayIso);
   const expectedCollectionDateOn = resolveDateOnFilter(filters.expectedCollectionDateOn, todayIso);

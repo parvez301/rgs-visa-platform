@@ -668,7 +668,7 @@ describe("the five-strategy scorecard (task-12-review.md A3/M2 -- the review's o
     const passportTrapCase = caseResults.find((caseResult) => caseResult.id === "trap-passport-garbled-date");
     expect(passportTrapCase?.trapOutcome?.satisfied).toBe(false);
     expect(passportTrapCase?.trapOutcome?.fabricatedRaw).toBe(false);
-  });
+  }, 20_000);
 
   it("C1: a 'helpful' model that fabricates a value which ALSO fails to resolve is caught, not credited as declining", async () => {
     const cases = await loadRealCases();

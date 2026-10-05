@@ -93,13 +93,9 @@ describe("admin RBAC infrastructure", () => {
     assert.equal(environments["rgs-user-api-test"]?.["ADMINS_USER_POOL_ID"], undefined);
   });
 
-  it("gives CRM database config to admin, user API, and reminders Lambdas; LEDGER_STORE stays admin-only", () => {
+  it("gives DATABASE_URL to admin, user API, and reminders Lambdas and sets no store flags", () => {
     const previousUrl = process.env["RGS_DATABASE_URL"];
-    const previousStore = process.env["RGS_LEDGER_STORE"];
-    const previousCrmStore = process.env["RGS_CRM_STORE"];
     process.env["RGS_DATABASE_URL"] = "postgresql://example.invalid:6543/postgres";
-    process.env["RGS_LEDGER_STORE"] = "postgres";
-    process.env["RGS_CRM_STORE"] = "postgres";
     try {
       const functions = resourcesOfType(synthesizedResources(), "AWS::Lambda::Function");
       const environments = Object.fromEntries(
@@ -118,42 +114,29 @@ describe("admin RBAC infrastructure", () => {
         environments["rgs-admin-api-test"]?.["DATABASE_URL"],
         "postgresql://example.invalid:6543/postgres",
       );
-      assert.equal(environments["rgs-admin-api-test"]?.["LEDGER_STORE"], "postgres");
-      assert.equal(environments["rgs-admin-api-test"]?.["CRM_STORE"], "postgres");
-      // Reminders read and stamp cases through the CRM store seam, so after
-      // cutover they must see Postgres, not the frozen Dynamo copy.
+      assert.equal(environments["rgs-admin-api-test"]?.["CRM_STORE"], undefined);
+      assert.equal(environments["rgs-admin-api-test"]?.["LEDGER_STORE"], undefined);
       assert.equal(
         environments["rgs-appointment-reminders-test"]?.["DATABASE_URL"],
         "postgresql://example.invalid:6543/postgres",
       );
-      assert.equal(environments["rgs-appointment-reminders-test"]?.["CRM_STORE"], "postgres");
+      assert.equal(environments["rgs-appointment-reminders-test"]?.["CRM_STORE"], undefined);
       assert.equal(environments["rgs-appointment-reminders-test"]?.["LEDGER_STORE"], undefined);
-      // C.2.1: portal writes (applications/profiles/documents/activity) go
-      // through CRM_STORE on the user API, so it needs the same CRM Postgres env.
       assert.equal(
         environments["rgs-user-api-test"]?.["DATABASE_URL"],
         "postgresql://example.invalid:6543/postgres",
       );
-      assert.equal(environments["rgs-user-api-test"]?.["CRM_STORE"], "postgres");
-      // Ledger stays admin-only.
+      assert.equal(environments["rgs-user-api-test"]?.["CRM_STORE"], undefined);
       assert.equal(environments["rgs-user-api-test"]?.["LEDGER_STORE"], undefined);
     } finally {
       if (previousUrl === undefined) delete process.env["RGS_DATABASE_URL"];
       else process.env["RGS_DATABASE_URL"] = previousUrl;
-      if (previousStore === undefined) delete process.env["RGS_LEDGER_STORE"];
-      else process.env["RGS_LEDGER_STORE"] = previousStore;
-      if (previousCrmStore === undefined) delete process.env["RGS_CRM_STORE"];
-      else process.env["RGS_CRM_STORE"] = previousCrmStore;
     }
   });
 
-  it("sets appointment reminders CRM_STORE to postgres when no CRM Postgres URL is set", () => {
-    const saved = {
-      url: process.env["RGS_DATABASE_URL"],
-      crm: process.env["RGS_CRM_STORE"],
-    };
+  it("omits DATABASE_URL on appointment reminders when no CRM Postgres URL is set", () => {
+    const savedUrl = process.env["RGS_DATABASE_URL"];
     delete process.env["RGS_DATABASE_URL"];
-    delete process.env["RGS_CRM_STORE"];
     try {
       const reminders = resourcesOfType(synthesizedResources(), "AWS::Lambda::Function").find(
         (fn) => (fn.Properties as { FunctionName?: unknown }).FunctionName === "rgs-appointment-reminders-test",
@@ -162,62 +145,41 @@ describe("admin RBAC infrastructure", () => {
         (reminders?.Properties as { Environment?: { Variables?: Record<string, unknown> } }).Environment
           ?.Variables ?? {};
       assert.equal(variables["DATABASE_URL"], undefined);
-      assert.equal(variables["CRM_STORE"], "postgres");
+      assert.equal(variables["CRM_STORE"], undefined);
     } finally {
-      if (saved.url !== undefined) process.env["RGS_DATABASE_URL"] = saved.url;
-      if (saved.crm !== undefined) process.env["RGS_CRM_STORE"] = saved.crm;
+      if (savedUrl !== undefined) process.env["RGS_DATABASE_URL"] = savedUrl;
     }
   });
 
-  it("defaults CRM_STORE and LEDGER_STORE to postgres on staging when RGS_* unset", () => {
-    const saved = {
-      url: process.env["RGS_DATABASE_URL"],
-      crm: process.env["RGS_CRM_STORE"],
-      ledger: process.env["RGS_LEDGER_STORE"],
-    };
+  it("sets no CRM_STORE or LEDGER_STORE on staging", () => {
+    const savedUrl = process.env["RGS_DATABASE_URL"];
     delete process.env["RGS_DATABASE_URL"];
-    delete process.env["RGS_CRM_STORE"];
-    delete process.env["RGS_LEDGER_STORE"];
     try {
       const env = lambdaEnvByName(synthesizedResourcesForStage("staging"));
-      assert.equal(env["rgs-admin-api-staging"]?.["CRM_STORE"], "postgres");
-      assert.equal(env["rgs-admin-api-staging"]?.["LEDGER_STORE"], "postgres");
-      assert.equal(env["rgs-user-api-staging"]?.["CRM_STORE"], "postgres");
+      assert.equal(env["rgs-admin-api-staging"]?.["CRM_STORE"], undefined);
+      assert.equal(env["rgs-admin-api-staging"]?.["LEDGER_STORE"], undefined);
+      assert.equal(env["rgs-user-api-staging"]?.["CRM_STORE"], undefined);
       assert.equal(env["rgs-user-api-staging"]?.["LEDGER_STORE"], undefined);
-      assert.equal(env["rgs-appointment-reminders-staging"]?.["CRM_STORE"], "postgres");
+      assert.equal(env["rgs-appointment-reminders-staging"]?.["CRM_STORE"], undefined);
     } finally {
-      if (saved.url === undefined) delete process.env["RGS_DATABASE_URL"];
-      else process.env["RGS_DATABASE_URL"] = saved.url;
-      if (saved.crm === undefined) delete process.env["RGS_CRM_STORE"];
-      else process.env["RGS_CRM_STORE"] = saved.crm;
-      if (saved.ledger === undefined) delete process.env["RGS_LEDGER_STORE"];
-      else process.env["RGS_LEDGER_STORE"] = saved.ledger;
+      if (savedUrl === undefined) delete process.env["RGS_DATABASE_URL"];
+      else process.env["RGS_DATABASE_URL"] = savedUrl;
     }
   });
 
-  it("defaults CRM_STORE and LEDGER_STORE to postgres on prod when RGS_* unset", () => {
-    const saved = {
-      url: process.env["RGS_DATABASE_URL"],
-      crm: process.env["RGS_CRM_STORE"],
-      ledger: process.env["RGS_LEDGER_STORE"],
-    };
+  it("sets no CRM_STORE or LEDGER_STORE on prod", () => {
+    const savedUrl = process.env["RGS_DATABASE_URL"];
     delete process.env["RGS_DATABASE_URL"];
-    delete process.env["RGS_CRM_STORE"];
-    delete process.env["RGS_LEDGER_STORE"];
     try {
       const env = lambdaEnvByName(synthesizedResourcesForStage("prod"));
-      assert.equal(env["rgs-admin-api-prod"]?.["CRM_STORE"], "postgres");
-      assert.equal(env["rgs-admin-api-prod"]?.["LEDGER_STORE"], "postgres");
-      assert.equal(env["rgs-user-api-prod"]?.["CRM_STORE"], "postgres");
+      assert.equal(env["rgs-admin-api-prod"]?.["CRM_STORE"], undefined);
+      assert.equal(env["rgs-admin-api-prod"]?.["LEDGER_STORE"], undefined);
+      assert.equal(env["rgs-user-api-prod"]?.["CRM_STORE"], undefined);
       assert.equal(env["rgs-user-api-prod"]?.["LEDGER_STORE"], undefined);
-      assert.equal(env["rgs-appointment-reminders-prod"]?.["CRM_STORE"], "postgres");
+      assert.equal(env["rgs-appointment-reminders-prod"]?.["CRM_STORE"], undefined);
     } finally {
-      if (saved.url === undefined) delete process.env["RGS_DATABASE_URL"];
-      else process.env["RGS_DATABASE_URL"] = saved.url;
-      if (saved.crm === undefined) delete process.env["RGS_CRM_STORE"];
-      else process.env["RGS_CRM_STORE"] = saved.crm;
-      if (saved.ledger === undefined) delete process.env["RGS_LEDGER_STORE"];
-      else process.env["RGS_LEDGER_STORE"] = saved.ledger;
+      if (savedUrl === undefined) delete process.env["RGS_DATABASE_URL"];
+      else process.env["RGS_DATABASE_URL"] = savedUrl;
     }
   });
 

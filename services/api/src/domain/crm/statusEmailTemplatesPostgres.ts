@@ -6,7 +6,7 @@ import { parseStoredRecord } from "../../lib/storedRecords";
 /**
  * Postgres storage for status email templates (`crm_status_email_templates`,
  * migration 004), primary key `(tenant_id, case_status)`. Rows are parsed
- * through the same `crm.StatusEmailTemplateSchema` as the Dynamo path.
+ * through the same `crm.StatusEmailTemplateSchema` .
  */
 
 const TEMPLATE_COLUMNS: ReadonlyArray<readonly [string, string]> = [

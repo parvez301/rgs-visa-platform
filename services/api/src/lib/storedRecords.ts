@@ -2,7 +2,7 @@ import { ZodError, type ZodType } from "zod";
 import { CorruptRecordError, corruptRecord } from "./errors";
 
 /**
- * The one place a stored DynamoDB row becomes a domain object, and the one
+ * The one place a stored row becomes a domain object, and the one
  * place a listing decides what to do when it will not.
  *
  * This module exists because naming instances is not fixing a class. The
@@ -26,17 +26,8 @@ import { CorruptRecordError, corruptRecord } from "./errors";
  * `CorruptRecordError` is swallowed. Every other failure still propagates.
  */
 
-/** Attribute names DynamoDB storage owns; no domain schema expects them. */
-const STORAGE_KEY_ATTRIBUTES = [
-  "PK",
-  "SK",
-  "GSI1PK",
-  "GSI1SK",
-  "GSI2PK",
-  "GSI2SK",
-  "GSI3PK",
-  "GSI3SK",
-] as const;
+/** Storage keys that are not domain fields. */
+const STORAGE_KEY_ATTRIBUTES = ["PK", "SK"] as const;
 
 /** A stored row with its storage keys removed, ready for a domain schema. */
 export function stripStorageKeys(

@@ -266,7 +266,7 @@ export async function updateCaseDetails(
       ...nextFieldValues,
       updatedAt: context.now().toISOString(),
     };
-    // DynamoDB refuses an undefined attribute; a cleared field must be absent.
+    // A cleared optional field must be absent, not stored as undefined.
     for (const [fieldName, fieldValue] of Object.entries(mergedCase)) {
       if (fieldValue === undefined) delete mergedCase[fieldName];
     }

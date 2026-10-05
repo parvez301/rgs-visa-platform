@@ -20,7 +20,6 @@ import { NewCaseDrawer } from "../newCase/NewCaseDrawer";
 import {
   applyFilters,
   applySort,
-  isCombinedLedgerFiltersEnabled,
   localTodayIso,
   type ClientOnlyLedgerFilters,
   type LedgerFilters,
@@ -42,13 +41,8 @@ import { ViewChips } from "./ViewChips";
 const DEFAULT_LIVE_WORK = findBuiltInLedgerView(liveWorkViewId())!;
 
 /**
- * Against the Dynamo ledger exactly one of the partner and status filters is
- * ever in force server-side (spec §2.1, `LedgerAppliedQuery`): choosing a
- * partner clears the status selection and vice versa, so the filter bar never
- * shows an agent a status chip that the server is silently ignoring
- * underneath a partner filter. Against the Postgres ledger every filter is a
- * WHERE clause and they combine, so admin builds with
- * VITE_LEDGER_COMBINED_FILTERS=true keep both (`isCombinedLedgerFiltersEnabled`).
+ * Status, partner, and the rest of the ledger filters combine server-side
+ * as WHERE clauses.
  */
 const ALL_CASES = "";
 const WITH_ANY_ISSUE = "__any_issue__";
@@ -123,9 +117,7 @@ export function LedgerPage() {
     setSelectionClearToken((currentToken) => currentToken + 1);
   }
 
-  // Only the search text is debounced; every other filter is a discrete
-  // click. The flag-off path ignores these filters in the hook, so debouncing
-  // never delays anything on the Dynamo ledger.
+  // Only the search text is debounced; every other filter is a discrete click.
   const debouncedSearch = useDebouncedValue(clientLedgerFilters.search, SERVER_SEARCH_DEBOUNCE_MS);
   const serverClientFilters = useMemo<ClientOnlyLedgerFilters>(
     () => ({ ...clientLedgerFilters, search: debouncedSearch }),
@@ -151,7 +143,6 @@ export function LedgerPage() {
   }, [partnersQuery.data]);
 
   function toggleCaseStatus(caseStatus: crm.CaseStatus) {
-    if (!isCombinedLedgerFiltersEnabled()) setSelectedPartnerId(undefined);
     setActiveViewId(undefined);
     setSelectedCaseStatuses((currentCaseStatuses) =>
       currentCaseStatuses.includes(caseStatus)
@@ -161,7 +152,6 @@ export function LedgerPage() {
   }
 
   function selectPartner(partnerId: string | undefined) {
-    if (!isCombinedLedgerFiltersEnabled()) setSelectedCaseStatuses([]);
     setActiveViewId(undefined);
     setSelectedPartnerId(partnerId);
   }

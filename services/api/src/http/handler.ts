@@ -9,12 +9,7 @@ import { createLlmProvider } from "../agent/providers/index";
 import type { LlmProvider } from "../agent/providers/types";
 import { runAppointmentReminders } from "../domain/crm/appointmentReminders";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
-import {
-  createPgSqlClient,
-  crmStoreFromEnvironment,
-  databaseUrlFromEnvironment,
-  ledgerStoreFromEnvironment,
-} from "../lib/sql";
+import { createPgSqlClient, databaseUrlFromEnvironment } from "../lib/sql";
 import { buildAdminRouter } from "./adminApi";
 import { buildUserRouter } from "./userApi";
 
@@ -61,9 +56,6 @@ function tryBuildLlmProvider(): LlmProvider | undefined {
  * hand.
  */
 export function buildProductionContext(): AppContext {
-  // Postgres is the only store; these only reject a stale CRM_STORE/LEDGER_STORE=dynamo at cold start.
-  ledgerStoreFromEnvironment(process.env);
-  crmStoreFromEnvironment(process.env);
   const databaseUrl = databaseUrlFromEnvironment(process.env);
   if (databaseUrl === undefined) {
     throw new Error("DATABASE_URL is not configured");

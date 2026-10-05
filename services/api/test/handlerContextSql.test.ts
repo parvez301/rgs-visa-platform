@@ -20,7 +20,7 @@ describe("buildProductionContext sql wiring", () => {
     vi.restoreAllMocks();
   });
 
-  it("boots with a Postgres client when legacy store flags are unset", async () => {
+  it("boots with a Postgres client", async () => {
     Object.assign(process.env, requiredEnv);
     delete process.env["CRM_STORE"];
     delete process.env["LEDGER_STORE"];
@@ -33,7 +33,7 @@ describe("buildProductionContext sql wiring", () => {
     await context.sql?.end();
   });
 
-  it("boots with a Postgres client when legacy store flags are set", async () => {
+  it("still boots if leftover store flags are present", async () => {
     Object.assign(process.env, requiredEnv);
     process.env["CRM_STORE"] = "postgres";
     process.env["LEDGER_STORE"] = "postgres";
@@ -51,22 +51,6 @@ describe("buildProductionContext sql wiring", () => {
 
     const { buildProductionContext } = await import("../src/http/handler");
     expect(() => buildProductionContext()).toThrow(/DATABASE_URL/);
-  });
-
-  it("throws when CRM store is dynamo", async () => {
-    Object.assign(process.env, requiredEnv);
-    process.env["CRM_STORE"] = "dynamo";
-
-    const { buildProductionContext } = await import("../src/http/handler");
-    expect(() => buildProductionContext()).toThrow(/CRM_STORE must be postgres/);
-  });
-
-  it("throws when LEDGER_STORE=dynamo", async () => {
-    Object.assign(process.env, requiredEnv);
-    process.env["LEDGER_STORE"] = "dynamo";
-
-    const { buildProductionContext } = await import("../src/http/handler");
-    expect(() => buildProductionContext()).toThrow(/LEDGER_STORE must be postgres/);
   });
 
   it("throws when DOCUMENTS_BUCKET is missing without mentioning the legacy platform table env var", async () => {

@@ -11,10 +11,7 @@ import { collectReadableRecords, describeFirstZodIssue } from "../lib/storedReco
 
 /**
  * Postgres storage for the activity feed (`activity_events`, migration 006).
- * Replaces the Dynamo `EVENT#<day>` buckets and the `USER#` GSI2 entry: the
- * recent feed is a plain time-window query, so no day bucketing is needed.
- * Rows parse through the same `ActivityEventSchema`; a row that will not parse
- * is skipped and named, as in the Dynamo listing.
+ * The recent feed is a time-window query. Rows parse through `ActivityEventSchema`; a row that will not parse is skipped and named.
  */
 
 const ACTIVITY_EVENT_COLUMNS: ReadonlyArray<readonly [string, string]> = [

@@ -3,10 +3,7 @@ import type { SqlClient } from "../../lib/sql";
 import type { CaseCountByField, CaseCountGroupByField, CaseRefListing } from "./cases";
 
 /**
- * Postgres twins of the Dynamo GSI reads in `cases.ts`. The Dynamo versions
- * read the status (GSI1, newest `updatedAt` first) and partner (GSI2, latest
- * `receivedDate` first) indexes; these read `crm_cases` through the matching
- * indexes (`crm_cases_tenant_status_updated`, `crm_cases_tenant_partner_received`).
+ * Reads of `crm_cases` through `crm_cases_tenant_status_updated` and `crm_cases_tenant_partner_received`.
  * `case_id` breaks ties so a page is deterministic.
  */
 
@@ -53,7 +50,7 @@ export async function listCaseIdsByPartnerPostgres(
 /**
  * Counts every case in the tenant by one column without reading a single
  * applicant. A row whose counted column is null or empty is named in
- * `uncountedCaseIds`, the same rule the Dynamo path applies.
+ * `uncountedCaseIds`, the same skip-and-name rule.
  */
 export async function countCasesByFieldPostgres(
   sql: SqlClient,

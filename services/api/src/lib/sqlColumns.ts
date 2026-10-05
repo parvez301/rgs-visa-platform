@@ -24,7 +24,7 @@ export function jsonOrNull(value: unknown): string | null {
 
 export type DbRow = Record<string, unknown>;
 
-/** NULL columns become absent keys, as an absent Dynamo attribute would be. */
+/** NULL columns become absent keys. */
 export function candidateFromColumns(
   dbRow: DbRow,
   columns: ReadonlyArray<readonly [fieldName: string, columnName: string]>,

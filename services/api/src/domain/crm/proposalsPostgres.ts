@@ -11,9 +11,8 @@ import { collectReadableRecords, parseStoredRecord } from "../../lib/storedRecor
 
 /**
  * Postgres storage for agent proposals (`crm_proposals`, migration 004). The
- * row is parsed back through the same `ProposedChangeSchema` as the Dynamo
- * path, so a half-written row is a `CorruptRecordError` either way and a
- * listing names it in `unreadableProposalIds` instead of failing.
+ * row is parsed back through `ProposedChangeSchema`; a half-written row is a
+ * `CorruptRecordError` and a listing names it in `unreadableProposalIds`.
  * `input` and `summary` are jsonb.
  */
 
@@ -52,9 +51,8 @@ function parseProposalRow(dbRow: DbRow): ProposedChange {
 
 /**
  * The single place a proposal reaches Postgres, at any status. An upsert on
- * the primary key, because approving or discarding rewrites the same row
- * exactly as the Dynamo `put` overwrites its item. The caller has already
- * validated the proposal.
+ * the primary key, because approving or discarding rewrites the same row.
+ * The caller has already validated the proposal.
  */
 export async function upsertProposalPostgres(
   sql: SqlClient,
@@ -111,7 +109,7 @@ export async function getProposalPostgres(
   return proposalRow === undefined ? undefined : parseProposalRow(proposalRow);
 }
 
-/** Oldest first (the order GSI1SK = proposedAt gave). */
+/** Oldest first. */
 export async function listProposalsByStatusPostgres(
   sql: SqlClient,
   tenantId: string,

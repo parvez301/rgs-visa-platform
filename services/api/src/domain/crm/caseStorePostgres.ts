@@ -14,7 +14,7 @@ import { parseStoredRecord } from "../../lib/storedRecords";
 
 /**
  * Postgres storage for a CRM case: one `crm_cases` row plus one
- * `crm_applicants` row per applicant. Same contract as the Dynamo path in
+ * `crm_applicants` row per applicant. Same contract as
  * `caseStore.ts` -- the domain shape (`CrmCase`, applicants embedded) in and
  * out, `applicantSummary` and `searchText` computed here and never accepted
  * from a caller.
@@ -22,8 +22,8 @@ import { parseStoredRecord } from "../../lib/storedRecords";
 
 /**
  * Resolves the Ledger `searchText` for a case about to be written. A caller
- * may supply its own; the default (what `caseStore.writeCase` uses under
- * `CRM_STORE=postgres`) reads names from `crm_travellers` and falls back to
+ * may supply its own; the default (what `caseStore.writeCase` uses) reads
+ * names from `crm_travellers` and falls back to
  * the applicant's own passport number, mirroring `resolveLedgerSearchText`.
  */
 export type SearchTextResolver = (
@@ -137,7 +137,7 @@ const CASE_DATE_FIELDS = [
 ] as const;
 
 /**
- * The calendar-day check the Dynamo path never needed (it stores strings):
+ * Calendar-day check (SQL dates, not free-form strings):
  * `2026-02-30` matches the schema's pattern but Postgres' `::date` refuses it
  * with SQLSTATE 22008, which would surface as a bare 500. A 400 that names the
  * case and field is what the caller (or the backfill's report) can act on.
@@ -203,7 +203,7 @@ export async function writeCasePostgres(
       crmCase.createdAt,
       crmCase.updatedAt,
       orNull(crmCase.createdByEmail),
-      // Computed here and nowhere else, like the Dynamo path: a caller-built
+      // Computed here and nowhere else, a caller-built
       // case can never persist a roll-up that disagrees with its applicants.
       JSON.stringify(crm.summariseApplicants(applicants)),
       orNull(searchText),
@@ -330,7 +330,7 @@ export async function readCasePostgres(
   const applicantResult = await sql.query<DbRow>(SELECT_APPLICANTS_SQL, [tenantId, caseId]);
 
   // A case row with no applicant rows parses as CorruptRecordError (the schema
-  // demands at least one applicant), exactly as a META-only Dynamo partition.
+  // demands at least one applicant), exactly as a case with no applicants.
   return parseStoredRecord(crm.CrmCaseSchema, "Case", caseId, {
     ...candidateFromColumns(caseRow, CASE_COLUMNS),
     applicants: applicantResult.rows.map((applicantRow) =>

@@ -11,9 +11,8 @@ import { collectReadableRecords, describeFirstZodIssue } from "../lib/storedReco
 
 /**
  * Postgres storage for portal user profiles (`portal_user_profiles`,
- * migration 006). Rows parse through the same `UserSchema` as the Dynamo
- * path; a row that will not parse is a `CorruptRecordError` that the listing
- * skips and names, as the Dynamo listing does.
+ * migration 006). Rows parse through `UserSchema`; a row that will not parse
+ * is skipped and named.
  */
 
 const USER_PROFILE_COLUMNS: ReadonlyArray<readonly [string, string]> = [
@@ -63,7 +62,7 @@ export async function getUserProfilePostgres(
   return profileRow === undefined ? undefined : rowToUser(profileRow);
 }
 
-/** Every profile, oldest first (the Dynamo index orders by `createdAt`); unreadable rows are named. */
+/** Every profile, oldest first; unreadable rows are named. */
 export async function listUserProfilesPostgres(
   sql: SqlClient,
 ): Promise<{ users: User[]; unreadableUserIds: string[] }> {

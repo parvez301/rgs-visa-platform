@@ -19,14 +19,6 @@ import {
 } from "aws-cdk-lib";
 import { SES_CONFIGURATION_SET_NAME } from "./rgs-ses-events-stack";
 
-/** When RGS_* unset/empty: postgres. Non-empty env is copied through (runtime rejects dynamo). */
-function resolveStoreEnv(envValue: string | undefined): string {
-  if (envValue !== undefined && envValue !== "") {
-    return envValue;
-  }
-  return "postgres";
-}
-
 export interface RgsPlatformStackProps extends cdk.StackProps {
   stage: string;
 }
@@ -146,23 +138,11 @@ export class RgsPlatformStack extends cdk.Stack {
       handler: "adminApiHandler",
     } as lambdaNodejs.NodejsFunctionProps);
     adminApiFunction.addEnvironment("ADMINS_USER_POOL_ID", adminsPool.userPoolId);
-    // CRM Postgres (Supabase) env: DATABASE_URL + CRM_STORE go to the admin API,
-    // the user API, and the appointment reminders job (below). The user API needs
-    // CRM Postgres because portal writes (applications, profiles, document
-    // metadata, activity) are CRM system of record after C.2.1, plus catalog
-    // reads if any; without it the portal would stay on Dynamo while admin reads
-    // Postgres. LEDGER_STORE stays admin-only (ledger is never read or written by
-    // the user API), so a bad RGS_LEDGER_STORE value can only fail the admin cold
-    // start (buildProductionContext reads these).
-    // Set RGS_DATABASE_URL to the Supabase transaction pooler URI (:6543).
-    const crmStore = resolveStoreEnv(process.env.RGS_CRM_STORE);
-    const ledgerStore = resolveStoreEnv(process.env.RGS_LEDGER_STORE);
-
+    // CRM Postgres (Supabase): DATABASE_URL on admin API, user API, and
+    // appointment reminders. Set RGS_DATABASE_URL to the transaction pooler URI (:6543).
     for (const crmFunction of [adminApiFunction, userApiFunction]) {
       crmFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL ?? "");
-      crmFunction.addEnvironment("CRM_STORE", crmStore);
     }
-    adminApiFunction.addEnvironment("LEDGER_STORE", ledgerStore);
     adminApiFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -208,12 +188,9 @@ export class RgsPlatformStack extends cdk.Stack {
       "ADMINS_USER_POOL_ID",
       adminsPool.userPoolId,
     );
-    // The reminders job reads and stamps cases through the same CRM store seam
-    // as the admin API. It needs only the case store (not LEDGER_STORE).
     if (process.env.RGS_DATABASE_URL !== undefined && process.env.RGS_DATABASE_URL !== "") {
       appointmentRemindersFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL);
     }
-    appointmentRemindersFunction.addEnvironment("CRM_STORE", crmStore);
     appointmentRemindersFunction.addToRolePolicy(
       new iam.PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
     );

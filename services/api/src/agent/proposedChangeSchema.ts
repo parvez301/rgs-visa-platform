@@ -7,9 +7,8 @@ import { z } from "zod";
  * parsed back through, the same split `reviewQueue.ts` uses between
  * `crm.ReviewItem` and `crm.ReviewItemSchema`.
  *
- * Lives in its own module so both storage paths (Dynamo in approval.ts,
- * Postgres in domain/crm/proposalsPostgres.ts) share one definition without
- * an import cycle.
+ * Lives in its own module so approval.ts and proposalsPostgres.ts share one
+ * definition without an import cycle.
  */
 export const ProposedChangeSchema = z.object({
   proposalId: z.string().min(1),

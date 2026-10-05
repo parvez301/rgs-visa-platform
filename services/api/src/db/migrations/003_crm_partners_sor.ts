@@ -4,11 +4,10 @@ export const MIGRATION_FILENAME = "003_crm_partners_sor.sql";
 // comments, string literals and dollar-quoted bodies.
 //
 // Widens the Phase A crm_partners (id, name, contact email, updated_at) to the
-// full Partner record so CRM_STORE=postgres can create, list, look up and edit
-// partners without Dynamo. Every new column is nullable (or defaulted) so rows
-// the Phase A backfill wrote stay valid. canonical_key is NOT unique: Dynamo
-// never enforced it either (createPartner checks first), and a legacy
-// duplicate must not be able to fail the backfill.
+// full Partner record so CRM can create, list, look up and edit
+// partners. Every new column is nullable (or defaulted) so rows
+// the Phase A backfill wrote stay valid. canonical_key is NOT unique:
+// createPartner checks first, and a legacy duplicate must not fail the backfill.
 export const MIGRATION_SQL = `
 alter table crm_partners add column if not exists partner_type text;
 alter table crm_partners add column if not exists aliases jsonb not null default '[]'::jsonb;

@@ -50,10 +50,9 @@ export type LedgerAppliedQuery =
   | {
       statuses: crm.CaseStatus[];
       /**
-       * Present only when the Postgres ledger path ran: every filter there is
-       * a WHERE clause, so status and partner (and the filters below) apply
-       * together and the response names each one that ran. The Dynamo path
-       * never sets these.
+       * Present when that filter ran: every extra filter is a WHERE clause,
+       * so status and partner (and the filters below) apply together and the
+       * response names each one that ran.
        */
       partnerId?: string;
       destinationCountry?: string;
@@ -302,9 +301,7 @@ export interface ReviewGroupResolution {
 export const MAX_LEDGER_PAGES = 40;
 
 /**
- * Every filter `GET /cases/ledger` understands. `statuses` and `partnerId` are
- * the two the Dynamo path also honours; the rest are answered only by the
- * Postgres ledger (LEDGER_STORE=postgres) and ignored by the Dynamo handler.
+ * Every filter `GET /cases/ledger` understands.
  * Dates must be concrete YYYY-MM-DD -- the `__TODAY__` view sentinel is
  * resolved by the caller (`toServerLedgerFilters`), never sent over the wire.
  */

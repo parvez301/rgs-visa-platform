@@ -82,7 +82,7 @@ describe("buildCaseExportRows", () => {
       transaction: (work) => database.transaction(work),
       end: () => database.end(),
     };
-    const context = { ...await buildTestContext(), crmStore: "postgres" as const, sql: observed };
+    const context = { ...await buildTestContext(), sql: observed };
     const partner = await createPartner(context, "rgs", { canonicalName: "Export Tours" }, "desk@rgs.local");
     const caseIds: string[] = [];
     for (let caseNumber = 0; caseNumber < caseCount; caseNumber += 1) {
@@ -110,7 +110,7 @@ describe("buildCaseExportRows", () => {
     return { context, database, caseIds, statements, peakInFlight: () => maxInFlight, resetPeak: () => (maxInFlight = 0) };
   }
 
-  it("loads the whole export set in a constant number of queries under CRM_STORE=postgres", async () => {
+  it("loads the whole export set in a constant number of queries", async () => {
     const small = await seedPostgresExport(3);
     const large = await seedPostgresExport(8);
     const queriesFor = async (seed: Awaited<ReturnType<typeof seedPostgresExport>>) => {

@@ -224,9 +224,9 @@ Lambdas receive `DOCUMENTS_BUCKET`, `EMAIL_SENDER`, and
 `RGS_DATABASE_URL` on the deployer's machine — it is **not** committed to the
 repo.
 
-The **admin** API also receives `CRM_STORE` and `LEDGER_STORE` (both default to
-`postgres` when unset). The **user** API receives `CRM_STORE` only; ledger
-data is admin-scoped. There are **no secrets in the repo** — credentials come
+The **admin** and **user** APIs receive `DATABASE_URL`. Ledger listing is
+admin-scoped in the HTTP API; there is no separate store flag. There are
+**no secrets in the repo** — credentials come
 from the deployer's AWS profile, Cognito/SES (CDK), and the out-of-band Supabase
 URL.
 

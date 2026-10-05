@@ -11,7 +11,7 @@ import {
  * Postgres storage for CRM partners (`crm_partners`, migrations 001 + 003).
  * Rows come back as *candidates* -- plain objects shaped for
  * `crm.PartnerSchema` -- so `partners.ts` parses them through the same
- * `parseStoredPartner` as the Dynamo path and a half-written row is a
+ * `parseStoredPartner` and a half-written row is a
  * `CorruptRecordError` either way.
  */
 
@@ -94,7 +94,7 @@ export async function insertPartnerPostgres(
   );
 }
 
-/** Every partner row for the tenant, in canonical-name order (the order GSI1 lists them in). */
+/** Every partner row for the tenant, in canonical-name order. */
 export async function listPartnerRowsPostgres(
   sql: SqlClient,
   tenantId: string,

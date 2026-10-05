@@ -67,7 +67,7 @@ export function useLedgerRows(
 ) {
   const { idToken } = useAuth();
   const queryClient = useQueryClient();
-  // `{}` unless VITE_LEDGER_COMBINED_FILTERS is on -- see toServerLedgerFilters.
+  // The extra filters ride on the query string — see toServerLedgerFilters.
   const serverFilters = toServerLedgerFilters(clientFilters);
   const queryKey = crmQueryKeys.ledger(statuses, partnerId, serverFilters);
 

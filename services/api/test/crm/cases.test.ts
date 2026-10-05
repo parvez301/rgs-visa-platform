@@ -395,7 +395,7 @@ describe("crm cases", () => {
     expect((await listCasesByStatus(context, "rgs", "NEW")).cases).toHaveLength(1);
 
     await changeCaseStatus(context, "rgs", created.caseId, "DOCS_UNDER_REVIEW", "ops@rgs.test");
-    // The GSI1 entry must move with the status, or the queue shows stale rows.
+    // Status queues must move the case, or they show stale rows.
     expect((await listCasesByStatus(context, "rgs", "NEW")).cases).toHaveLength(0);
     expect((await listCasesByStatus(context, "rgs", "DOCS_UNDER_REVIEW")).cases).toHaveLength(1);
   });

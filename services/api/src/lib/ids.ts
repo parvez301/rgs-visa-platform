@@ -4,7 +4,7 @@ const ENCODING_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
 
 /**
  * Time-sortable identifier: millisecond timestamp base32 + 16 random chars.
- * Sorts lexicographically by creation time, which the SK/GSI schemes rely on.
+ * Sorts lexicographically by creation time.
  */
 export function newId(prefix: string, nowMs: number = Date.now()): string {
   let timePart = "";

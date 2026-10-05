@@ -141,10 +141,8 @@ function parseProposedChangeForWrite(candidate: ProposedChange): ProposedChange 
 /**
  * The single place a proposal reaches storage, at any status.
  *
- * GSI1PK is re-derived from the proposal's own `status` on every write, the
- * same rule `reviewQueue.ts` uses (its comment at :201-210) so an approved or
- * discarded proposal leaves the PENDING partition automatically instead of
- * lingering there forever because nobody re-wrote it.
+ * Status is written on the row itself, so an approved or discarded proposal
+ * leaves the pending list automatically.
  *
  * Parses through `ProposedChangeSchema` before writing, not only on read
  * (task-11-fix-2-brief.md A2 / M3 backstop): parse-then-write is the house
@@ -524,11 +522,9 @@ export async function discardProposal(
   // caseId off of here when `proposal.caseId` is undefined -- a discarded
   // `create_case` proposal never ran `apply`, so no case was ever created to
   // scope an event to. The trace is not lost, though (Minor 6): the
-  // discarded proposal itself -- with its `discardReason` -- persists under
-  // `proposalPartitionKey` and stays queryable via
-  // `proposalStatusGsi1Pk(tenantId, "DISCARDED")`. A future reader (Plan 5's
-  // Today screen) that wants rejected proposals in a timeline should read
-  // the proposal partition rather than conclude the trace is missing.
+  // discarded proposal itself -- with its `discardReason` -- persists in
+  // `crm_proposals`. A future reader that wants rejected proposals in a
+  // timeline should read that table rather than conclude the trace is missing.
   //
   // The same applies to APPROVED memory tools (branch review M7): approving a
   // `forget` records no CRM event anywhere -- `forgetMemory` deliberately

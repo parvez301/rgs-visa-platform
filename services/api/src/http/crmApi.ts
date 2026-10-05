@@ -217,11 +217,8 @@ function nonBlankQueryParam(rawValue: string | undefined): string | undefined {
 }
 
 /**
- * The filters only the Postgres ledger offers. Parsed only when
- * LEDGER_STORE=postgres: the Dynamo path has no way to apply them, so reading
- * them there would be accepting a filter nothing enforces. As with status, an
- * unrecognised enum value is a 400 naming it. Dates are validated by the
- * domain function (real calendar day, 400 otherwise).
+ * Combined ledger filters. An unrecognised enum value is a 400 naming it.
+ * Dates are validated by the domain function (real calendar day, 400 otherwise).
  */
 function parsePostgresLedgerFilters(queryParams: Record<string, string>): {
   destinationCountry?: string;

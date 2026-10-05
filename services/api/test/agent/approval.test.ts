@@ -842,11 +842,7 @@ describe("discardProposal", () => {
       statusCode: 409,
     });
 
-    // Major 4: GSI1PK re-derivation, mirroring the two assertions the
-    // property test already makes for the APPROVED transition. Without this,
-    // a discarded proposal forced back onto the PENDING partition leaves the
-    // whole suite green while `listPendingProposals` keeps returning it
-    // forever -- the exact bug reviewQueue.ts:201-210 documents.
+    // Discarded proposals must leave the pending list.
     const { proposals: pendingAfterDiscard } = await listPendingProposals(context, TENANT_ID);
     expect(pendingAfterDiscard.map((pending) => pending.proposalId)).not.toContain(staged.proposalId);
     const storedProposal = await getProposalPostgres(context.sql, TENANT_ID, staged.proposalId);

@@ -12,9 +12,8 @@ import { collectReadableRecords, describeFirstZodIssue } from "../lib/storedReco
 
 /**
  * Postgres storage for portal visa applications (`portal_applications`,
- * migration 006). Rows parse through the same `ApplicationSchema` as the
- * Dynamo path, and a row that will not parse is a `CorruptRecordError` that
- * listings skip and name, exactly as the Dynamo listings do.
+ * migration 006). Rows parse through `ApplicationSchema`; a row that will
+ * not parse is skipped and named.
  */
 
 const APPLICATION_COLUMNS: ReadonlyArray<readonly [string, string]> = [

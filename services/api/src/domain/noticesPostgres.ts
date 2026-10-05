@@ -37,7 +37,7 @@ const SELECT_NOTICE_SQL = `select notice_id, title, body, category, severity, co
 
 /**
  * The single place a `portal_notices` row becomes a Notice. A schema failure
- * is a CorruptRecordError naming the notice, exactly as on the Dynamo path, so
+ * is a CorruptRecordError naming the notice, so
  * the unauthenticated public ticker never answers 500 for one bad row.
  */
 function rowToNotice(noticeRow: DbRow): Notice {
@@ -104,7 +104,7 @@ export async function getNoticePostgres(
   return noticeRow === undefined ? undefined : rowToNotice(noticeRow);
 }
 
-/** Newest first; unreadable rows are skipped and named, like the Dynamo list. */
+/** Newest first; unreadable rows are skipped and named, unreadable rows are skipped and named. */
 export async function listNoticesPostgres(
   sql: SqlClient,
 ): Promise<{ notices: Notice[]; unreadableNoticeIds: string[] }> {

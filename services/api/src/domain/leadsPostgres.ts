@@ -32,7 +32,7 @@ export async function insertLeadPostgres(sql: SqlClient, lead: Lead): Promise<vo
   );
 }
 
-/** Newest first, like the Dynamo `STATUS#LEAD_NEW` index read in reverse. */
+/** Newest first. */
 export async function listNewLeadsPostgres(sql: SqlClient, limit = 50): Promise<Lead[]> {
   const result = await sql.query<DbRow>(
     `select lead_id, full_name, phone, topic, message,

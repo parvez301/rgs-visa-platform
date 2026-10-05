@@ -565,13 +565,11 @@ describe("useLedgerEdit", () => {
     expect(screen.queryByRole("button", { name: /retry undo/i })).not.toBeInTheDocument();
   });
 
-  it("R76: marks the ledger stale after a write without re-reading the GSI, while the case is refetched", async () => {
-    // Finding #7. `listLedgerRows` reads GSI1, and a GSI read is always
-    // eventually consistent -- so a refetch fired the instant the PUT settles
-    // can be answered with the PRE-write projection and overwrite the
-    // optimistic value, which then sticks for the ledger's five-minute
-    // `staleTime`. `getCase` is a strongly consistent GetItem, so it has no
-    // race to lose and keeps refetching actively.
+  it("R76: marks the ledger stale after a write without immediately refetching it, while the case is refetched", async () => {
+    // Finding #7. A ledger refetch fired the instant the PUT settles can
+    // overwrite the optimistic value, which then sticks for the ledger's
+    // five-minute `staleTime`. `getCase` has no such race and keeps
+    // refetching actively.
     //
     // G5 is explicit that no test can observe the race itself
     // (the in-memory test backend is strongly consistent), so what is pinned here is

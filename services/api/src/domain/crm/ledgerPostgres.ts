@@ -13,7 +13,7 @@ import { MAX_LEDGER_PAGE_LIMIT, type LedgerPage } from "./ledger";
  * One `LedgerPage` (see `ledger.ts`), the
  * same 400s for a cursor that cannot be read or was issued for another
  * filter, unreadable rows named rather than dropped -- but every filter is a
- * WHERE clause, so filters combine instead of choosing a Dynamo partition.
+ * WHERE clause, so filters combine in one query.
  *
  * Order is `received_date DESC, case_id DESC`: a total order, so a keyset
  * cursor on that pair never skips or repeats a row between pages.
@@ -219,7 +219,7 @@ limit ${limitPlaceholder}`;
 
 type LedgerDbRow = Record<string, unknown>;
 
-/** NULL columns become absent keys, exactly as an absent Dynamo attribute would be. */
+/** NULL columns become absent keys. */
 function ledgerRowFromDb(dbRow: LedgerDbRow): crm.LedgerRow {
   const caseId = String(dbRow["case_id"]);
   const present = (value: unknown): value is NonNullable<unknown> =>

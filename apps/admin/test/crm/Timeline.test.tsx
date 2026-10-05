@@ -74,8 +74,7 @@ describe("Timeline", () => {
       />,
     );
 
-    // `listCaseEvents` queries the case partition on `EVENT#<ts>#<id>`, which
-    // DynamoDB returns in ascending sort-key order -- oldest first. The
+    // `listCaseEvents` returns oldest first. The
     // timeline must not reverse that silently: a reader following a chain of
     // causes needs the cause above the effect.
     expect(readEntryTitles()).toEqual([

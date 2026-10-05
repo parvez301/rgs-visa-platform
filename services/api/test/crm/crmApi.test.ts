@@ -1344,7 +1344,7 @@ async function seedPostgresLedgerCase(
 describe("GET /api/v1/admin/crm/cases/ledger filters over Postgres", () => {
   const LEDGER_PATH = "/api/v1/admin/crm/cases/ledger";
   it("serves combined status, partner, country and search filters from Postgres", async () => {
-    // Dynamo is left empty: a row can only come back through the SQL path.
+    // A row can only come back through SQL.
     const context = await buildTestContext();
     const sql = context.sql;
     await seedPostgresLedgerCase(sql, "match", { searchText: "asha rao" });
