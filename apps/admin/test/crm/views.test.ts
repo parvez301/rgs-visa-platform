@@ -23,11 +23,12 @@ function buildView(overrides: Partial<LedgerView> = {}): LedgerView {
 }
 
 describe("builtInLedgerViews", () => {
-  it("ships exactly the six named views, in order, and none deletable", () => {
+  it("ships exactly the seven named views, in order, and none deletable", () => {
     expect(builtInLedgerViews().map((view) => view.name)).toEqual([
       "Live work",
       "Collect today",
       "Appointments today",
+      "Upcoming appointments",
       "Awaiting payment",
       "Unbilled",
       "Everything",
@@ -40,11 +41,15 @@ describe("builtInLedgerViews", () => {
     expect(liveWork!.filters.statuses.sort()).toEqual([...crm.LIVE_CASE_STATUSES].sort());
   });
 
-  it("'Collect today' and 'Appointments today' use the today sentinel on live statuses", () => {
+  it("'Collect today' and appointment views use the today sentinel on live statuses", () => {
     const collectToday = builtInLedgerViews().find((view) => view.name === "Collect today");
     const appointmentsToday = builtInLedgerViews().find((view) => view.name === "Appointments today");
+    const appointmentsUpcoming = builtInLedgerViews().find(
+      (view) => view.name === "Upcoming appointments",
+    );
     expect(collectToday?.filters.expectedCollectionDateOn).toBe("__TODAY__");
     expect(appointmentsToday?.filters.appointmentDateOn).toBe("__TODAY__");
+    expect(appointmentsUpcoming?.filters.appointmentDateAfter).toBe("__TODAY__");
     expect(collectToday?.filters.statuses.sort()).toEqual([...crm.LIVE_CASE_STATUSES].sort());
   });
 
@@ -98,6 +103,7 @@ describe("views", () => {
       "Live work",
       "Collect today",
       "Appointments today",
+      "Upcoming appointments",
       "Awaiting payment",
       "Unbilled",
       "Everything",
@@ -111,6 +117,7 @@ describe("views", () => {
       "Live work",
       "Collect today",
       "Appointments today",
+      "Upcoming appointments",
       "Awaiting payment",
       "Unbilled",
       "Everything",
@@ -126,7 +133,7 @@ describe("views", () => {
     const loaded = loadViews("ops@rgs.test");
 
     expect(loaded.some((view) => view.viewId === "custom-good")).toBe(true);
-    expect(loaded).toHaveLength(7); // 6 built-ins + the one plausible entry.
+    expect(loaded).toHaveLength(8); // 7 built-ins + the one plausible entry.
   });
 
   it("refuses to delete a built-in view", () => {

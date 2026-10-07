@@ -3,6 +3,7 @@ import {
   UNNAMED_APPLICANT,
   displayApplicantName,
   displayApplicantRef,
+  uniqueApplicantDisplayRefs,
 } from "../../src/crm/applicantDisplay";
 
 describe("displayApplicantRef", () => {
@@ -16,6 +17,19 @@ describe("displayApplicantRef", () => {
 
   it("falls back to applicantRef on a multi-applicant case with no refNo", () => {
     expect(displayApplicantRef("RGS-1", 2, { applicantRef: "A2" })).toBe("A2");
+  });
+});
+
+describe("uniqueApplicantDisplayRefs", () => {
+  it("returns every unique family REF NO in applicant order", () => {
+    expect(
+      uniqueApplicantDisplayRefs("38599", [
+        { applicantRef: "A1", refNo: "38599" },
+        { applicantRef: "A2", refNo: "38600" },
+        { applicantRef: "A3", refNo: "38600" },
+        { applicantRef: "A4", refNo: "38601" },
+      ]),
+    ).toEqual(["38599", "38600", "38601"]);
   });
 });
 

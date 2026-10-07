@@ -6,7 +6,12 @@ import type { OpenReviewSummaryEntry } from "../api/crmClient";
 import { describeLedgerEditValue, useLedgerEdit } from "../api/mutations";
 import { ConflictPrompt } from "../components/ConflictPrompt";
 import { ApplicantSubRows, APPLICANT_SUBROW_LINE_HEIGHT } from "./ApplicantSubRows";
-import { LEDGER_COLUMNS, LEDGER_ROW_HEIGHT, type LedgerCellContext } from "./columns";
+import {
+  collapsedLedgerRowHeight,
+  LEDGER_COLUMNS,
+  LEDGER_ROW_HEIGHT,
+  type LedgerCellContext,
+} from "./columns";
 import { EditableCell, readLedgerColumnValue } from "./EditableCell";
 import { useGridKeyboard } from "./useGridKeyboard";
 
@@ -83,7 +88,7 @@ const EDITABLE_LEDGER_COLUMN_INDEXES: ReadonlySet<number> = new Set(
 
 function estimateExpandedRowHeight(row: crm.LedgerRow, reportedLineCount: number | undefined): number {
   const applicantLineCount = Math.max(reportedLineCount ?? 0, row.applicantSummary?.count ?? 0, 1);
-  return LEDGER_ROW_HEIGHT + applicantLineCount * APPLICANT_SUBROW_LINE_HEIGHT;
+  return collapsedLedgerRowHeight(row) + applicantLineCount * APPLICANT_SUBROW_LINE_HEIGHT;
 }
 
 export function LedgerTable({
@@ -173,26 +178,18 @@ export function LedgerTable({
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollContainerRef.current,
-    // A collapsed row is always exactly LEDGER_ROW_HEIGHT (spec §3); an
-    // expanded one needs the extra height `estimateExpandedRowHeight`
-    // computes above. Deliberately no `measureElement` ref is wired up
-    // anywhere in this file to correct this from the real, rendered DOM
-    // size: `@tanstack/react-virtual`'s default per-item measurement reads
-    // `element.offsetHeight`, and this app's own jsdom test scaffolding
-    // (test/setup.ts) fixes EVERY element's `offsetHeight` at a flat 800px
-    // unless a test opts an element out -- wiring in real measurement would
-    // make that scaffolding silently override every row's height, collapsed
-    // rows included, breaking the fixed 32px-per-row arithmetic every other
-    // Ledger test (scroll-to-row-N, the "mounts <200 of 7,156" assertion)
-    // already depends on, for a reason that has nothing to do with sub-rows.
-    // Keeping the height fully DERIVED here (estimateSize decides it, the
-    // DOM below is styled to match it exactly) rather than MEASURED (the DOM
-    // decides it, the virtualizer copies it back) is what keeps this correct
-    // under both a real browser and jsdom without special-casing either one.
+    // Collapsed height comes from `collapsedLedgerRowHeight` (solo = base,
+    // family REF stacks taller); expanded adds applicant sub-row lines.
+    // Deliberately no `measureElement` ref: `@tanstack/react-virtual`'s
+    // default reads `element.offsetHeight`, and jsdom scaffolding
+    // (test/setup.ts) fixes every element's offsetHeight at 800px unless a
+    // test opts out -- real measurement would break derived-height arithmetic
+    // Ledger tests depend on. Heights stay DERIVED (estimateSize + matching
+    // DOM style), not MEASURED.
     estimateSize: (index) => {
       const row = rows[index];
       if (row === undefined) return LEDGER_ROW_HEIGHT;
-      if (!gridState.expandedRowIndexes.includes(index)) return LEDGER_ROW_HEIGHT;
+      if (!gridState.expandedRowIndexes.includes(index)) return collapsedLedgerRowHeight(row);
       return estimateExpandedRowHeight(row, reportedLineCountsByCaseId.get(row.caseId));
     },
     // Enough rows above and below the window that a fast scroll does not show
@@ -218,7 +215,7 @@ export function LedgerTable({
   useEffect(() => {
     rowVirtualizer.measure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridState.expandedRowIndexes, reportedLineCountsByCaseId]);
+  }, [gridState.expandedRowIndexes, reportedLineCountsByCaseId, rows]);
 
   // Every index in `gridState` -- focus, selection, expansion -- addresses a
   // POSITION in `rows`, and from Task 13 on `rows` is re-filtered and
@@ -451,7 +448,7 @@ export function LedgerTable({
                     aria-selected={isRowSelected ? "true" : "false"}
                     aria-expanded={isRowExpanded}
                     className={`grid ${rowBackgroundClass} ${isRowSelected ? "" : "hover:bg-mist"}`}
-                    style={{ gridTemplateColumns, height: LEDGER_ROW_HEIGHT }}
+                    style={{ gridTemplateColumns, height: collapsedLedgerRowHeight(row) }}
                   >
                     {LEDGER_COLUMNS.map((column, columnIndex) => {
                       const isCellFocused =
@@ -482,9 +479,13 @@ export function LedgerTable({
                               withShift: event.shiftKey,
                             });
                           }}
-                          className={`flex items-center gap-1.5 truncate px-3 text-sm outline-none ${
-                            column.sticky ? "sticky left-0 z-10 bg-inherit font-medium" : ""
-                          } ${isCellFocused ? "ring-2 ring-inset ring-rgs-red/50" : ""}`}
+                          className={`flex items-center gap-1.5 px-3 text-sm outline-none ${
+                            column.key === "caseRef" || column.key === "caseStatus"
+                              ? "overflow-visible"
+                              : "truncate"
+                          } ${column.sticky ? "sticky left-0 z-10 bg-inherit font-medium" : ""} ${
+                            isCellFocused ? "ring-2 ring-inset ring-rgs-red/50" : ""
+                          }`}
                         >
                           {editableColumn === undefined ? (
                             column.render(row, partnerNamesById[row.partnerId] ?? row.partnerId, cellContext)

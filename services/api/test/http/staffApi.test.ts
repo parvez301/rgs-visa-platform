@@ -97,11 +97,35 @@ describe("staff admin routes", () => {
       status: "FORCE_CHANGE_PASSWORD",
       enabled: true,
     });
+    expect(context.email.sentEmails).toHaveLength(1);
+    expect(context.email.sentEmails[0]?.toAddress).toBe("new.ops@rgs.test");
+    expect(context.email.sentEmails[0]?.bodyText).toMatch(/Temporary password:/);
+  });
+
+  it("resends a temporary password for FORCE_CHANGE_PASSWORD staff", async () => {
+    await cognitoAdmins.adminCreateUser({
+      email: "stuck@rgs.test",
+      temporaryPassword: "OldTemp12ab",
+    });
+    await cognitoAdmins.adminAddUserToGroup("stuck@rgs.test", "Ops");
+    context.email.sentEmails.length = 0;
+
+    const response = (await buildAdminRouter(context).dispatch(
+      event("POST", "/api/v1/admin/staff/stuck%40rgs.test/resend-invite"),
+    )) as ApiResponse;
+
+    expect(response.statusCode).toBe(200);
+    expect(context.email.sentEmails).toHaveLength(1);
+    expect(context.email.sentEmails[0]?.toAddress).toBe("stuck@rgs.test");
   });
 
   it("changes a staff member role", async () => {
-    await cognitoAdmins.adminCreateUser({ email: "finance@rgs.test" });
+    await cognitoAdmins.adminCreateUser({
+      email: "finance@rgs.test",
+      temporaryPassword: "TempPass12ab",
+    });
     await cognitoAdmins.adminAddUserToGroup("finance@rgs.test", "Finance");
+
 
     const response = (await buildAdminRouter(context).dispatch(
       event("PUT", "/api/v1/admin/staff/finance%40rgs.test/role", "Owner", {
@@ -114,8 +138,12 @@ describe("staff admin routes", () => {
   });
 
   it("disables and enables a staff member", async () => {
-    await cognitoAdmins.adminCreateUser({ email: "ops@rgs.test" });
+    await cognitoAdmins.adminCreateUser({
+      email: "ops@rgs.test",
+      temporaryPassword: "TempPass12ab",
+    });
     await cognitoAdmins.adminAddUserToGroup("ops@rgs.test", "Ops");
+
     const router = buildAdminRouter(context);
 
     const disabled = (await router.dispatch(
@@ -144,8 +172,12 @@ describe("staff admin routes", () => {
   });
 
   it("uses the Cognito username to prevent an Owner disabling themself", async () => {
-    await cognitoAdmins.adminCreateUser({ email: "other.owner@rgs.test" });
+    await cognitoAdmins.adminCreateUser({
+      email: "other.owner@rgs.test",
+      temporaryPassword: "TempPass12ab",
+    });
     await cognitoAdmins.adminAddUserToGroup("other.owner@rgs.test", "Owner");
+
 
     const response = (await buildAdminRouter(context).dispatch(
       event("POST", "/api/v1/admin/staff/owner-cognito-username/disable"),
@@ -159,7 +191,7 @@ describe("staff admin routes", () => {
 // `InMemoryCognitoAdmins` cannot see command inputs, so the invite delivery
 // medium is only checkable against the real client with a stubbed `send`.
 describe("AwsCognitoAdmins.adminCreateUser", () => {
-  it("asks Cognito to deliver the invite by email", async () => {
+  it("creates the user with a temp password and suppresses Cognito's own email", async () => {
     const sentCommands: unknown[] = [];
     const client = {
       send: async (command: unknown) => {
@@ -177,6 +209,7 @@ describe("AwsCognitoAdmins.adminCreateUser", () => {
 
     const created = await new AwsCognitoAdmins(client, "ap-south-1_test").adminCreateUser({
       email: "new@rgs.test",
+      temporaryPassword: "TempPass12ab",
     });
 
     expect(created.email).toBe("new@rgs.test");
@@ -186,7 +219,8 @@ describe("AwsCognitoAdmins.adminCreateUser", () => {
     expect((command as AdminCreateUserCommand).input).toMatchObject({
       UserPoolId: "ap-south-1_test",
       Username: "new@rgs.test",
-      DesiredDeliveryMediums: ["EMAIL"],
+      TemporaryPassword: "TempPass12ab",
+      MessageAction: "SUPPRESS",
     });
   });
 });

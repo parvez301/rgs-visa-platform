@@ -21,6 +21,7 @@ interface SeedCase {
   receivedDate?: string;
   appointmentDate?: string | null;
   expectedCollectionDate?: string | null;
+  groupName?: string | null;
   searchText?: string | null;
   tenantId?: string;
 }
@@ -32,7 +33,7 @@ async function seedCase(sql: SqlClient, seed: SeedCase): Promise<void> {
        visa_type, group_name, case_status, billing_status, received_date,
        appointment_date, expected_collection_date, total_inr, updated_at,
        applicant_summary, search_text
-     ) values ($1,$2,$3,$4,$5,$6,null,null,$7,$8,$9,$10,$11,1500,'2026-03-04T10:00:00.000Z',$12,$13)`,
+     ) values ($1,$2,$3,$4,$5,$6,null,$7,$8,$9,$10,$11,$12,1500,'2026-03-04T10:00:00.000Z',$13,$14)`,
     [
       seed.tenantId ?? "rgs",
       seed.caseId,
@@ -40,6 +41,7 @@ async function seedCase(sql: SqlClient, seed: SeedCase): Promise<void> {
       seed.partnerId ?? "partner_1",
       seed.destinationCountry ?? "AE",
       seed.caseType ?? "VISA",
+      seed.groupName ?? null,
       seed.caseStatus ?? "NEW",
       seed.billingStatus ?? "UNKNOWN",
       seed.receivedDate ?? "2026-03-04",
@@ -47,6 +49,31 @@ async function seedCase(sql: SqlClient, seed: SeedCase): Promise<void> {
       seed.expectedCollectionDate ?? null,
       JSON.stringify(APPLICANT_SUMMARY),
       seed.searchText ?? null,
+    ],
+  );
+}
+
+async function seedApplicant(
+  sql: SqlClient,
+  seed: {
+    caseId: string;
+    applicantIndex: number;
+    applicantRef: string;
+    refNo?: string | null;
+    tenantId?: string;
+  },
+): Promise<void> {
+  await sql.query(
+    `insert into crm_applicants (
+       tenant_id, case_id, applicant_index, applicant_ref, ref_no, traveller_id
+     ) values ($1,$2,$3,$4,$5,$6)`,
+    [
+      seed.tenantId ?? "rgs",
+      seed.caseId,
+      seed.applicantIndex,
+      seed.applicantRef,
+      seed.refNo ?? null,
+      `traveller_${seed.caseId}_${seed.applicantIndex}`,
     ],
   );
 }
@@ -128,6 +155,7 @@ describe("listLedgerRowsFromPostgres", () => {
       receivedDate: "2026-03-01",
       appointmentDate: "2026-04-01",
       totalInr: 1500,
+      lineItemCount: 0,
       updatedAt: "2026-03-04T10:00:00.000Z",
       applicantSummary: APPLICANT_SUMMARY,
       searchText: "asha rao m1234567",
@@ -185,6 +213,37 @@ describe("listLedgerRowsFromPostgres", () => {
     expect(await searchIds("zenith")).toEqual(["case_b"]);
     expect(await searchIds("acme")).toEqual(["case_c", "case_a"]);
     expect(await searchIds("no-such-thing")).toEqual([]);
+  });
+
+  it("searches group_name and applicant REF NOs on family cases", async () => {
+    await seedCase(sql, {
+      caseId: "case_family",
+      caseRef: "38608",
+      partnerId: "partner_1",
+      groupName: "PATANJALI FAMILY",
+      receivedDate: "2026-03-05",
+      searchText: null,
+    });
+    await seedApplicant(sql, {
+      caseId: "case_family",
+      applicantIndex: 0,
+      applicantRef: "app_38608",
+      refNo: "38608",
+    });
+    await seedApplicant(sql, {
+      caseId: "case_family",
+      applicantIndex: 1,
+      applicantRef: "app_38609",
+      refNo: "38609",
+    });
+
+    const searchIds = async (search: string) =>
+      (await listLedgerRowsFromPostgres(sql, "rgs", { statuses: [], search, limit: 10 })).rows.map(
+        (row) => row.caseId,
+      );
+
+    expect(await searchIds("patanjali")).toEqual(["case_family"]);
+    expect(await searchIds("38609")).toEqual(["case_family"]);
   });
 
   it("treats LIKE metacharacters in the search literally", async () => {
@@ -411,9 +470,46 @@ describe("listLedgerRowsFromPostgres over cases written through writeCase", () =
     });
 
     expect(page.rows).toHaveLength(1);
-    expect(page.rows[0]).toMatchObject({ caseRef: "RGS-case_1", caseStatus: "NEW", totalInr: 12000 });
+    expect(page.rows[0]).toMatchObject({
+      caseRef: "RGS-case_1",
+      caseStatus: "NEW",
+      totalInr: 12000,
+      lineItemCount: 0,
+    });
     expect(page.rows[0]).not.toHaveProperty("legacyRaw");
     expect(page.rows[0]).not.toHaveProperty("lineItems");
+  });
+
+  it("projects lineItemCount from the case line_items array", async () => {
+    await seedCases([
+      buildCase({
+        caseId: "case_lines",
+        lineItems: [
+          {
+            code: "VISA_SERVICE_FEE",
+            label: "Visa service fee",
+            kind: "SERVICE",
+            amountInr: 5000,
+            quantity: 1,
+          },
+          {
+            code: "GOVT_FEE",
+            label: "Government / embassy fee",
+            kind: "GOVT_FEE",
+            amountInr: 1500,
+            quantity: 1,
+          },
+        ],
+        totalInr: 6500,
+      }),
+    ]);
+
+    const page = await listLedgerRowsFromPostgres(context.sql, "rgs", {
+      statuses: [...crm.CASE_STATUSES],
+      limit: 500,
+    });
+    const row = page.rows.find((candidate) => candidate.caseId === "case_lines");
+    expect(row?.lineItemCount).toBe(2);
   });
 
   it("projects expectedCollectionDate when the case carries one", async () => {
@@ -446,6 +542,29 @@ describe("listLedgerRowsFromPostgres over cases written through writeCase", () =
     const solo = page.rows.find((row) => row.caseId === "case_solo");
     expect(grouped?.groupName).toBe("Sharma Family");
     expect(solo).not.toHaveProperty("groupName");
+  });
+
+  it("projects every unique applicant REF NO for a family case", async () => {
+    await seedCases([
+      buildCase({
+        caseId: "case_family",
+        caseRef: "38599",
+        groupName: "CHRISTI FAMILY",
+        applicants: [
+          { applicantRef: "A1", travellerId: "trav_1", custody: "WITH_RGS", outcome: "PENDING", refNo: "38599" },
+          { applicantRef: "A2", travellerId: "trav_2", custody: "WITH_RGS", outcome: "PENDING", refNo: "38600" },
+          { applicantRef: "A3", travellerId: "trav_3", custody: "WITH_RGS", outcome: "PENDING", refNo: "38601" },
+          { applicantRef: "A4", travellerId: "trav_4", custody: "WITH_RGS", outcome: "PENDING", refNo: "38602" },
+        ],
+      }),
+    ]);
+
+    const page = await listLedgerRowsFromPostgres(context.sql, "rgs", {
+      statuses: [...crm.CASE_STATUSES],
+      limit: 500,
+    });
+    const family = page.rows.find((row) => row.caseId === "case_family");
+    expect(family?.applicantRefs).toEqual(["38599", "38600", "38601", "38602"]);
   });
 
   it("carries the applicant roll-up through", async () => {

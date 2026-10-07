@@ -1,4 +1,4 @@
-import { labelsForCountryCode } from "@rgs/shared";
+import { ISO_COUNTRIES, labelsForCountryCode } from "@rgs/shared";
 import type { AppContext } from "../../lib/context";
 import { listCountryConfig } from "../config";
 
@@ -9,42 +9,43 @@ export interface DestinationCountry {
    * Exactly what create-case will stamp on the case, so the New case drawer can
    * preview it. Carried here rather than fetched from the Config catalog route
    * because Ops and Finance have `config: "none"` and would get a 403 there.
+   * Empty when Config has no product for this country.
    */
   requiredDocuments: string[];
 }
 
 /**
- * Unique destinations for CRM New/Edit case pickers, each with the document
- * labels a case bound for it gets stamped with.
+ * Unique destinations for CRM New/Edit case pickers: every ISO-3166 alpha-2
+ * country, with Config names/document labels overlaid when a product exists.
  *
  * Reads the same catalog as portal Config, but the HTTP route gates on CRM
  * screen access so Ops can load full country names — and the document preview —
- * without config permission. Deliberately not `listActiveCountryConfig`: the
- * merge rules for several products sharing one country code live in
- * `labelsForCountryCode`, which needs the inactive rows too.
+ * without config permission. Inactive Config rows still contribute their name
+ * and stamp so desk agents can open a case for a country that is not yet
+ * sold on marketing.
  */
 export async function listDestinationCountries(
   context: AppContext,
 ): Promise<DestinationCountry[]> {
   const { countryProducts } = await listCountryConfig(context);
-  const nameByCode = new Map<string, string>();
+  const configNameByCode = new Map<string, string>();
 
   for (const countryProduct of countryProducts) {
-    if (!countryProduct.active) continue;
-    const existingName = nameByCode.get(countryProduct.countryCode);
+    const existingName = configNameByCode.get(countryProduct.countryCode);
     // Prefer the longer name when products disagree (e.g. "UAE" vs full name).
     if (existingName === undefined || countryProduct.countryName.length > existingName.length) {
-      nameByCode.set(countryProduct.countryCode, countryProduct.countryName);
+      configNameByCode.set(countryProduct.countryCode, countryProduct.countryName);
     }
   }
 
-  return [...nameByCode.entries()]
-    .map(([countryCode, countryName]) => ({
-      countryCode,
-      countryName,
-      requiredDocuments: labelsForCountryCode(countryProducts, countryCode),
-    }))
-    .sort((left, right) =>
-      left.countryName.localeCompare(right.countryName, "en", { sensitivity: "base" }),
-    );
+  return ISO_COUNTRIES.map((isoCountry) => {
+    const configName = configNameByCode.get(isoCountry.countryCode);
+    return {
+      countryCode: isoCountry.countryCode,
+      countryName: configName ?? isoCountry.countryName,
+      requiredDocuments: labelsForCountryCode(countryProducts, isoCountry.countryCode),
+    };
+  }).sort((left, right) =>
+    left.countryName.localeCompare(right.countryName, "en", { sensitivity: "base" }),
+  );
 }

@@ -34,6 +34,17 @@ export interface LedgerFilters {
   search?: string;
   billingStatuses?: crm.BillingStatus[];
   appointmentDateOn?: string;
+  /**
+   * Keep rows whose appointment date is on or after this day (YYYY-MM-DD or
+   * `LEDGER_FILTER_TODAY`). Prefer `appointmentDateAfter` for the Upcoming
+   * queue so today and future stay separate.
+   */
+  appointmentDateOnOrAfter?: string;
+  /**
+   * Keep rows whose appointment date is strictly after this day (YYYY-MM-DD or
+   * `LEDGER_FILTER_TODAY`). Used by "Upcoming appointments".
+   */
+  appointmentDateAfter?: string;
   expectedCollectionDateOn?: string;
 }
 
@@ -42,6 +53,24 @@ export interface LedgerFilters {
  * state and also sent to the API.
  */
 export type ClientOnlyLedgerFilters = Omit<LedgerFilters, "statuses" | "partnerId">;
+
+/**
+ * Pick the client-only fields when applying a saved/built-in view. Must copy
+ * every ClientOnlyLedgerFilters key — dropping one (e.g. appointmentDateOnOrAfter)
+ * makes the Appointments strip count right while the table stays unfiltered.
+ */
+export function clientOnlyFiltersFromView(viewFilters: LedgerFilters): ClientOnlyLedgerFilters {
+  return {
+    destinationCountry: viewFilters.destinationCountry,
+    caseType: viewFilters.caseType,
+    search: viewFilters.search,
+    billingStatuses: viewFilters.billingStatuses,
+    appointmentDateOn: viewFilters.appointmentDateOn,
+    appointmentDateOnOrAfter: viewFilters.appointmentDateOnOrAfter,
+    appointmentDateAfter: viewFilters.appointmentDateAfter,
+    expectedCollectionDateOn: viewFilters.expectedCollectionDateOn,
+  };
+}
 
 /**
  * The query-string filters for the extra slice. Resolves the `__TODAY__`
@@ -56,6 +85,9 @@ export function toServerLedgerFilters(
   const search = filters.search?.trim();
   const appointmentDateOn = resolveDateOnFilter(filters.appointmentDateOn, todayIso);
   const expectedCollectionDateOn = resolveDateOnFilter(filters.expectedCollectionDateOn, todayIso);
+  // `appointmentDateOnOrAfter` is client-only today: the ledger already loads
+  // every live-status row for these views, so the range filter runs in
+  // `applyFilters` without a new query param.
   return {
     ...(filters.destinationCountry ? { destinationCountry: filters.destinationCountry } : {}),
     ...(filters.caseType ? { caseType: filters.caseType } : {}),
@@ -113,8 +145,9 @@ function resolveDateOnFilter(
  * membership checks over columns already sitting on every loaded row -- no
  * fetch, no roll-up, no partial data to worry about.
  *
- * The text search (R45): matches `caseRef`, the partner's canonical name, and
- * the denormalised `searchText` (applicant names + passports) when present.
+ * The text search (R45): matches `caseRef`, family `groupName`, applicant REF
+ * NOs, the partner's canonical name, and the denormalised `searchText`
+ * (applicant names + passports) when present.
  * `partnerNamesById` is a third parameter, not part of `LedgerFilters`,
  * because a name lookup is live reference data (`usePartners`), not filter
  * state a saved view should freeze into `localStorage` -- a partner renamed
@@ -130,6 +163,8 @@ export function applyFilters(
   const normalizedSearchTerm = filters.search?.trim().toLowerCase();
   const hasSearchTerm = normalizedSearchTerm !== undefined && normalizedSearchTerm.length > 0;
   const appointmentDateOn = resolveDateOnFilter(filters.appointmentDateOn, todayIso);
+  const appointmentDateOnOrAfter = resolveDateOnFilter(filters.appointmentDateOnOrAfter, todayIso);
+  const appointmentDateAfter = resolveDateOnFilter(filters.appointmentDateAfter, todayIso);
   const expectedCollectionDateOn = resolveDateOnFilter(filters.expectedCollectionDateOn, todayIso);
 
   return rows.filter((row) => {
@@ -149,6 +184,16 @@ export function applyFilters(
     if (appointmentDateOn !== undefined && row.appointmentDate !== appointmentDateOn) {
       return false;
     }
+    if (appointmentDateOnOrAfter !== undefined) {
+      if (row.appointmentDate === undefined || row.appointmentDate < appointmentDateOnOrAfter) {
+        return false;
+      }
+    }
+    if (appointmentDateAfter !== undefined) {
+      if (row.appointmentDate === undefined || row.appointmentDate <= appointmentDateAfter) {
+        return false;
+      }
+    }
     if (
       expectedCollectionDateOn !== undefined &&
       row.expectedCollectionDate !== expectedCollectionDateOn
@@ -158,10 +203,23 @@ export function applyFilters(
     if (hasSearchTerm) {
       const partnerName = partnerNamesById[row.partnerId] ?? "";
       const matchesCaseRef = row.caseRef.toLowerCase().includes(normalizedSearchTerm);
+      const matchesGroupName =
+        row.groupName !== undefined && row.groupName.toLowerCase().includes(normalizedSearchTerm);
       const matchesPartnerName = partnerName.toLowerCase().includes(normalizedSearchTerm);
       const matchesSearchText =
         row.searchText !== undefined && row.searchText.includes(normalizedSearchTerm);
-      if (!matchesCaseRef && !matchesPartnerName && !matchesSearchText) return false;
+      const matchesApplicantRef = (row.applicantRefs ?? []).some((applicantRef) =>
+        applicantRef.toLowerCase().includes(normalizedSearchTerm),
+      );
+      if (
+        !matchesCaseRef &&
+        !matchesGroupName &&
+        !matchesPartnerName &&
+        !matchesSearchText &&
+        !matchesApplicantRef
+      ) {
+        return false;
+      }
     }
     return true;
   });

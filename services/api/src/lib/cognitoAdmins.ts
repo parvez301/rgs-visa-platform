@@ -6,6 +6,7 @@ import {
   AdminGetUserCommand,
   AdminListGroupsForUserCommand,
   AdminRemoveUserFromGroupCommand,
+  AdminSetUserPasswordCommand,
   CognitoIdentityProviderClient,
   ListUsersCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
@@ -23,7 +24,15 @@ export interface SeedCognitoAdminUser extends CognitoAdminUser {
 
 export interface CognitoAdminsClient {
   listUsers(): Promise<CognitoAdminUser[]>;
-  adminCreateUser(input: { email: string }): Promise<CognitoAdminUser>;
+  adminCreateUser(input: {
+    email: string;
+    temporaryPassword: string;
+  }): Promise<CognitoAdminUser>;
+  adminSetUserPassword(input: {
+    username: string;
+    password: string;
+    permanent: boolean;
+  }): Promise<void>;
   adminAddUserToGroup(username: string, group: string): Promise<void>;
   adminRemoveUserFromGroup(username: string, group: string): Promise<void>;
   adminListGroupsForUser(username: string): Promise<string[]>;
@@ -56,7 +65,10 @@ export class AwsCognitoAdmins implements CognitoAdminsClient {
     return users;
   }
 
-  async adminCreateUser(input: { email: string }): Promise<CognitoAdminUser> {
+  async adminCreateUser(input: {
+    email: string;
+    temporaryPassword: string;
+  }): Promise<CognitoAdminUser> {
     const response = await this.client.send(
       new AdminCreateUserCommand({
         UserPoolId: this.userPoolId,
@@ -65,15 +77,31 @@ export class AwsCognitoAdmins implements CognitoAdminsClient {
           { Name: "email", Value: input.email },
           { Name: "email_verified", Value: "true" },
         ],
-        // Cognito defaults to SMS, and admins are invited by email only --
-        // without this the temporary password is never delivered.
-        DesiredDeliveryMediums: ["EMAIL"],
+        TemporaryPassword: input.temporaryPassword,
+        // Cognito's default invite mail is unreliable (COGNITO_DEFAULT). The
+        // app sends the temp password via SES instead.
+        MessageAction: "SUPPRESS",
       }),
     );
     if (response.User === undefined) {
       throw new Error("Cognito created a user without returning it");
     }
     return mapSdkUser(response.User);
+  }
+
+  async adminSetUserPassword(input: {
+    username: string;
+    password: string;
+    permanent: boolean;
+  }): Promise<void> {
+    await this.client.send(
+      new AdminSetUserPasswordCommand({
+        UserPoolId: this.userPoolId,
+        Username: input.username,
+        Password: input.password,
+        Permanent: input.permanent,
+      }),
+    );
   }
 
   async adminAddUserToGroup(username: string, group: string): Promise<void> {
@@ -164,7 +192,11 @@ export class InMemoryCognitoAdmins implements CognitoAdminsClient {
     return [...this.users.values()].map(withoutGroups);
   }
 
-  async adminCreateUser(input: { email: string }): Promise<CognitoAdminUser> {
+  async adminCreateUser(input: {
+    email: string;
+    temporaryPassword: string;
+  }): Promise<CognitoAdminUser> {
+    void input.temporaryPassword;
     if ([...this.users.values()].some((user) => user.email === input.email)) {
       const error = new Error(`User ${input.email} already exists`);
       error.name = "UsernameExistsException";
@@ -179,6 +211,16 @@ export class InMemoryCognitoAdmins implements CognitoAdminsClient {
     };
     this.users.set(user.username, user);
     return withoutGroups(user);
+  }
+
+  async adminSetUserPassword(input: {
+    username: string;
+    password: string;
+    permanent: boolean;
+  }): Promise<void> {
+    void input.password;
+    const user = this.requireUser(input.username);
+    user.status = input.permanent ? "CONFIRMED" : "FORCE_CHANGE_PASSWORD";
   }
 
   async adminAddUserToGroup(username: string, group: string): Promise<void> {

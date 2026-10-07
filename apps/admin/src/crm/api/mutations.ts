@@ -116,8 +116,20 @@ function applyEditToLedgerRow(row: crm.LedgerRow, edit: LedgerEdit): crm.LedgerR
       return { ...row, caseStatus: edit.nextValue as crm.CaseStatus };
     case "billingStatus":
       return { ...row, billingStatus: edit.nextValue as crm.BillingStatus };
-    case "appointmentDate":
-      return { ...row, appointmentDate: edit.nextValue === "" ? undefined : edit.nextValue };
+    case "appointmentDate": {
+      const withDate: crm.LedgerRow = {
+        ...row,
+        appointmentDate: edit.nextValue === "" ? undefined : edit.nextValue,
+      };
+      if (
+        edit.nextValue !== "" &&
+        row.caseStatus !== "APPOINTMENT_SET" &&
+        crm.canTransitionCaseStatus(row.caseStatus, "APPOINTMENT_SET")
+      ) {
+        return { ...withDate, caseStatus: "APPOINTMENT_SET" };
+      }
+      return withDate;
+    }
     case "visaType":
       return { ...row, visaType: edit.nextValue === "" ? undefined : (edit.nextValue as crm.VisaType) };
   }
@@ -129,8 +141,20 @@ function applyEditToCase(caseRecord: crm.CrmCase, edit: LedgerEdit): crm.CrmCase
       return { ...caseRecord, caseStatus: edit.nextValue as crm.CaseStatus };
     case "billingStatus":
       return { ...caseRecord, billingStatus: edit.nextValue as crm.BillingStatus };
-    case "appointmentDate":
-      return { ...caseRecord, appointmentDate: edit.nextValue === "" ? undefined : edit.nextValue };
+    case "appointmentDate": {
+      const withDate: crm.CrmCase = {
+        ...caseRecord,
+        appointmentDate: edit.nextValue === "" ? undefined : edit.nextValue,
+      };
+      if (
+        edit.nextValue !== "" &&
+        caseRecord.caseStatus !== "APPOINTMENT_SET" &&
+        crm.canTransitionCaseStatus(caseRecord.caseStatus, "APPOINTMENT_SET")
+      ) {
+        return { ...withDate, caseStatus: "APPOINTMENT_SET" };
+      }
+      return withDate;
+    }
     case "visaType":
       return { ...caseRecord, visaType: edit.nextValue === "" ? undefined : (edit.nextValue as crm.VisaType) };
   }
@@ -400,7 +424,22 @@ export function useLedgerEdit(): UseLedgerEditResult {
     onSettled: onSettledForEdit,
   });
   const appointmentDateMutation = useMutation<crm.CrmCase, Error, LedgerEdit, OptimisticCaseWriteContext>({
-    mutationFn: (edit) => crmClient.updateCaseDetails(idToken!, edit.caseId, { appointmentDate: edit.nextValue }),
+    mutationFn: async (edit) => {
+      const updatedCase = await crmClient.updateCaseDetails(idToken!, edit.caseId, {
+        appointmentDate: edit.nextValue,
+      });
+      // Booking a date should land the case on the Appointments views: move to
+      // APPOINTMENT_SET when the status machine allows it (skip if already there
+      // or if the case is terminal / past that stage).
+      if (
+        edit.nextValue !== "" &&
+        updatedCase.caseStatus !== "APPOINTMENT_SET" &&
+        crm.canTransitionCaseStatus(updatedCase.caseStatus, "APPOINTMENT_SET")
+      ) {
+        return crmClient.setCaseStatus(idToken!, edit.caseId, "APPOINTMENT_SET");
+      }
+      return updatedCase;
+    },
     onMutate: onMutateForEdit,
     onError: onErrorForEdit,
     onSettled: onSettledForEdit,

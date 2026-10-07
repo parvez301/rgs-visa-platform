@@ -261,6 +261,12 @@ export const adminApi = {
       idToken,
     }),
 
+  resendStaffInvite: (idToken: string, username: string) =>
+    apiFetch<StaffMember>(
+      `/api/v1/admin/staff/${encodeURIComponent(username)}/resend-invite`,
+      { method: "POST", idToken },
+    ),
+
   setStaffRole: (
     idToken: string,
     username: string,

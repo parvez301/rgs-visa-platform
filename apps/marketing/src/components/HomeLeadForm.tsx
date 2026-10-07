@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CONTACT_EMAIL, CONTACT_PHONE, CONTACT_PHONE_HREF } from "@/lib/site";
+import { CONTACT_EMAIL, CONTACT_PHONE, CONTACT_PHONE_HREF, OFFICE_HOURS } from "@/lib/site";
 
 // Staging default; prod build overrides via NEXT_PUBLIC_API_URL.
 const API_BASE_URL =
@@ -59,7 +59,7 @@ export function HomeLeadForm() {
             Thanks, {enquirerName.split(" ")[0]} — we&apos;ve got your details.
           </p>
           <p className="mt-1 text-ink-soft">
-            A consultant will call you back during business hours (Mon–Sat, 10am–7pm IST).
+            A consultant will call you back during business hours ({OFFICE_HOURS}).
           </p>
         </div>
       </section>

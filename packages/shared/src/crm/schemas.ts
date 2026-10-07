@@ -237,3 +237,10 @@ export const UpsertStatusEmailTemplateBodySchema = z.object({
   enabled: z.boolean(),
 });
 export type UpsertStatusEmailTemplateBody = z.infer<typeof UpsertStatusEmailTemplateBodySchema>;
+
+export const AddLineItemBodySchema = z.object({
+  lineItemCode: z.string().min(1),
+  quantity: z.number().int().positive(),
+  unitPriceInr: z.number().int().nonnegative(),
+});
+export type AddLineItemBody = z.infer<typeof AddLineItemBodySchema>;

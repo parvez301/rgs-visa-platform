@@ -22,6 +22,7 @@ const DEFAULT_BUILT_IN_SORT: LedgerSort = { column: "receivedDate", direction: "
 const LIVE_WORK_VIEW_ID = "built-in-live-work";
 const COLLECT_TODAY_VIEW_ID = "built-in-collect-today";
 const APPOINTMENTS_TODAY_VIEW_ID = "built-in-appointments-today";
+const APPOINTMENTS_UPCOMING_VIEW_ID = "built-in-appointments-upcoming";
 const AWAITING_PAYMENT_VIEW_ID = "built-in-awaiting-payment";
 const UNBILLED_VIEW_ID = "built-in-unbilled";
 const EVERYTHING_VIEW_ID = "built-in-everything";
@@ -30,6 +31,7 @@ const BUILT_IN_VIEW_IDS: readonly string[] = [
   LIVE_WORK_VIEW_ID,
   COLLECT_TODAY_VIEW_ID,
   APPOINTMENTS_TODAY_VIEW_ID,
+  APPOINTMENTS_UPCOMING_VIEW_ID,
   AWAITING_PAYMENT_VIEW_ID,
   UNBILLED_VIEW_ID,
   EVERYTHING_VIEW_ID,
@@ -48,6 +50,10 @@ export function appointmentsTodayViewId(): string {
   return APPOINTMENTS_TODAY_VIEW_ID;
 }
 
+export function appointmentsUpcomingViewId(): string {
+  return APPOINTMENTS_UPCOMING_VIEW_ID;
+}
+
 export function liveWorkViewId(): string {
   return LIVE_WORK_VIEW_ID;
 }
@@ -64,12 +70,13 @@ export function everythingViewId(): string {
   return EVERYTHING_VIEW_ID;
 }
 
-/** Built-ins that belong in the Today chip group on the Ledger. */
+/** Built-ins that belong in the Queues chip group on the Ledger. */
 export function isTodayLedgerViewId(viewId: string): boolean {
   return (
     viewId === LIVE_WORK_VIEW_ID ||
     viewId === COLLECT_TODAY_VIEW_ID ||
-    viewId === APPOINTMENTS_TODAY_VIEW_ID
+    viewId === APPOINTMENTS_TODAY_VIEW_ID ||
+    viewId === APPOINTMENTS_UPCOMING_VIEW_ID
   );
 }
 
@@ -112,6 +119,16 @@ export function builtInLedgerViews(): LedgerView[] {
       filters: {
         statuses: [...crm.LIVE_CASE_STATUSES],
         appointmentDateOn: LEDGER_FILTER_TODAY,
+      },
+      sort: { column: "appointmentDate", direction: "asc" },
+    },
+    {
+      viewId: APPOINTMENTS_UPCOMING_VIEW_ID,
+      name: "Upcoming appointments",
+      filters: {
+        statuses: [...crm.LIVE_CASE_STATUSES],
+        // Strictly after today — "Appointments today" owns same-day rows.
+        appointmentDateAfter: LEDGER_FILTER_TODAY,
       },
       sort: { column: "appointmentDate", direction: "asc" },
     },

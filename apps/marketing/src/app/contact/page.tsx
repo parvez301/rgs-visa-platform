@@ -5,14 +5,18 @@ import { ContactForm } from "@/components/ContactForm";
 import {
   CONTACT_EMAIL,
   CONTACT_PHONE,
+  CONTACT_PHONE_ALT,
+  CONTACT_PHONE_ALT_HREF,
   CONTACT_PHONE_HREF,
   OFFICE_ADDRESS,
+  OFFICE_HOURS,
 } from "@/lib/site";
+import { SocialLinks } from "@/components/SocialLinks";
 
 export const metadata: Metadata = {
   title: "Contact Us | Rays Global Services",
   description:
-    "Visit us at Bhikaji Cama Place, New Delhi, call +91-9818067432 or send an enquiry — visa, study abroad, passport, attestation and travel services.",
+    "Visit us at Bhikaji Cama Place, New Delhi, call +91-9818067432 or +91-9599717431, or send an enquiry — visa, study abroad, passport, attestation and travel services.",
 };
 
 export default function ContactPage() {
@@ -47,16 +51,23 @@ export default function ContactPage() {
             </div>
             <div className="rounded-2xl border border-line p-6">
               <p className="mrz text-xs text-rgs-red mb-2">Phone</p>
-              <a href={CONTACT_PHONE_HREF} className="font-display text-2xl font-bold hover:text-rgs-red">
+              <a href={CONTACT_PHONE_HREF} className="block font-display text-2xl font-bold hover:text-rgs-red">
                 {CONTACT_PHONE}
               </a>
-              <p className="mt-1 text-sm text-ink-soft">Mon–Sat, 10am–7pm IST</p>
+              <a href={CONTACT_PHONE_ALT_HREF} className="mt-1 block font-display text-xl font-bold hover:text-rgs-red">
+                {CONTACT_PHONE_ALT}
+              </a>
+              <p className="mt-1 text-sm text-ink-soft">{OFFICE_HOURS}</p>
             </div>
             <div className="rounded-2xl border border-line p-6">
               <p className="mrz text-xs text-rgs-red mb-2">Email</p>
               <a href={`mailto:${CONTACT_EMAIL}`} className="font-semibold hover:text-rgs-red">
                 {CONTACT_EMAIL}
               </a>
+            </div>
+            <div className="rounded-2xl border border-line p-6">
+              <p className="mrz text-xs text-rgs-red mb-3">Follow</p>
+              <SocialLinks tone="light" />
             </div>
           </div>
 

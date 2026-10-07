@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Metadata } from "next";
-import { fetchBuildCatalog, productFromSlug } from "@/lib/buildCatalog";
+import { catalogForStaticPages, fetchBuildCatalog, productFromSlug } from "@/lib/buildCatalog";
 import { PHOTO_COUNTRY_CODES, resolveContent } from "@/lib/countryContent";
 import { formatInr } from "@/lib/site";
 import { SiteHeader } from "@/components/SiteHeader";
@@ -15,7 +15,7 @@ import {
 import { CountryNoticeBanner } from "@/components/CountryNoticeBanner";
 
 export async function generateStaticParams() {
-  const buildCatalog = await fetchBuildCatalog();
+  const buildCatalog = catalogForStaticPages(await fetchBuildCatalog());
   return buildCatalog.map((countryProduct) => ({
     slug: resolveContent(countryProduct).slug,
   }));
@@ -27,12 +27,13 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const buildCatalog = await fetchBuildCatalog();
+  const buildCatalog = catalogForStaticPages(await fetchBuildCatalog());
   const countryProduct = productFromSlug(buildCatalog, slug);
   const content = resolveContent(countryProduct);
   return {
     title: `${content.heroTagline} — price, documents & apply online | Rays Global Services`,
     description: `${countryProduct.countryName} visa for Indian passport holders: ${formatInr(countryProduct.governmentFeeInr + countryProduct.serviceFeeInr)} all-in, ${countryProduct.processingDays} working days. Apply online with RGS.`,
+    robots: countryProduct.active ? undefined : { index: false, follow: false },
   };
 }
 
@@ -42,12 +43,12 @@ export default async function CountryVisaPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const buildCatalog = await fetchBuildCatalog();
+  const buildCatalog = catalogForStaticPages(await fetchBuildCatalog());
   const countryProduct = productFromSlug(buildCatalog, slug);
   const countryCode = countryProduct.countryCode;
   const content = resolveContent(countryProduct);
   const otherProducts = buildCatalog
-    .filter((product) => product.countryCode !== countryCode)
+    .filter((product) => product.active && product.countryCode !== countryCode)
     .slice(0, 4);
 
   return (

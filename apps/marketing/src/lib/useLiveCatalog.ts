@@ -32,9 +32,6 @@ function writeCachedCatalog(products: CountryProduct[]): void {
 let inFlightFetch: Promise<CountryProduct[]> | null = null;
 
 async function fetchLiveCatalog(): Promise<CountryProduct[]> {
-  const cached = readCachedCatalog();
-  if (cached) return cached;
-
   if (inFlightFetch) return inFlightFetch;
 
   const baseUrl = apiBaseUrl();

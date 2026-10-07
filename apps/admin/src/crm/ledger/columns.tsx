@@ -6,8 +6,30 @@ import { AxisChip } from "../components/Chip";
 import { describeCaseType, describeCustodyRollUp, formatInr } from "../labels";
 import { ReviewMarker } from "./ReviewMarker";
 
-/** Exactly 40px: the Queue table's row height, chosen for readability over density (2026-09-16). About 18 rows on a laptop. */
-export const LEDGER_ROW_HEIGHT = 40;
+/**
+ * Base collapsed row height. 48px fits AxisChip `md` (h-7) without clipping
+ * pill bottoms; family REF stacks use `collapsedLedgerRowHeight` instead.
+ */
+export const LEDGER_ROW_HEIGHT = 48;
+
+/** Rough REF stack line (text-xs / 10px) for derived virtualizer heights. */
+const COLLAPSED_REF_LINE_PX = 16;
+
+/**
+ * Collapsed height for one ledger row. Solo rows stay at `LEDGER_ROW_HEIGHT`;
+ * family rows (extra applicant REFs and/or group name) grow so the REF stack
+ * is not clipped by the virtualizer's fixed estimate.
+ */
+export function collapsedLedgerRowHeight(row: crm.LedgerRow): number {
+  const extraApplicantRefs = (row.applicantRefs ?? []).filter(
+    (applicantRef) => applicantRef !== row.caseRef,
+  );
+  const extraLines =
+    (extraApplicantRefs.length > 0 ? 1 : 0) + (row.groupName !== undefined ? 1 : 0);
+  if (extraLines === 0) return LEDGER_ROW_HEIGHT;
+  // Primary REF + each secondary line, with a little vertical pad for the chip column.
+  return Math.max(LEDGER_ROW_HEIGHT, 12 + (1 + extraLines) * COLLAPSED_REF_LINE_PX);
+}
 
 /**
  * Per-row data that is not part of the row itself, handed to `render` as a
@@ -64,7 +86,8 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
   {
     key: "caseRef",
     header: "REF",
-    width: 120,
+    // Wide enough for case REF + family REF NO line + review marker.
+    width: 200,
     sticky: true,
     // Spec §5: the Case screen is "reached by clicking a REF". `tabIndex={-1}`
     // on purpose (Task 14): the grid owns its own roving tabindex on the
@@ -81,29 +104,48 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
     // R74 (fix round 1, F1): the marker chip is the ONE exception to the "no
     // Tab stop per mounted row" rule above, and only because its tab stop
     // ROVES with the grid's focus -- `isFocusedRow` is what makes it roam.
-    render: (row, _partnerName, cellContext) => (
-      <>
-        <span className="flex min-w-0 flex-col leading-tight">
-          <Link
-            to={`/crm/cases/${row.caseId}`}
-            tabIndex={-1}
-            className="mrz text-xs font-semibold text-rgs-red-deep hover:underline"
-          >
-            {row.caseRef}
-          </Link>
-          {row.groupName !== undefined && (
-            <span data-testid="ledger-group-name" className="truncate text-[10px] text-ink-soft">
-              {row.groupName}
-            </span>
-          )}
-        </span>
-        <ReviewMarker
-          caseRef={row.caseRef}
-          entry={cellContext.reviewEntry}
-          isFocusedRow={cellContext.isFocusedRow}
-        />
-      </>
-    ),
+    render: (row, _partnerName, cellContext) => {
+      // Case REF is the primary line. Extra applicant REF NOs only (no repeat
+      // of caseRef) — family rows stay compact: 38608 / +38609 / PATANJALI FAMILY.
+      const extraApplicantRefs = (row.applicantRefs ?? []).filter(
+        (applicantRef) => applicantRef !== row.caseRef,
+      );
+      const allRefsForTooltip = [row.caseRef, ...extraApplicantRefs];
+      const refsTooltip = allRefsForTooltip.join(" · ");
+      return (
+        <>
+          <span className="flex min-w-0 flex-col gap-0.5 leading-tight">
+            <Link
+              to={`/crm/cases/${row.caseId}`}
+              tabIndex={-1}
+              title={refsTooltip}
+              className="mrz whitespace-nowrap text-xs font-semibold text-rgs-red-deep hover:underline"
+            >
+              {row.caseRef}
+            </Link>
+            {extraApplicantRefs.length > 0 && (
+              <span
+                data-testid="ledger-applicant-refs"
+                title={refsTooltip}
+                className="truncate font-mono text-[10px] tabular-nums text-ink-soft"
+              >
+                +{extraApplicantRefs.join(" · ")}
+              </span>
+            )}
+            {row.groupName !== undefined && (
+              <span data-testid="ledger-group-name" className="truncate text-[10px] text-ink-soft">
+                {row.groupName}
+              </span>
+            )}
+          </span>
+          <ReviewMarker
+            caseRef={row.caseRef}
+            entry={cellContext.reviewEntry}
+            isFocusedRow={cellContext.isFocusedRow}
+          />
+        </>
+      );
+    },
   },
   { key: "partner", header: "Partner", width: 160, render: (_row, partnerName) => partnerName },
   { key: "destinationCountry", header: "Country", width: 72, render: (row) => row.destinationCountry },
@@ -122,7 +164,8 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
   {
     key: "caseStatus",
     header: "Status",
-    width: 196,
+    // Longest label is "Additional Documents Required" — keep the pill uncropped.
+    width: 260,
     editable: "caseStatus",
     render: (row) => <AxisChip axis="caseStatus" value={row.caseStatus} size="md" />,
   },
@@ -146,6 +189,12 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
     header: "Collect",
     width: 100,
     render: (row) => row.expectedCollectionDate ?? "—",
+  },
+  {
+    key: "lineItemCount",
+    header: "Lines",
+    width: 70,
+    render: (row) => String(row.lineItemCount ?? 0),
   },
   { key: "totalInr", header: "Total", width: 100, render: (row) => formatInr(row.totalInr) },
 ];

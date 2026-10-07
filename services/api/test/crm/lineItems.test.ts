@@ -7,6 +7,7 @@ import { buildTestContext, closeTestContexts, type TestContext } from "../helper
 import { createPartner } from "../../src/domain/crm/partners";
 import { upsertTraveller } from "../../src/domain/crm/travellers";
 import { createCase } from "../../src/domain/crm/cases";
+import { InMemoryCognitoAdmins } from "../../src/lib/cognitoAdmins";
 
 afterEach(closeTestContexts);
 
@@ -144,6 +145,48 @@ describe("addLineItem", () => {
       amountInr: 1000,
       lineTotalInr: 3000,
     });
+  });
+
+  it("emails every enabled Cognito staff member when a line item is added", async () => {
+    const context = await buildTestContext();
+    context.cognitoAdmins = new InMemoryCognitoAdmins([
+      {
+        username: "ops@rgs.test",
+        email: "ops@rgs.test",
+        groups: ["Ops"],
+        status: "CONFIRMED",
+        enabled: true,
+      },
+      {
+        username: "finance@rgs.test",
+        email: "finance@rgs.test",
+        groups: ["Finance"],
+        status: "CONFIRMED",
+        enabled: true,
+      },
+      {
+        username: "disabled@rgs.test",
+        email: "disabled@rgs.test",
+        groups: ["Viewer"],
+        status: "CONFIRMED",
+        enabled: false,
+      },
+    ]);
+    const seededCase = await seedOneCase(context);
+
+    await addLineItem(
+      context,
+      TENANT_ID,
+      seededCase.caseId,
+      { lineItemCode: "VISA_SERVICE_FEE", quantity: 1, unitPriceInr: 4500 },
+      ACTOR,
+    );
+
+    const recipients = context.email.sentEmails.map((mail) => mail.toAddress).sort();
+    expect(recipients).toEqual(["finance@rgs.test", "ops@rgs.test"]);
+    expect(context.email.sentEmails[0]?.subject).toContain(seededCase.caseRef);
+    expect(context.email.sentEmails[0]?.bodyText).toContain("VISA_SERVICE_FEE");
+    expect(context.email.sentEmails[0]?.bodyText).toContain(ACTOR);
   });
 
   it("recomputes totalInr from the full line-item list rather than incrementing an already-wrong stored total", async () => {

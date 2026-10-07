@@ -5,6 +5,7 @@ import {
   enableStaff,
   inviteStaff,
   listStaff,
+  resendStaffInvite,
   setStaffRole,
 } from "../domain/admin/staff";
 import type { AppContext } from "../lib/context";
@@ -37,8 +38,21 @@ export function registerStaffRoutes(
         requireCognitoAdmins(context),
         input,
         adminEmail,
+        staffInviteMail(context),
       );
     })
+    .add(
+      "POST",
+      "/api/v1/admin/staff/{username}/resend-invite",
+      async (requestContext) => {
+        requireRole(requestContext, ["Owner"]);
+        return resendStaffInvite(
+          requireCognitoAdmins(context),
+          requestContext.pathParams["username"]!,
+          staffInviteMail(context),
+        );
+      },
+    )
     .add(
       "PUT",
       "/api/v1/admin/staff/{username}/role",
@@ -79,6 +93,15 @@ export function registerStaffRoutes(
         return { enabled: true };
       },
     );
+}
+
+function staffInviteMail(context: AppContext) {
+  return {
+    email: context.email,
+    loginUrl:
+      process.env["ADMIN_LOGIN_URL"]?.trim() ||
+      "https://crm.raysglobalservices.com",
+  };
 }
 
 function requireCognitoAdmins(context: AppContext): CognitoAdminsClient {

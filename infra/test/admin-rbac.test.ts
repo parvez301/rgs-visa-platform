@@ -146,6 +146,9 @@ describe("admin RBAC infrastructure", () => {
           ?.Variables ?? {};
       assert.equal(variables["DATABASE_URL"], undefined);
       assert.equal(variables["CRM_STORE"], undefined);
+      const environments = lambdaEnvByName(synthesizedResources());
+      assert.equal(environments["rgs-admin-api-test"]?.["DATABASE_URL"], undefined);
+      assert.equal(environments["rgs-user-api-test"]?.["DATABASE_URL"], undefined);
     } finally {
       if (savedUrl !== undefined) process.env["RGS_DATABASE_URL"] = savedUrl;
     }
@@ -197,6 +200,7 @@ describe("admin RBAC infrastructure", () => {
     const policies = resourcesOfType(resources, "AWS::IAM::Policy");
     const requiredActions = [
       "cognito-idp:AdminCreateUser",
+      "cognito-idp:AdminSetUserPassword",
       "cognito-idp:AdminAddUserToGroup",
       "cognito-idp:AdminRemoveUserFromGroup",
       "cognito-idp:AdminListGroupsForUser",
@@ -237,6 +241,30 @@ describe("admin RBAC infrastructure", () => {
       "rgs-user-api-staging",
       "rgs-appointment-reminders-staging",
     ]);
+  });
+
+  it("does not attach custom domains on prod unless RGS_SPA_CERTIFICATE_ARN is set", () => {
+    const savedArn = process.env["RGS_SPA_CERTIFICATE_ARN"];
+    const savedMarketingArn = process.env["RGS_MARKETING_CERTIFICATE_ARN"];
+    delete process.env["RGS_SPA_CERTIFICATE_ARN"];
+    delete process.env["RGS_MARKETING_CERTIFICATE_ARN"];
+    try {
+      const distributions = resourcesOfType(
+        synthesizedResourcesForStage("prod"),
+        "AWS::CloudFront::Distribution",
+      );
+      for (const distribution of distributions) {
+        const aliases =
+          (distribution.Properties as { DistributionConfig?: { Aliases?: unknown } })
+            .DistributionConfig?.Aliases ?? [];
+        assert.equal(Array.isArray(aliases) ? aliases.length : 0, 0);
+      }
+    } finally {
+      if (savedArn === undefined) delete process.env["RGS_SPA_CERTIFICATE_ARN"];
+      else process.env["RGS_SPA_CERTIFICATE_ARN"] = savedArn;
+      if (savedMarketingArn === undefined) delete process.env["RGS_MARKETING_CERTIFICATE_ARN"];
+      else process.env["RGS_MARKETING_CERTIFICATE_ARN"] = savedMarketingArn;
+    }
   });
 
   it("does not own a platform Dynamo table on prod", () => {

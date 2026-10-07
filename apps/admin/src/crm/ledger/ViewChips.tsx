@@ -79,8 +79,8 @@ function ViewChipButton({
 }
 
 /**
- * The saved-views chip row (Task 13), grouped into Today / Billing / More so
- * six built-ins do not read as one undifferentiated pill strip. Collapsed by
+ * The saved-views chip row (Task 13), grouped into Queues / Billing / More so
+ * built-ins do not read as one undifferentiated pill strip. Collapsed by
  * default: only the active view name shows until the desk agent opens it.
  */
 export function ViewChips({
@@ -180,7 +180,7 @@ export function ViewChips({
 
       {isExpanded && (
         <div id="ledger-views-panel" className="flex flex-col gap-2">
-          {renderGroup("Today", todayViews)}
+          {renderGroup("Queues", todayViews)}
           {renderGroup("Billing", billingViews)}
           {renderGroup("More", moreViews)}
 

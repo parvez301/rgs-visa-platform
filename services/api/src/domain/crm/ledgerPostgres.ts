@@ -30,7 +30,7 @@ export interface PostgresLedgerQuery {
   appointmentDateOn?: string;
   /** YYYY-MM-DD */
   expectedCollectionDateOn?: string;
-  /** Substring match on case ref, search text, or partner name; case-insensitive. */
+  /** Substring match on case ref, group name, applicant REF, search text, or partner name. */
   search?: string;
   limit: number;
   cursor?: string;
@@ -180,7 +180,20 @@ function buildQuery(
   if (filters.search !== undefined) {
     const pattern = addValue(likePatternContaining(filters.search));
     conditions.push(
-      `(c.case_ref ilike ${pattern} or c.search_text ilike ${pattern} or p.canonical_name ilike ${pattern})`,
+      `(c.case_ref ilike ${pattern}
+        or c.group_name ilike ${pattern}
+        or c.search_text ilike ${pattern}
+        or p.canonical_name ilike ${pattern}
+        or exists (
+          select 1
+          from crm_applicants a
+          where a.tenant_id = c.tenant_id
+            and a.case_id = c.case_id
+            and (
+              a.ref_no ilike ${pattern}
+              or a.applicant_ref ilike ${pattern}
+            )
+        ))`,
     );
   }
   if (resumeFrom !== undefined) {
@@ -205,9 +218,34 @@ select
   to_char(c.appointment_date, 'YYYY-MM-DD') as appointment_date,
   to_char(c.expected_collection_date, 'YYYY-MM-DD') as expected_collection_date,
   c.total_inr,
+  coalesce(jsonb_array_length(c.line_items), 0) as line_item_count,
   to_char(c.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as updated_at,
   c.applicant_summary,
-  c.search_text
+  c.search_text,
+  (
+    select coalesce(
+      jsonb_agg(display_ref order by applicant_index),
+      '[]'::jsonb
+    )
+    from (
+      select
+        a.applicant_index,
+        case
+          when a.ref_no is not null and btrim(a.ref_no) <> '' then btrim(a.ref_no)
+          when applicant_count.n = 1 then c.case_ref
+          else a.applicant_ref
+        end as display_ref
+      from crm_applicants a
+      cross join lateral (
+        select count(*)::int as n
+        from crm_applicants counted
+        where counted.tenant_id = c.tenant_id
+          and counted.case_id = c.case_id
+      ) applicant_count
+      where a.tenant_id = c.tenant_id
+        and a.case_id = c.case_id
+    ) applicant_display_refs
+  ) as applicant_refs
 from crm_cases c
 left join crm_partners p
   on p.tenant_id = c.tenant_id and p.partner_id = c.partner_id
@@ -234,6 +272,7 @@ function ledgerRowFromDb(dbRow: LedgerDbRow): crm.LedgerRow {
     billingStatus: dbRow["billing_status"],
     receivedDate: dbRow["received_date"],
     totalInr: dbRow["total_inr"],
+    lineItemCount: Number(dbRow["line_item_count"] ?? 0),
     updatedAt: dbRow["updated_at"],
   };
   const optionalColumns: ReadonlyArray<readonly [string, string]> = [
@@ -248,7 +287,30 @@ function ledgerRowFromDb(dbRow: LedgerDbRow): crm.LedgerRow {
     const columnValue = dbRow[columnName];
     if (present(columnValue)) candidate[fieldName] = columnValue;
   }
+  const applicantRefsRaw = dbRow["applicant_refs"];
+  if (present(applicantRefsRaw)) {
+    const parsedRefs = parseApplicantRefs(applicantRefsRaw);
+    if (parsedRefs.length > 0) candidate["applicantRefs"] = uniquePreserveOrder(parsedRefs);
+  }
   return parseStoredRecord(crm.LedgerRowSchema, "Ledger row", caseId, candidate);
+}
+
+function parseApplicantRefs(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+}
+
+function uniquePreserveOrder(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
+  }
+  return unique;
 }
 
 export async function listLedgerRowsFromPostgres(

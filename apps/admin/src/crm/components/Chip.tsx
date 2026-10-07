@@ -102,9 +102,12 @@ type AnyAxisChipProps = (
 export function AxisChip(props: AnyAxisChipProps) {
   const { label, tint, isDataDebt } = describeChip(props);
   const sizeClasses = CHIP_SIZE_CLASSES[props.size ?? "sm"];
+  // Case-status labels are long ("Under Embassy Processing"); truncate made
+  // the ledger pill look cropped. Other axes stay compact with truncate.
+  const textOverflowClass = props.axis === "caseStatus" ? "whitespace-nowrap" : "truncate";
   return (
     <span
-      className={`inline-flex max-w-full items-center truncate rounded-full font-semibold leading-none ${sizeClasses} ${tint} ${
+      className={`inline-flex max-w-full items-center rounded-full font-semibold leading-none ${textOverflowClass} ${sizeClasses} ${tint} ${
         isDataDebt ? DATA_DEBT_BORDER : SOLID_BORDER
       }`}
       title={isDataDebt ? "The import could not read a billing state for this case" : label}

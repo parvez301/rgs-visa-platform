@@ -6,6 +6,7 @@ import {
   aws_apigatewayv2 as apigwv2,
   aws_apigatewayv2_authorizers as apigwAuthorizers,
   aws_apigatewayv2_integrations as apigwIntegrations,
+  aws_certificatemanager as acm,
   aws_cloudfront as cloudfront,
   aws_cloudfront_origins as cloudfrontOrigins,
   aws_cognito as cognito,
@@ -140,13 +141,18 @@ export class RgsPlatformStack extends cdk.Stack {
     adminApiFunction.addEnvironment("ADMINS_USER_POOL_ID", adminsPool.userPoolId);
     // CRM Postgres (Supabase): DATABASE_URL on admin API, user API, and
     // appointment reminders. Set RGS_DATABASE_URL to the transaction pooler URI (:6543).
-    for (const crmFunction of [adminApiFunction, userApiFunction]) {
-      crmFunction.addEnvironment("DATABASE_URL", process.env.RGS_DATABASE_URL ?? "");
+    // Never write "" — a deploy without the env var used to wipe prod and 500 the APIs.
+    const crmPostgresUrl = process.env.RGS_DATABASE_URL;
+    if (crmPostgresUrl !== undefined && crmPostgresUrl !== "") {
+      for (const crmFunction of [adminApiFunction, userApiFunction]) {
+        crmFunction.addEnvironment("DATABASE_URL", crmPostgresUrl);
+      }
     }
     adminApiFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           "cognito-idp:AdminCreateUser",
+          "cognito-idp:AdminSetUserPassword",
           "cognito-idp:AdminAddUserToGroup",
           "cognito-idp:AdminRemoveUserFromGroup",
           "cognito-idp:AdminListGroupsForUser",
@@ -316,6 +322,16 @@ function handler(event) {
 `),
     });
 
+    const marketingCertificateArn = process.env.RGS_MARKETING_CERTIFICATE_ARN;
+    const marketingCertificate =
+      isProduction && marketingCertificateArn
+        ? acm.Certificate.fromCertificateArn(
+            this,
+            "MarketingCustomDomainCertificate",
+            marketingCertificateArn,
+          )
+        : undefined;
+
     const marketingDistribution = new cloudfront.Distribution(this, "MarketingDistribution", {
       defaultBehavior: {
         origin: cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(marketingBucket),
@@ -334,6 +350,12 @@ function handler(event) {
       ],
       priceClass: cloudfront.PriceClass.PRICE_CLASS_200,
       comment: `RGS marketing (${stage})`,
+      ...(marketingCertificate
+        ? {
+            domainNames: ["marketing.raysglobalservices.com"],
+            certificate: marketingCertificate,
+          }
+        : {}),
     });
 
     new s3deploy.BucketDeployment(this, "MarketingDeployment", {
@@ -344,6 +366,15 @@ function handler(event) {
       memoryLimit: 512,
     });
 
+    // Custom domains for portal/admin only. Marketing (www/apex) stays on the
+    // existing WordPress host until a later cutover. Cert must be ISSUED in
+    // us-east-1 and listed on RGS_SPA_CERTIFICATE_ARN.
+    const spaCertificateArn = process.env.RGS_SPA_CERTIFICATE_ARN;
+    const spaCertificate =
+      isProduction && spaCertificateArn
+        ? acm.Certificate.fromCertificateArn(this, "SpaCustomDomainCertificate", spaCertificateArn)
+        : undefined;
+
     // ---------- Portal + Admin SPA hosting ----------
     const { distribution: portalDistribution } = this.createSpaHosting({
       stage,
@@ -353,6 +384,8 @@ function handler(event) {
       bucketName: `rgs-portal-${stage}-${this.account}`,
       distRelativePath: "../../apps/portal/dist",
       comment: `RGS portal (${stage})`,
+      domainName: spaCertificate ? "app.raysglobalservices.com" : undefined,
+      certificate: spaCertificate,
     });
 
     const { distribution: adminDistribution } = this.createSpaHosting({
@@ -363,10 +396,23 @@ function handler(event) {
       bucketName: `rgs-admin-${stage}-${this.account}`,
       distRelativePath: "../../apps/admin/dist",
       comment: `RGS admin (${stage})`,
+      domainName: spaCertificate ? "crm.raysglobalservices.com" : undefined,
+      certificate: spaCertificate,
     });
+
+    // Staff invite emails (SES) link here — Cognito's own invite mail is suppressed.
+    adminApiFunction.addEnvironment(
+      "ADMIN_LOGIN_URL",
+      spaCertificate
+        ? "https://crm.raysglobalservices.com"
+        : `https://${adminDistribution.distributionDomainName}`,
+    );
 
     // ---------- Outputs ----------
     new cdk.CfnOutput(this, "ApiUrl", { value: httpApi.apiEndpoint });
+    new cdk.CfnOutput(this, "MarketingCustomDomain", {
+      value: "https://marketing.raysglobalservices.com",
+    });
     new cdk.CfnOutput(this, "MarketingUrl", {
       value: `https://${marketingDistribution.distributionDomainName}`,
     });
@@ -375,6 +421,12 @@ function handler(event) {
     });
     new cdk.CfnOutput(this, "AdminUrl", {
       value: `https://${adminDistribution.distributionDomainName}`,
+    });
+    new cdk.CfnOutput(this, "PortalCustomDomain", {
+      value: "https://app.raysglobalservices.com",
+    });
+    new cdk.CfnOutput(this, "AdminCustomDomain", {
+      value: "https://crm.raysglobalservices.com",
     });
     new cdk.CfnOutput(this, "DocumentsBucketName", { value: documentsBucket.bucketName });
     new cdk.CfnOutput(this, "UsersPoolId", { value: usersPool.userPoolId });
@@ -391,6 +443,8 @@ function handler(event) {
     bucketName: string;
     distRelativePath: string;
     comment: string;
+    domainName?: string;
+    certificate?: acm.ICertificate;
   }): { bucket: s3.Bucket; distribution: cloudfront.Distribution } {
     const spaBucket = new s3.Bucket(this, `${options.idPrefix}Bucket`, {
       bucketName: `${options.bucketName}-${this.account}`,
@@ -422,6 +476,12 @@ function handler(event) {
       ],
       priceClass: cloudfront.PriceClass.PRICE_CLASS_200,
       comment: options.comment,
+      ...(options.domainName && options.certificate
+        ? {
+            domainNames: [options.domainName],
+            certificate: options.certificate,
+          }
+        : {}),
     });
 
     const distAbsolutePath = path.join(__dirname, options.distRelativePath);

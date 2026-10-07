@@ -71,11 +71,12 @@ describe("ViewChips", () => {
       "Live work",
       "Collect today",
       "Appointments today",
+      "Upcoming appointments",
       "Awaiting payment",
       "Unbilled",
       "Everything",
     ]);
-    expect(screen.getByText("Today")).toBeInTheDocument();
+    expect(screen.getByText("Queues")).toBeInTheDocument();
     expect(screen.getByText("Billing")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Delete the/ })).not.toBeInTheDocument();
   });

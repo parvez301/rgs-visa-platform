@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { findLiveProduct, useLiveCatalog } from "@/lib/useLiveCatalog";
+import { resolveContent } from "@/lib/countryContent";
+import { useLiveCatalog } from "@/lib/useLiveCatalog";
 
 export interface SearchableCountry {
   countryCode: string;
@@ -22,15 +23,27 @@ export function CountrySearch({ countries }: { countries: SearchableCountry[] })
   const liveCatalog = useLiveCatalog();
 
   const hydratedCountries = useMemo(() => {
-    return countries.map((country) => {
-      const liveProduct = findLiveProduct(liveCatalog, country.countryCode);
-      if (!liveProduct) return country;
-      return {
-        ...country,
-        totalFeeInr: liveProduct.governmentFeeInr + liveProduct.serviceFeeInr,
-        processingDays: liveProduct.processingDays,
-      };
-    });
+    const byCountryCode = new Map(
+      countries.map((country) => [country.countryCode, country] as const),
+    );
+    if (liveCatalog !== null) {
+      for (const liveProduct of liveCatalog) {
+        if (!liveProduct.active) {
+          byCountryCode.delete(liveProduct.countryCode);
+          continue;
+        }
+        const content = resolveContent(liveProduct);
+        byCountryCode.set(liveProduct.countryCode, {
+          countryCode: liveProduct.countryCode,
+          countryName: liveProduct.countryName,
+          slug: content.slug,
+          flagEmoji: content.flagEmoji,
+          totalFeeInr: liveProduct.governmentFeeInr + liveProduct.serviceFeeInr,
+          processingDays: liveProduct.processingDays,
+        });
+      }
+    }
+    return [...byCountryCode.values()];
   }, [countries, liveCatalog]);
 
   const matches = useMemo(() => {

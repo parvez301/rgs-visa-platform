@@ -536,6 +536,17 @@ export const crmClient = {
     });
   },
 
+  addLineItem(
+    idToken: string,
+    caseId: string,
+    input: crm.AddLineItemBody,
+  ): Promise<crm.CrmCase> {
+    return apiFetch<crm.CrmCase>(
+      `${CRM_BASE}/cases/${encodeURIComponent(caseId)}/line-items`,
+      { method: "POST", body: input, idToken },
+    );
+  },
+
   downloadCaseInvoice(
     idToken: string,
     caseId: string,

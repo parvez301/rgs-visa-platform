@@ -22,6 +22,7 @@ import {
 import { addApplicant, removeApplicant, updateApplicantDetails } from "../domain/crm/applicantEdits";
 import { buildCaseExportRows } from "../domain/crm/caseExport";
 import { generateCaseInvoice } from "../domain/crm/caseInvoice";
+import { addLineItem } from "../domain/crm/lineItems";
 import { runAppointmentReminders } from "../domain/crm/appointmentReminders";
 import { listCaseEvents } from "../domain/crm/crmEvents";
 import { DEFAULT_TENANT_ID } from "../domain/crm/keys";
@@ -490,6 +491,17 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
         requestContext.pathParams["caseId"]!,
         body.label,
         body.state,
+        requestContext.callerEmail,
+      );
+    })
+    .add("POST", "/api/v1/admin/crm/cases/{caseId}/line-items", async (requestContext) => {
+      requireWrite(requestContext, "crm");
+      const body = parseBody(crm.AddLineItemBodySchema, requestContext.body);
+      return addLineItem(
+        context,
+        tenantId,
+        requestContext.pathParams["caseId"]!,
+        body,
         requestContext.callerEmail,
       );
     })

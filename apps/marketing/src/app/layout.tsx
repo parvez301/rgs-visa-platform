@@ -23,7 +23,7 @@ const splineMono = Spline_Sans_Mono({
 export const metadata: Metadata = {
   title: "Visas for Indians, done properly | Rays Global Services",
   description:
-    "Apply online for UAE, Australia, Canada, New Zealand, Tanzania, Uganda, Nigeria and Zambia visas. 15 years of visa expertise in Delhi — now fully online.",
+    "Apply online for tourist visas from Delhi — UAE, Schengen, UK, Australia, Canada and 60+ destinations. 15 years of visa expertise, now fully online.",
   icons: {
     icon: [
       { url: "/favicon-32.png", sizes: "32x32" },

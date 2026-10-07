@@ -42,7 +42,7 @@ export function AdminUsersPage() {
     onMutate: beginAction,
     onSuccess: (staffMember) => {
       setInviteEmail("");
-      setSuccessMessage(`Invited ${staffMember.email}`);
+      setSuccessMessage(`Invited ${staffMember.email} — temporary password emailed`);
       refreshStaff();
     },
     onError: (error) => setActionError(errorMessage(error)),
@@ -75,6 +75,16 @@ export function AdminUsersPage() {
     onMutate: beginAction,
     onSuccess: (_result, variables) => {
       setSuccessMessage(variables.enabled ? "Staff account enabled" : "Staff account disabled");
+      refreshStaff();
+    },
+    onError: (error) => setActionError(errorMessage(error)),
+  });
+
+  const resendMutation = useMutation({
+    mutationFn: (username: string) => adminApi.resendStaffInvite(idToken!, username),
+    onMutate: beginAction,
+    onSuccess: (staffMember) => {
+      setSuccessMessage(`Temporary password re-sent to ${staffMember.email}`);
       refreshStaff();
     },
     onError: (error) => setActionError(errorMessage(error)),
@@ -211,22 +221,44 @@ export function AdminUsersPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      disabled={statusMutation.isPending}
-                      aria-label={`${staffMember.enabled ? "Disable" : "Enable"} ${staffMember.email}`}
-                      onClick={() => {
-                        const nextAction = staffMember.enabled ? "Disable" : "Enable";
-                        if (!window.confirm(`${nextAction} ${staffMember.email}?`)) return;
-                        statusMutation.mutate({
-                          username: staffMember.username,
-                          enabled: !staffMember.enabled,
-                        });
-                      }}
-                      className="font-semibold text-rgs-red hover:underline disabled:opacity-60"
-                    >
-                      {staffMember.enabled ? "Disable" : "Enable"}
-                    </button>
+                    <div className="flex flex-wrap items-center justify-end gap-3">
+                      {staffMember.status === "FORCE_CHANGE_PASSWORD" && (
+                        <button
+                          type="button"
+                          disabled={resendMutation.isPending}
+                          aria-label={`Resend invite to ${staffMember.email}`}
+                          onClick={() => {
+                            if (
+                              !window.confirm(
+                                `Send a new temporary password to ${staffMember.email}?`,
+                              )
+                            ) {
+                              return;
+                            }
+                            resendMutation.mutate(staffMember.username);
+                          }}
+                          className="font-semibold text-ink hover:underline disabled:opacity-60"
+                        >
+                          Resend invite
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={statusMutation.isPending}
+                        aria-label={`${staffMember.enabled ? "Disable" : "Enable"} ${staffMember.email}`}
+                        onClick={() => {
+                          const nextAction = staffMember.enabled ? "Disable" : "Enable";
+                          if (!window.confirm(`${nextAction} ${staffMember.email}?`)) return;
+                          statusMutation.mutate({
+                            username: staffMember.username,
+                            enabled: !staffMember.enabled,
+                          });
+                        }}
+                        className="font-semibold text-rgs-red hover:underline disabled:opacity-60"
+                      >
+                        {staffMember.enabled ? "Disable" : "Enable"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -42,7 +42,7 @@ export const SERVICES_CONTENT: ServicePageContent[] = [
       "15 years processing visas from Delhi",
       "Transparent pricing, no hidden fees",
       "Follow-up with embassy/VFS until decision",
-      "Tourist visas for 8 countries fully online on our portal",
+      "Tourist visas for 60+ countries, with apply-online on our portal for live destinations",
     ],
   },
   {

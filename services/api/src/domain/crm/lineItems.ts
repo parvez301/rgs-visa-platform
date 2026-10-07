@@ -76,6 +76,7 @@ export async function addLineItem(
   };
 
   await writeCase(context, updatedCase);
+  const lineTotalInr = newLineItem.amountInr * newLineItem.quantity;
   await recordCrmEvent(context, tenantId, caseId, "LINE_ITEM_ADDED", actorEmail, {
     lineItemCode: input.lineItemCode,
     quantity: input.quantity,
@@ -85,7 +86,61 @@ export async function addLineItem(
     // amountInr above is the unit price, so a quantity > 1 line makes a
     // reader multiply to see what it did to the case total. Naming that
     // product explicitly means an audit-trail reader never has to.
-    lineTotalInr: newLineItem.amountInr * newLineItem.quantity,
+    lineTotalInr,
+  });
+  await notifyStaffOfLineItem(context, updatedCase, {
+    lineItemCode: input.lineItemCode,
+    label: newLineItem.label,
+    quantity: input.quantity,
+    unitPriceInr: input.unitPriceInr,
+    lineTotalInr,
+    actorEmail,
   });
   return updatedCase;
+}
+
+async function notifyStaffOfLineItem(
+  context: AppContext,
+  caseRecord: crm.CrmCase,
+  details: {
+    lineItemCode: string;
+    label: string;
+    quantity: number;
+    unitPriceInr: number;
+    lineTotalInr: number;
+    actorEmail: string;
+  },
+): Promise<void> {
+  const recipients = await resolveStaffNotificationEmails(context);
+  if (recipients.length === 0) return;
+
+  const subject = `Line item added — ${caseRecord.caseRef}`;
+  const bodyText = [
+    `Case: ${caseRecord.caseRef}`,
+    `Item: ${details.label} (${details.lineItemCode})`,
+    `Quantity: ${details.quantity}`,
+    `Unit price: ₹${details.unitPriceInr.toLocaleString("en-IN")}`,
+    `Line total: ₹${details.lineTotalInr.toLocaleString("en-IN")}`,
+    `Case total now: ₹${caseRecord.totalInr.toLocaleString("en-IN")}`,
+    `Added by: ${details.actorEmail}`,
+  ].join("\n");
+
+  for (const toAddress of recipients) {
+    await context.email.send({ toAddress, subject, bodyText });
+  }
+}
+
+async function resolveStaffNotificationEmails(
+  context: AppContext,
+): Promise<string[]> {
+  if (context.cognitoAdmins === undefined) {
+    return context.adminNotificationAddress.trim() === ""
+      ? []
+      : [context.adminNotificationAddress];
+  }
+  const users = await context.cognitoAdmins.listUsers();
+  const emails = users
+    .filter((user) => user.enabled && user.email.trim() !== "")
+    .map((user) => user.email.trim());
+  return [...new Set(emails)];
 }

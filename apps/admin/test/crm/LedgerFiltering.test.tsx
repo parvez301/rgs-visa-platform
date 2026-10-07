@@ -89,6 +89,7 @@ function buildRow(caseId: string, caseRef: string): crm.LedgerRow {
     billingStatus: "UNKNOWN",
     receivedDate: "2026-03-04",
     totalInr: 12_000,
+    lineItemCount: 0,
     updatedAt: "2026-03-04T10:00:00.000Z",
   };
 }

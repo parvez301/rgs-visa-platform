@@ -77,8 +77,25 @@ export function EditCaseDrawer({ caseRecord, onClose }: EditCaseDrawerProps) {
       );
       try {
         if (Object.keys(caseDetailsPatch).length > 0) {
-          await crmClient.updateCaseDetails(idToken!, caseRecord.caseId, caseDetailsPatch);
+          const updatedCase = await crmClient.updateCaseDetails(
+            idToken!,
+            caseRecord.caseId,
+            caseDetailsPatch,
+          );
           completedSteps.push("case details");
+          const bookedAppointmentDate =
+            typeof caseDetailsPatch.appointmentDate === "string" &&
+            caseDetailsPatch.appointmentDate.length > 0
+              ? caseDetailsPatch.appointmentDate
+              : undefined;
+          if (
+            bookedAppointmentDate !== undefined &&
+            updatedCase.caseStatus !== "APPOINTMENT_SET" &&
+            crm.canTransitionCaseStatus(updatedCase.caseStatus, "APPOINTMENT_SET")
+          ) {
+            await crmClient.setCaseStatus(idToken!, caseRecord.caseId, "APPOINTMENT_SET");
+            completedSteps.push("appointment status");
+          }
         }
         for (const applicantUpdate of applicantPlan.updates) {
           await crmClient.updateApplicant(idToken!, caseRecord.caseId, applicantUpdate.applicantRef, applicantUpdate.body);

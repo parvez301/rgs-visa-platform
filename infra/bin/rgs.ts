@@ -6,6 +6,15 @@ const app = new cdk.App();
 // Stage comes from RGS_STAGE env (shell hooks mangle -c context flags)
 const stage = app.node.tryGetContext("stage") ?? process.env.RGS_STAGE ?? "staging";
 
+if (
+  (stage === "staging" || stage === "prod") &&
+  (process.env.RGS_DATABASE_URL === undefined || process.env.RGS_DATABASE_URL === "")
+) {
+  throw new Error(
+    `RGS_DATABASE_URL is required to deploy ${stage}. An empty DATABASE_URL takes the APIs down.`,
+  );
+}
+
 new RgsPlatformStack(app, `RgsPlatform-${stage}`, {
   stage,
   env: {

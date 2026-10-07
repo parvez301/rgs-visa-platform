@@ -3,10 +3,14 @@ import Link from "next/link";
 import {
   CONTACT_EMAIL,
   CONTACT_PHONE,
+  CONTACT_PHONE_ALT,
+  CONTACT_PHONE_ALT_HREF,
   CONTACT_PHONE_HREF,
   OFFICE_ADDRESS,
+  OFFICE_HOURS,
   applyUrl,
 } from "@/lib/site";
+import { SocialLinks } from "./SocialLinks";
 
 export function SiteFooter() {
   return (
@@ -37,10 +41,19 @@ export function SiteFooter() {
             </a>
           </p>
           <p>
+            <a href={CONTACT_PHONE_ALT_HREF} className="hover:text-white">
+              {CONTACT_PHONE_ALT}
+            </a>
+          </p>
+          <p className="text-white/55">{OFFICE_HOURS}</p>
+          <p>
             <a href={`mailto:${CONTACT_EMAIL}`} className="hover:text-white">
               {CONTACT_EMAIL}
             </a>
           </p>
+          <div className="pt-2">
+            <SocialLinks tone="dark" />
+          </div>
         </div>
         <div className="text-sm space-y-2.5">
           <p className="mrz text-xs text-rgs-red mb-3">Quick links</p>

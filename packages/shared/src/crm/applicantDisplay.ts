@@ -29,6 +29,25 @@ export function displayApplicantRef(
   return applicant.applicantRef;
 }
 
+/**
+ * Unique desk-facing refs for a case, in applicant order. Used by the Cases
+ * ledger so family rows show every REF NO without expanding the row.
+ */
+export function uniqueApplicantDisplayRefs(
+  caseRef: string,
+  applicants: readonly Pick<CaseApplicant, "applicantRef" | "refNo">[],
+): string[] {
+  const seen = new Set<string>();
+  const refs: string[] = [];
+  for (const applicant of applicants) {
+    const displayRef = displayApplicantRef(caseRef, applicants.length, applicant);
+    if (seen.has(displayRef)) continue;
+    seen.add(displayRef);
+    refs.push(displayRef);
+  }
+  return refs;
+}
+
 export function displayApplicantName(
   travellers: CaseTravellerMap | undefined,
   applicant: Pick<CaseApplicant, "travellerId">,

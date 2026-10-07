@@ -4,19 +4,29 @@ import {
   enableStaff,
   inviteStaff,
   listStaff,
+  resendStaffInvite,
   setStaffRole,
 } from "../../src/domain/admin/staff";
 import { InMemoryCognitoAdmins } from "../../src/lib/cognitoAdmins";
+import { InMemoryEmailSender } from "../../src/lib/email";
 import { ApiError } from "../../src/lib/errors";
 
+const LOGIN_URL = "https://crm.raysglobalservices.com";
+
+function mailDeps(email = new InMemoryEmailSender()) {
+  return { email, loginUrl: LOGIN_URL, generateTemporaryPassword: () => "TempPass12ab" };
+}
+
 describe("Cognito staff domain", () => {
-  it("invites a staff member and assigns the requested role group", async () => {
+  it("invites a staff member, assigns the role, and emails the temp password via SES", async () => {
     const client = new InMemoryCognitoAdmins();
+    const email = new InMemoryEmailSender();
 
     const invited = await inviteStaff(
       client,
       { email: "new.admin@example.com", role: "Ops" },
       "owner@example.com",
+      mailDeps(email),
     );
 
     expect(invited).toEqual({
@@ -27,6 +37,13 @@ describe("Cognito staff domain", () => {
       enabled: true,
     });
     expect(await client.adminListGroupsForUser("new.admin@example.com")).toEqual(["Ops"]);
+    expect(email.sentEmails).toHaveLength(1);
+    expect(email.sentEmails[0]).toMatchObject({
+      toAddress: "new.admin@example.com",
+      subject: expect.stringContaining("CRM login"),
+    });
+    expect(email.sentEmails[0]?.bodyText).toContain("TempPass12ab");
+    expect(email.sentEmails[0]?.bodyText).toContain(LOGIN_URL);
   });
 
   it("rejects an invite when the email already exists", async () => {
@@ -39,9 +56,38 @@ describe("Cognito staff domain", () => {
         client,
         { email: "existing@example.com", role: "Ops" },
         "owner@example.com",
+        mailDeps(),
       ),
       409,
     );
+  });
+
+  it("resends a temporary password email for FORCE_CHANGE_PASSWORD staff", async () => {
+    const client = new InMemoryCognitoAdmins([
+      {
+        username: "stuck@example.com",
+        email: "stuck@example.com",
+        groups: ["Ops"],
+        status: "FORCE_CHANGE_PASSWORD",
+        enabled: true,
+      },
+    ]);
+    const email = new InMemoryEmailSender();
+
+    const resent = await resendStaffInvite(client, "stuck@example.com", mailDeps(email));
+
+    expect(resent.status).toBe("FORCE_CHANGE_PASSWORD");
+    expect(email.sentEmails).toHaveLength(1);
+    expect(email.sentEmails[0]?.toAddress).toBe("stuck@example.com");
+    expect(email.sentEmails[0]?.bodyText).toContain("TempPass12ab");
+  });
+
+  it("rejects resend when the staff member is already confirmed", async () => {
+    const client = new InMemoryCognitoAdmins([
+      staffUser("done@example.com", ["Ops"]),
+    ]);
+
+    await expectApiError(resendStaffInvite(client, "done@example.com", mailDeps()), 400);
   });
 
   it("changes role by removing all other admin role groups", async () => {

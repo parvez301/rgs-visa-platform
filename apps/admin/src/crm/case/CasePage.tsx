@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { crm } from "@rgs/shared";
@@ -848,8 +848,7 @@ function describeCourier(applicant: crm.CaseApplicant): string {
 }
 
 /**
- * R51: read-only table for lines already on the case. Invoice download sits
- * beside the heading -- the admin still has no line-item write method here.
+ * Line items on the case: table + add form (CRM writers) + invoice download.
  *
  * `amountInr` is the UNIT price and `totalInr` is the case sum of
  * `amountInr × quantity` across items (`LineItemSchema`'s own comment). Both
@@ -858,8 +857,28 @@ function describeCourier(applicant: crm.CaseApplicant): string {
  */
 function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
   const { idToken } = useAuth();
+  const { canWrite } = useAdminAccess();
+  const canWriteCrm = canWrite("crm");
+  const queryClient = useQueryClient();
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [isDownloadingInvoice, setIsDownloadingInvoice] = useState(false);
+  const [lineItemCode, setLineItemCode] = useState(crm.LINE_ITEM_CATALOG[0]?.code ?? "");
+  const [quantity, setQuantity] = useState("1");
+  const [unitPriceInr, setUnitPriceInr] = useState("");
+
+  const addLineItemMutation = useMutation({
+    mutationFn: (input: crm.AddLineItemBody) =>
+      crmClient.addLineItem(idToken!, caseRecord.caseId, input),
+    onSuccess: () => {
+      setQuantity("1");
+      setUnitPriceInr("");
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: crmQueryKeys.case(caseRecord.caseId) });
+      void queryClient.invalidateQueries({ queryKey: crmQueryKeys.caseEvents(caseRecord.caseId) });
+      void queryClient.invalidateQueries({ queryKey: ["crm", "ledger"] });
+    },
+  });
 
   async function downloadInvoice(): Promise<void> {
     if (idToken === null) return;
@@ -885,6 +904,19 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
     }
   }
 
+  function submitLineItem(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const parsedQuantity = Number.parseInt(quantity, 10);
+    const parsedUnitPrice = Number.parseInt(unitPriceInr, 10);
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity < 1) return;
+    if (!Number.isFinite(parsedUnitPrice) || parsedUnitPrice < 0) return;
+    addLineItemMutation.mutate({
+      lineItemCode,
+      quantity: parsedQuantity,
+      unitPriceInr: parsedUnitPrice,
+    });
+  }
+
   return (
     <CaseSection
       title="Line items"
@@ -903,6 +935,68 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
         <p role="alert" className="mb-2 text-sm text-rose-800">
           {invoiceError}
         </p>
+      )}
+      {canWriteCrm && (
+        <form
+          onSubmit={submitLineItem}
+          className="mb-3 flex flex-wrap items-end gap-2 rounded-xl border border-line bg-mist p-3"
+          data-testid="add-line-item-form"
+        >
+          <label className="min-w-48 flex-1">
+            <span className={FIELD_LABEL_CLASS}>Item</span>
+            <select
+              className={`${INPUT_CLASS} w-full`}
+              value={lineItemCode}
+              onChange={(event) => setLineItemCode(event.target.value)}
+              required
+            >
+              {crm.LINE_ITEM_CATALOG.map((definition) => (
+                <option key={definition.code} value={definition.code}>
+                  {definition.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="w-24">
+            <span className={FIELD_LABEL_CLASS}>Qty</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              required
+              className={`${INPUT_CLASS} w-full`}
+              value={quantity}
+              onChange={(event) => setQuantity(event.target.value)}
+            />
+          </label>
+          <label className="w-36">
+            <span className={FIELD_LABEL_CLASS}>Unit ₹</span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              required
+              className={`${INPUT_CLASS} w-full`}
+              value={unitPriceInr}
+              onChange={(event) => setUnitPriceInr(event.target.value)}
+              placeholder="0"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={addLineItemMutation.isPending || idToken === null}
+            className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-paper hover:bg-ink/90 disabled:opacity-60"
+          >
+            {addLineItemMutation.isPending ? "Adding…" : "Add line"}
+          </button>
+          {addLineItemMutation.isError && (
+            <p role="alert" className="basis-full text-sm text-rose-800">
+              {addLineItemMutation.error instanceof Error
+                ? addLineItemMutation.error.message
+                : "Could not add line item"}
+            </p>
+          )}
+        </form>
       )}
       <div className={`${CARD_CLASS} overflow-x-auto`}>
         <table className="w-full border-collapse text-left text-sm">
@@ -923,9 +1017,9 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
                 </td>
               </tr>
             ) : (
-              caseRecord.lineItems.map((lineItem) => (
+              caseRecord.lineItems.map((lineItem, lineIndex) => (
                 <tr
-                  key={lineItem.code}
+                  key={`${lineItem.code}-${lineIndex}`}
                   data-testid="case-line-item-row"
                   className="border-t border-line"
                 >

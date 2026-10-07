@@ -112,9 +112,11 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
  * One row of the Ledger: exactly the columns spec §4 lists, and nothing else.
  *
  * This is what the projection route reads off a case META item — never
- * `legacyRaw`, never `lineItems`, never the applicant records. The same type
- * is parsed on the server (to name a row it could not read) and consumed by
- * the React client, so a column added here is a column both sides agree on.
+ * `legacyRaw`, never the full `lineItems` array, never the applicant records.
+ * `lineItemCount` is the only line-item signal on the ledger (for the Lines
+ * column). The same type is parsed on the server (to name a row it could not
+ * read) and consumed by the React client, so a column added here is a column
+ * both sides agree on.
  *
  * `applicantSummary` is optional and that is a statement about real data, not
  * a convenience: 7,156 cases were imported before `writeCase` computed one.
@@ -136,6 +138,13 @@ export const LedgerRowSchema = z.object({
   appointmentDate: isoDate.optional(),
   expectedCollectionDate: isoDate.optional(),
   totalInr: z.number().int().nonnegative(),
+  /** Number of billable lines on the case (not the full lineItems array). */
+  lineItemCount: z.number().int().nonnegative().optional(),
+  /**
+   * Unique desk-facing applicant REF NOs (family cases). Projected from
+   * `crm_applicants` at list time — not the full applicant records.
+   */
+  applicantRefs: z.array(z.string().min(1)).optional(),
   updatedAt: z.string().datetime(),
   applicantSummary: ApplicantSummarySchema.optional(),
   /**

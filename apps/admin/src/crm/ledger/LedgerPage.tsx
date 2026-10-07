@@ -20,6 +20,7 @@ import { NewCaseDrawer } from "../newCase/NewCaseDrawer";
 import {
   applyFilters,
   applySort,
+  clientOnlyFiltersFromView,
   localTodayIso,
   type ClientOnlyLedgerFilters,
   type LedgerFilters,
@@ -32,6 +33,7 @@ import { buildLedgerWorkbookBytes, exportFileName, fetchAllExportRows } from "./
 import { countOpsDashboard } from "./opsDashboard";
 import {
   appointmentsTodayViewId,
+  appointmentsUpcomingViewId,
   collectTodayViewId,
   findBuiltInLedgerView,
   liveWorkViewId,
@@ -73,17 +75,6 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debouncedValue;
 }
 
-function clientFiltersFromView(viewFilters: LedgerFilters): ClientOnlyLedgerFilters {
-  return {
-    destinationCountry: viewFilters.destinationCountry,
-    caseType: viewFilters.caseType,
-    search: viewFilters.search,
-    billingStatuses: viewFilters.billingStatuses,
-    appointmentDateOn: viewFilters.appointmentDateOn,
-    expectedCollectionDateOn: viewFilters.expectedCollectionDateOn,
-  };
-}
-
 export function LedgerPage() {
   const { email: signedInUserEmail, idToken } = useAuth();
   const { canWrite } = useAdminAccess();
@@ -94,7 +85,7 @@ export function LedgerPage() {
   ]);
   const [selectedPartnerId, setSelectedPartnerId] = useState<string | undefined>(undefined);
   const [clientLedgerFilters, setClientLedgerFilters] = useState<ClientOnlyLedgerFilters>(() =>
-    clientFiltersFromView(DEFAULT_LIVE_WORK.filters),
+    clientOnlyFiltersFromView(DEFAULT_LIVE_WORK.filters),
   );
   const [ledgerSort, setLedgerSort] = useState<LedgerSort>(DEFAULT_LIVE_WORK.sort);
   const [activeViewId, setActiveViewId] = useState<string | undefined>(liveWorkViewId());
@@ -124,6 +115,10 @@ export function LedgerPage() {
     [clientLedgerFilters, debouncedSearch],
   );
   const ledgerRowsQuery = useLedgerRows(selectedCaseStatuses, selectedPartnerId, serverClientFilters);
+  // Queues strip counts must not follow the table's date filter — otherwise
+  // "Appointments today" loads only today rows and Upcoming flickers to 0.
+  // Same React Query key as Live work when the table is already on that view.
+  const opsLedgerQuery = useLedgerRows([...crm.LIVE_CASE_STATUSES], undefined, {});
   const partnersQuery = usePartners();
   const reviewSummaryQuery = useReviewSummary();
   const reviewEntriesByCaseRef = useMemo(() => {
@@ -159,7 +154,7 @@ export function LedgerPage() {
   function applyLedgerView(viewFilters: LedgerFilters, viewSort: LedgerSort) {
     setSelectedCaseStatuses(viewFilters.statuses);
     setSelectedPartnerId(viewFilters.partnerId);
-    setClientLedgerFilters(clientFiltersFromView(viewFilters));
+    setClientLedgerFilters(clientOnlyFiltersFromView(viewFilters));
     setLedgerSort(viewSort);
   }
 
@@ -200,11 +195,12 @@ export function LedgerPage() {
 
   const todayIso = localTodayIso();
   const opsCounts = useMemo(
-    () => countOpsDashboard(ledgerLoad?.rows ?? [], todayIso),
-    [ledgerLoad?.rows, todayIso],
+    () => countOpsDashboard(opsLedgerQuery.data?.rows ?? [], todayIso),
+    [opsLedgerQuery.data?.rows, todayIso],
   );
   const openReviewCaseCount = reviewSummaryQuery.data?.entries.length ?? 0;
-  const isFetchingMore = ledgerRowsQuery.isFetchingMore === true;
+  const isFetchingMore =
+    ledgerRowsQuery.isFetchingMore === true || opsLedgerQuery.isFetchingMore === true;
 
   function applyBuiltInViewById(viewId: string) {
     const builtInView = findBuiltInLedgerView(viewId);
@@ -325,9 +321,9 @@ export function LedgerPage() {
 
         <div
           className="flex flex-wrap items-baseline gap-x-5 gap-y-1 border-b border-line pb-2 text-sm"
-          aria-label="Today's work"
+          aria-label="Work queues"
         >
-          <span className="text-xs font-medium uppercase tracking-wide text-ink-soft">Today</span>
+          <span className="text-xs font-medium uppercase tracking-wide text-ink-soft">Queues</span>
           <button
             type="button"
             onClick={() => applyBuiltInViewById(collectTodayViewId())}
@@ -344,9 +340,20 @@ export function LedgerPage() {
             onClick={() => applyBuiltInViewById(appointmentsTodayViewId())}
             className="text-ink hover:underline"
           >
-            Appointments{" "}
+            Appointments today{" "}
             <span className="tabular-nums text-ink-soft">
               {opsCounts.appointmentsToday.toLocaleString()}
+              {isFetchingMore ? "…" : ""}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => applyBuiltInViewById(appointmentsUpcomingViewId())}
+            className="text-ink hover:underline"
+          >
+            Upcoming{" "}
+            <span className="tabular-nums text-ink-soft">
+              {opsCounts.appointmentsUpcoming.toLocaleString()}
               {isFetchingMore ? "…" : ""}
             </span>
           </button>
@@ -355,7 +362,7 @@ export function LedgerPage() {
             onClick={() => applyBuiltInViewById(liveWorkViewId())}
             className="text-ink hover:underline"
           >
-            Pending{" "}
+            Live work{" "}
             <span className="tabular-nums text-ink-soft">
               {opsCounts.pendingLive.toLocaleString()}
               {isFetchingMore ? "…" : ""}

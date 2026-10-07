@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { COUNTRY_PRODUCTS, getCountryProduct, labelsForCountryCode } from "@rgs/shared";
+import { COUNTRY_PRODUCTS, getCountryProduct, ISO_COUNTRIES, labelsForCountryCode } from "@rgs/shared";
 import { buildTestContext, closeTestContexts } from "../helpers";
 import { listDestinationCountries } from "../../src/domain/crm/destinationCountries";
 import { upsertCountryProduct } from "../../src/domain/config";
@@ -10,9 +10,9 @@ const ADMIN_ID = "admin_1";
 const ADMIN_EMAIL = "admin@rgs.test";
 
 describe("listDestinationCountries", () => {
-  it("returns unique country codes with full names, sorted by name", async () => {
+  it("returns every ISO country with full names, sorted by name", async () => {
     const destinations = await listDestinationCountries(await buildTestContext());
-    expect(destinations.length).toBeGreaterThan(0);
+    expect(destinations).toHaveLength(ISO_COUNTRIES.length);
 
     const codes = destinations.map((destination) => destination.countryCode);
     expect(new Set(codes).size).toBe(codes.length);
@@ -30,9 +30,23 @@ describe("listDestinationCountries", () => {
     );
     expect(names).toEqual(sortedNames);
 
-    const seedUae = COUNTRY_PRODUCTS.find((product) => product.countryCode === "AE");
-    expect(seedUae).toBeDefined();
     expect(destinations.some((destination) => destination.countryCode === "AE")).toBe(true);
+    // Countries with no Config product still appear (full world list).
+    expect(destinations.some((destination) => destination.countryCode === "BR")).toBe(true);
+  });
+
+  it("prefers Config country names over the ISO short name", async () => {
+    const context = await buildTestContext();
+    await upsertCountryProduct(context, ADMIN_ID, ADMIN_EMAIL, {
+      ...getCountryProduct("AE"),
+      countryName: "United Arab Emirates (RGS)",
+      active: false,
+    });
+
+    const destinations = await listDestinationCountries(context);
+    expect(destinations.find((destination) => destination.countryCode === "AE")?.countryName).toBe(
+      "United Arab Emirates (RGS)",
+    );
   });
 
   // The New case drawer previews the stamp from this route, because the Config
@@ -52,7 +66,7 @@ describe("listDestinationCountries", () => {
     expect(uae?.requiredDocuments).toEqual(["Passport bio page", "Emirates ID copy"]);
   });
 
-  it("previews an empty list for an active country with no documents configured", async () => {
+  it("previews an empty list for a country with no documents configured", async () => {
     const context = await buildTestContext();
     await upsertCountryProduct(context, ADMIN_ID, ADMIN_EMAIL, {
       ...getCountryProduct("AE"),

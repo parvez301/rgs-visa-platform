@@ -91,6 +91,7 @@ describe("LedgerTable", () => {
       "receivedDate",
       "appointmentDate",
       "expectedCollectionDate",
+      "lineItemCount",
       "totalInr",
     ]);
   });
@@ -162,7 +163,7 @@ describe("LedgerTable", () => {
     // the scroll has settled either way -- and the sibling scroll test below
     // has done exactly this since it was written.
     await act(async () => {
-      await scrollLedgerTo(container, 3000 * 40);
+      await scrollLedgerTo(container, 3000 * 48);
     });
 
     // Asserted against a row the virtualizer actually mounted -- this is the
@@ -268,7 +269,7 @@ describe("LedgerTable", () => {
     // React did not dispatch. The neighbouring scroll test carried the suite's
     // one known `act(...)` warning until R78 wrapped it the same way.
     await act(async () => {
-      await scrollLedgerTo(container, 3 * 40);
+      await scrollLedgerTo(container, 3 * 48);
     });
     expect(mountedCaseIds(container)).toContain("case_0000");
 

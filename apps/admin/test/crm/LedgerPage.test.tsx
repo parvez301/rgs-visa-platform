@@ -150,6 +150,7 @@ function buildLedgerRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
     billingStatus: "UNBILLED",
     receivedDate: "2026-03-04",
     totalInr: 12000,
+    lineItemCount: 0,
     updatedAt: "2026-03-04T10:00:00.000Z",
     ...overrides,
   };

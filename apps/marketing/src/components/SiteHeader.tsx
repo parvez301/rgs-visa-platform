@@ -7,6 +7,7 @@ import {
   applyUrl,
 } from "@/lib/site";
 import { AnnouncementRibbon } from "@/components/AnnouncementRibbon";
+import { SocialLinks } from "./SocialLinks";
 
 export function SiteHeader() {
   return (
@@ -15,14 +16,17 @@ export function SiteHeader() {
       <div className="bg-ink text-white text-xs">
         <div className="mx-auto max-w-6xl px-4 py-1.5 flex items-center justify-between gap-4">
           <p className="mrz truncate">Bhikaji Cama Place · New Delhi</p>
-          <p className="flex gap-4 shrink-0">
+          <div className="flex items-center gap-4 shrink-0">
+            <div className="hidden lg:block">
+              <SocialLinks tone="dark" />
+            </div>
             <a href={CONTACT_PHONE_HREF} className="hover:text-rgs-red">
               {CONTACT_PHONE}
             </a>
             <a href={`mailto:${CONTACT_EMAIL}`} className="hidden sm:inline hover:text-rgs-red">
               {CONTACT_EMAIL}
             </a>
-          </p>
+          </div>
         </div>
       </div>
       <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between gap-6">

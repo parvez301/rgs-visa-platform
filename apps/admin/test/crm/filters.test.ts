@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { crm } from "@rgs/shared";
-import { applyFilters, applySort, type LedgerFilters, type LedgerSort } from "../../src/crm/ledger/filters";
+import {
+  applyFilters,
+  applySort,
+  clientOnlyFiltersFromView,
+  type LedgerFilters,
+  type LedgerSort,
+} from "../../src/crm/ledger/filters";
 
 function buildRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
   return {
@@ -14,6 +20,7 @@ function buildRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
     billingStatus: "UNBILLED",
     receivedDate: "2026-03-04",
     totalInr: 12_000,
+    lineItemCount: 0,
     updatedAt: "2026-03-04T10:00:00.000Z",
     ...overrides,
   };
@@ -22,6 +29,28 @@ function buildRow(overrides: Partial<crm.LedgerRow> = {}): crm.LedgerRow {
 const emptyFilters: LedgerFilters = { statuses: [] };
 
 describe("applyFilters", () => {
+  it("matches an applicant REF NO on a family row", () => {
+    const rows = [
+      buildRow({ caseId: "family", caseRef: "38599", applicantRefs: ["38599", "38600", "38601"] }),
+      buildRow({ caseId: "solo", caseRef: "38603" }),
+    ];
+
+    expect(applyFilters(rows, { ...emptyFilters, search: "38600" }).map((row) => row.caseId)).toEqual([
+      "family",
+    ]);
+  });
+
+  it("matches the family group name even when searchText omits it", () => {
+    const rows = [
+      buildRow({ caseId: "family", caseRef: "38608", groupName: "PATANJALI FAMILY" }),
+      buildRow({ caseId: "solo", caseRef: "38603" }),
+    ];
+
+    expect(applyFilters(rows, { ...emptyFilters, search: "patanjali" }).map((row) => row.caseId)).toEqual([
+      "family",
+    ]);
+  });
+
   it("matches caseRef case-insensitively and ignores surrounding space", () => {
     const rows = [buildRow({ caseId: "case_a", caseRef: "RGS-1001" }), buildRow({ caseId: "case_b", caseRef: "RGS-2002" })];
 
@@ -105,6 +134,51 @@ describe("applyFilters", () => {
         "2026-09-22",
       ).map((row) => row.caseId),
     ).toEqual(["case_collect_today"]);
+  });
+
+  it("filters by appointmentDateOnOrAfter so today and future stay visible", () => {
+    const rows = [
+      buildRow({ caseId: "past", appointmentDate: "2026-09-01" }),
+      buildRow({ caseId: "today", appointmentDate: "2026-09-22" }),
+      buildRow({ caseId: "future", appointmentDate: "2026-10-01" }),
+      buildRow({ caseId: "none" }),
+    ];
+
+    expect(
+      applyFilters(
+        rows,
+        { ...emptyFilters, appointmentDateOnOrAfter: "__TODAY__" },
+        {},
+        "2026-09-22",
+      ).map((row) => row.caseId),
+    ).toEqual(["today", "future"]);
+  });
+
+  it("filters by appointmentDateAfter so Upcoming excludes today", () => {
+    const rows = [
+      buildRow({ caseId: "past", appointmentDate: "2026-09-01" }),
+      buildRow({ caseId: "today", appointmentDate: "2026-09-22" }),
+      buildRow({ caseId: "future", appointmentDate: "2026-10-01" }),
+      buildRow({ caseId: "none" }),
+    ];
+
+    expect(
+      applyFilters(
+        rows,
+        { ...emptyFilters, appointmentDateAfter: "__TODAY__" },
+        {},
+        "2026-09-22",
+      ).map((row) => row.caseId),
+    ).toEqual(["future"]);
+  });
+
+  it("clientOnlyFiltersFromView keeps appointmentDateOnOrAfter for the Appointments strip", () => {
+    expect(
+      clientOnlyFiltersFromView({
+        statuses: ["NEW"],
+        appointmentDateOnOrAfter: "__TODAY__",
+      }),
+    ).toEqual({ appointmentDateOnOrAfter: "__TODAY__" });
   });
 
   it("returns every row for an empty filter set rather than none", () => {

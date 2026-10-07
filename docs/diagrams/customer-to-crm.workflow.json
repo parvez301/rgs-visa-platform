@@ -1,0 +1,114 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Three ways work reaches you",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "legend": { "mode": "hidden" },
+    "viewBox": [1200, 528]
+  },
+  "lanes": [
+    { "id": "apply", "label": "Apply online · Queue only" },
+    { "id": "website_leads", "label": "Leads coming from website" },
+    { "id": "walkin", "label": "Call or walk in" }
+  ],
+  "phases": [
+    { "id": "start", "label": "Customer starts", "fromCol": 0, "toCol": 1 },
+    { "id": "middle", "label": "What happens", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "desk", "label": "Where it lands", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["see_site", "send_papers", "ready_file"],
+  "nodes": [
+    {
+      "id": "see_site",
+      "lane": "apply",
+      "col": 0,
+      "type": "frontend",
+      "label": "Looks at website",
+      "sublabel": "visas and fees",
+      "width": 132
+    },
+    {
+      "id": "send_papers",
+      "lane": "apply",
+      "col": 3,
+      "type": "security",
+      "label": "Sends papers",
+      "sublabel": "account + uploads",
+      "width": 132
+    },
+    {
+      "id": "ready_file",
+      "lane": "apply",
+      "col": 5,
+      "type": "backend",
+      "label": "Stays in Queue",
+      "sublabel": "not in CRM",
+      "width": 132
+    },
+    {
+      "id": "leave_number",
+      "lane": "website_leads",
+      "col": 0,
+      "type": "frontend",
+      "label": "Leaves a number",
+      "sublabel": "name and phone",
+      "width": 132
+    },
+    {
+      "id": "lead_list",
+      "lane": "website_leads",
+      "col": 3,
+      "type": "messagebus",
+      "label": "Shows in Leads",
+      "sublabel": "waiting for a call",
+      "width": 132
+    },
+    {
+      "id": "open_file",
+      "lane": "website_leads",
+      "col": 5,
+      "type": "cloud",
+      "label": "You open a file",
+      "sublabel": "after you call",
+      "width": 132
+    },
+    {
+      "id": "call_office",
+      "lane": "walkin",
+      "col": 0,
+      "type": "external",
+      "label": "Calls or visits",
+      "sublabel": "office or phone",
+      "width": 132
+    },
+    {
+      "id": "type_file",
+      "lane": "walkin",
+      "col": 3,
+      "type": "backend",
+      "label": "You type a file",
+      "sublabel": "new case",
+      "width": 132
+    },
+    {
+      "id": "work_file",
+      "lane": "walkin",
+      "col": 5,
+      "type": "backend",
+      "label": "You work the file",
+      "sublabel": "same as others",
+      "width": 132
+    }
+  ],
+  "edges": [
+    { "id": "apply-papers", "from": "see_site", "to": "send_papers", "label": "Start application", "variant": "emphasis" },
+    { "id": "papers-ready", "from": "send_papers", "to": "ready_file", "label": "already a file", "variant": "emphasis" },
+    { "id": "lead-shows", "from": "leave_number", "to": "lead_list", "label": "website form" },
+    { "id": "lead-open", "from": "lead_list", "to": "open_file", "label": "you create it" },
+    { "id": "walkin-type", "from": "call_office", "to": "type_file", "label": "staff starts it" },
+    { "id": "type-work", "from": "type_file", "to": "work_file" }
+  ],
+  "cards": []
+}

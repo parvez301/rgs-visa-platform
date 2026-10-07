@@ -7,6 +7,7 @@ import {
   CONTACT_EMAIL,
   CONTACT_PHONE,
   CONTACT_PHONE_HREF,
+  OFFICE_HOURS,
 } from "@/lib/site";
 
 export function generateStaticParams() {
@@ -103,7 +104,7 @@ export default async function ServiceDetailPage({
               </a>
             </div>
             <p className="mt-4 text-xs text-ink-soft text-center">
-              Mon–Sat, 10am–7pm · Bhikaji Cama Place, New Delhi
+              {OFFICE_HOURS} · Bhikaji Cama Place, New Delhi
             </p>
           </aside>
         </div>
