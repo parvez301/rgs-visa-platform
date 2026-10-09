@@ -550,8 +550,13 @@ export const crmClient = {
   downloadCaseInvoice(
     idToken: string,
     caseId: string,
+    options: { lineItemIndexes?: number[] } = {},
   ): Promise<{ fileName: string; contentType: string; pdfBase64: string }> {
-    return apiFetch(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}/invoice`, { idToken });
+    const query =
+      options.lineItemIndexes !== undefined && options.lineItemIndexes.length > 0
+        ? `?lineItemIndexes=${encodeURIComponent(options.lineItemIndexes.join(","))}`
+        : "";
+    return apiFetch(`${CRM_BASE}/cases/${encodeURIComponent(caseId)}/invoice${query}`, { idToken });
   },
 
   setCustody(

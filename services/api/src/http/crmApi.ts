@@ -217,6 +217,25 @@ function nonBlankQueryParam(rawValue: string | undefined): string | undefined {
   return trimmedValue === undefined || trimmedValue === "" ? undefined : trimmedValue;
 }
 
+/** `?lineItemIndexes=0,2` → `[0, 2]`. Absent/blank → undefined (invoice all lines). */
+function parseLineItemIndexesQuery(rawValue: string | undefined): number[] | undefined {
+  const trimmedValue = nonBlankQueryParam(rawValue);
+  if (trimmedValue === undefined) return undefined;
+  const indexes: number[] = [];
+  for (const token of trimmedValue.split(",")) {
+    const trimmedToken = token.trim();
+    if (trimmedToken === "") {
+      throw badRequest("lineItemIndexes contains a blank entry");
+    }
+    const parsedIndex = Number(trimmedToken);
+    if (!Number.isInteger(parsedIndex)) {
+      throw badRequest(`lineItemIndexes entry ${trimmedToken} is not an integer`);
+    }
+    indexes.push(parsedIndex);
+  }
+  return indexes;
+}
+
 /**
  * Combined ledger filters. An unrecognised enum value is a 400 naming it.
  * Dates are validated by the domain function (real calendar day, 400 otherwise).
@@ -509,11 +528,15 @@ export function registerCrmRoutes(router: Router, context: AppContext): Router {
     // case history, so it is gated as a write.
     .add("GET", "/api/v1/admin/crm/cases/{caseId}/invoice", async (requestContext) => {
       requireWrite(requestContext, "crm");
+      const lineItemIndexes = parseLineItemIndexesQuery(
+        requestContext.queryParams["lineItemIndexes"],
+      );
       return generateCaseInvoice(
         context,
         tenantId,
         requestContext.pathParams["caseId"]!,
         requestContext.callerEmail,
+        lineItemIndexes === undefined ? {} : { lineItemIndexes },
       );
     })
     .add("POST", "/api/v1/admin/crm/appointment-reminders/run", async (requestContext) => {

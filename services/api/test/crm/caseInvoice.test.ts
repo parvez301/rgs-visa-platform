@@ -72,4 +72,48 @@ describe("generateCaseInvoice", () => {
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
     expect(events.some((event) => event.eventType === "INVOICE_GENERATED")).toBe(true);
   });
+
+  it("invoices only the selected line indexes", async () => {
+    const context = await buildTestContext();
+    const partner = await createPartner(context, TENANT_ID, { canonicalName: "Skyline Travels" }, ACTOR);
+    const traveller = await upsertTraveller(context, TENANT_ID, { fullName: "Asha Rao" });
+    const created = await createCase(
+      context,
+      TENANT_ID,
+      {
+        caseRef: "RGS-INV-3",
+        caseType: "VISA",
+        partnerId: partner.partnerId,
+        destinationCountry: "AE",
+        visaType: "TOURIST",
+        receivedDate: "2026-09-16",
+        applicants: [{ applicantRef: "A1", travellerId: traveller.travellerId }],
+      },
+      ACTOR,
+    );
+    await addLineItem(
+      context,
+      TENANT_ID,
+      created.caseId,
+      { lineItemCode: "VISA_SERVICE_FEE", quantity: 1, unitPriceInr: 3500 },
+      ACTOR,
+    );
+    await addLineItem(
+      context,
+      TENANT_ID,
+      created.caseId,
+      { lineItemCode: "GOVT_FEE", quantity: 1, unitPriceInr: 1200 },
+      ACTOR,
+    );
+
+    const invoice = await generateCaseInvoice(context, TENANT_ID, created.caseId, ACTOR, {
+      lineItemIndexes: [0],
+    });
+
+    expect(invoice.contentType).toBe("application/pdf");
+    const events = await listCaseEvents(context, TENANT_ID, created.caseId);
+    const invoiceEvent = events.find((event) => event.eventType === "INVOICE_GENERATED");
+    expect(invoiceEvent?.meta["lineItemCount"]).toBe(1);
+    expect(invoiceEvent?.meta["totalInr"]).toBe(3500);
+  });
 });

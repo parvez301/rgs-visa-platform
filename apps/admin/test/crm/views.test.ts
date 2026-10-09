@@ -35,9 +35,9 @@ describe("builtInLedgerViews", () => {
     ]);
   });
 
-  it("sorts 'Live work' by receivedDate desc and scopes it to LIVE_CASE_STATUSES", () => {
+  it("sorts 'Live work' by caseRef desc and scopes it to LIVE_CASE_STATUSES", () => {
     const [liveWork] = builtInLedgerViews();
-    expect(liveWork!.sort).toEqual({ column: "receivedDate", direction: "desc" });
+    expect(liveWork!.sort).toEqual({ column: "caseRef", direction: "desc" });
     expect(liveWork!.filters.statuses.sort()).toEqual([...crm.LIVE_CASE_STATUSES].sort());
   });
 

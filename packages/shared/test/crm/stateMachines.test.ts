@@ -17,6 +17,7 @@ describe("case status machine", () => {
       "ADDITIONAL_DOCS_REQUIRED",
       "READY_FOR_SUBMISSION",
       "APPOINTMENT_SET",
+      "ONLINE_SUBMISSION_DONE",
       "SUBMITTED",
       "UNDER_PROCESS",
       "PASSPORT_RECEIVED",

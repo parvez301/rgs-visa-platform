@@ -189,7 +189,7 @@ export function EditCaseDrawer({ caseRecord, onClose }: EditCaseDrawerProps) {
     if (caseDraft.caseType === "VISA" && caseDraft.visaType === "") return "Choose the visa type for a visa case.";
     if (!FULL_DATE_PATTERN.test(caseDraft.receivedDate)) return "Enter the received date as a full date.";
     if (caseDraft.submissionDate !== "" && !FULL_DATE_PATTERN.test(caseDraft.submissionDate)) {
-      return "Enter the submission date as a full date.";
+      return "Enter the online submission date as a full date.";
     }
     if (caseDraft.appointmentDate !== "" && !FULL_DATE_PATTERN.test(caseDraft.appointmentDate)) {
       return "Enter the appointment date as a full date.";
@@ -391,7 +391,7 @@ export function EditCaseDrawer({ caseRecord, onClose }: EditCaseDrawerProps) {
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className={FIELD_LABEL_CLASS}>Submission date</span>
+              <span className={FIELD_LABEL_CLASS}>Online submission date</span>
               <input
                 type="date"
                 value={caseDraft.submissionDate}

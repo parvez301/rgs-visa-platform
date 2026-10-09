@@ -253,6 +253,21 @@ function readSortValue(row: crm.LedgerRow, column: LedgerSort["column"]): string
  * direction on "Appointment" must never be the one way to hunt for cases
  * with no appointment date; that is not what a direction toggle means.
  */
+/** Numeric REF strings (`38610`) sort by value; mixed/prefixed fall back to localeCompare. */
+function compareCaseRef(valueLeft: string, valueRight: string): number {
+  const numberLeft = Number(valueLeft);
+  const numberRight = Number(valueRight);
+  if (
+    Number.isFinite(numberLeft) &&
+    Number.isFinite(numberRight) &&
+    String(numberLeft) === valueLeft &&
+    String(numberRight) === valueRight
+  ) {
+    return numberLeft - numberRight;
+  }
+  return valueLeft.localeCompare(valueRight);
+}
+
 export function applySort(rows: crm.LedgerRow[], sort: LedgerSort): crm.LedgerRow[] {
   const directionMultiplier = sort.direction === "asc" ? 1 : -1;
   return [...rows].sort((rowLeft, rowRight) => {
@@ -263,6 +278,9 @@ export function applySort(rows: crm.LedgerRow[], sort: LedgerSort): crm.LedgerRo
     if (valueRight === undefined) return -1;
     if (typeof valueLeft === "number" && typeof valueRight === "number") {
       return (valueLeft - valueRight) * directionMultiplier;
+    }
+    if (sort.column === "caseRef") {
+      return compareCaseRef(String(valueLeft), String(valueRight)) * directionMultiplier;
     }
     return String(valueLeft).localeCompare(String(valueRight)) * directionMultiplier;
   });

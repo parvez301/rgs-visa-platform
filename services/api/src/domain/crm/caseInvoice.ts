@@ -11,20 +11,37 @@ export interface CaseInvoicePayload {
   pdfBase64: string;
 }
 
+export interface GenerateCaseInvoiceOptions {
+  /** When set, only these line indexes are billed. Omitted = all lines. */
+  lineItemIndexes?: number[];
+}
+
 /**
  * Builds a downloadable invoice PDF for a case that already has line items.
  * Empty bills are refused -- an invoice with no lines is not a bill.
+ * Optional `lineItemIndexes` lets the desk invoice a subset (CRM-111).
  */
 export async function generateCaseInvoice(
   context: AppContext,
   tenantId: string,
   caseId: string,
   actorEmail: string,
+  options: GenerateCaseInvoiceOptions = {},
 ): Promise<CaseInvoicePayload> {
   const crmCase = await readCaseOrThrow(context, tenantId, caseId);
   if (crmCase.lineItems.length === 0) {
     throw badRequest("This case has no line items, so there is nothing to invoice.");
   }
+
+  const selectedIndexes = resolveSelectedLineIndexes(
+    crmCase.lineItems.length,
+    options.lineItemIndexes,
+  );
+  const selectedLines = selectedIndexes.map((index) => crmCase.lineItems[index]!);
+  const totalInr = selectedLines.reduce(
+    (sum, lineItem) => sum + lineItem.amountInr * lineItem.quantity,
+    0,
+  );
 
   const partner = await getPartnerOrThrow(context, tenantId, crmCase.partnerId);
   const issuedAtIso = context.now().toISOString();
@@ -33,12 +50,12 @@ export async function generateCaseInvoice(
     partnerName: partner.canonicalName,
     destinationCountry: crmCase.destinationCountry,
     issuedAtIso,
-    lineItems: crmCase.lineItems.map((lineItem) => ({
+    lineItems: selectedLines.map((lineItem) => ({
       label: lineItem.label,
       quantity: lineItem.quantity,
       unitPriceInr: lineItem.amountInr,
     })),
-    totalInr: crmCase.totalInr,
+    totalInr,
   });
 
   const safeRef = crmCase.caseRef.replace(/[^A-Za-z0-9._-]+/g, "-");
@@ -50,9 +67,28 @@ export async function generateCaseInvoice(
 
   await recordCrmEvent(context, tenantId, caseId, "INVOICE_GENERATED", actorEmail, {
     fileName: payload.fileName,
-    totalInr: crmCase.totalInr,
-    lineItemCount: crmCase.lineItems.length,
+    totalInr,
+    lineItemCount: selectedLines.length,
   });
 
   return payload;
+}
+
+function resolveSelectedLineIndexes(
+  lineCount: number,
+  requestedIndexes: number[] | undefined,
+): number[] {
+  if (requestedIndexes === undefined) {
+    return Array.from({ length: lineCount }, (_value, index) => index);
+  }
+  if (requestedIndexes.length === 0) {
+    throw badRequest("Select at least one line item to invoice.");
+  }
+  const uniqueIndexes = [...new Set(requestedIndexes)];
+  for (const index of uniqueIndexes) {
+    if (!Number.isInteger(index) || index < 0 || index >= lineCount) {
+      throw badRequest(`Line item index ${index} is not on this case.`);
+    }
+  }
+  return uniqueIndexes.sort((left, right) => left - right);
 }

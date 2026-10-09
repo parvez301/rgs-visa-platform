@@ -178,6 +178,12 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
   },
   { key: "receivedDate", header: "Received", width: 100, render: (row) => row.receivedDate },
   {
+    key: "submissionDate",
+    header: "Sub date",
+    width: 100,
+    render: (row) => row.submissionDate ?? "—",
+  },
+  {
     key: "appointmentDate",
     header: "Appointment",
     width: 110,

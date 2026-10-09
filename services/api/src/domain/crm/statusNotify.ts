@@ -105,9 +105,9 @@ export function buildStatusEmailVars(
 
 /**
  * Renders the announced status's template and sends it to the vendor and the
- * client. A missing, disabled or corrupt template sends nothing and records nothing --
- * the old hard-coded generic body is deliberately gone (spec §4.4), so an
- * unseeded environment is silent rather than wrong. Each recipient is
+ * client. A missing DB row uses the same built-in default the admin list shows
+ * (CRM-109: unseeded envs were silent while the UI looked "enabled"). A
+ * disabled or corrupt template still sends nothing. Each recipient is
  * independent: no address → no send and no event for that recipient only. Send
  * failures are the email adapter's problem (`BestEffortEmailSender` in
  * production); the matching *_NOTIFIED event is recorded after each send
@@ -134,7 +134,17 @@ async function sendStatusTemplateMail(
     );
     return;
   }
-  if (template === undefined || !template.enabled) return;
+  if (template === undefined) {
+    const defaults = crm.defaultStatusEmailTemplate(announcedStatus);
+    template = {
+      tenantId,
+      caseStatus: announcedStatus,
+      ...defaults,
+      updatedAt: "1970-01-01T00:00:00.000Z",
+      updatedBy: "",
+    };
+  }
+  if (!template.enabled) return;
 
   const partner = await getPartnerOrThrow(context, tenantId, crmCase.partnerId);
   const travellers = await resolveCaseTravellers(context, tenantId, crmCase.applicants);

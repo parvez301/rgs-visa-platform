@@ -227,6 +227,18 @@ describe("applySort", () => {
     expect(sorted.map((row) => row.caseId)).toEqual(["case_300", "case_2000", "case_10000"]);
   });
 
+  it("sorts numeric caseRef by value descending", () => {
+    const rows = [
+      buildRow({ caseId: "case_a", caseRef: "999" }),
+      buildRow({ caseId: "case_b", caseRef: "38610" }),
+      buildRow({ caseId: "case_c", caseRef: "38609" }),
+    ];
+
+    const sorted = applySort(rows, { column: "caseRef", direction: "desc" });
+
+    expect(sorted.map((row) => row.caseRef)).toEqual(["38610", "38609", "999"]);
+  });
+
   it("always sorts a row with no appointmentDate last, in both directions", () => {
     const rows = [
       buildRow({ caseId: "case_no_date", appointmentDate: undefined }),

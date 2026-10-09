@@ -23,7 +23,7 @@ describe("normalizeStatus — case progress", () => {
     expect(submitted.custody).toBe("AT_EMBASSY");
 
     const onlineSubmitted = normalizeStatus("ONLINE SUBMITTED");
-    expect(onlineSubmitted.caseStatus).toBe("SUBMITTED");
+    expect(onlineSubmitted.caseStatus).toBe("ONLINE_SUBMISSION_DONE");
     expect(onlineSubmitted.custody).toBe("AT_EMBASSY");
   });
 

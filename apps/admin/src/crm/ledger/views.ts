@@ -11,13 +11,10 @@ export interface LedgerView {
 }
 
 /**
- * The default sort for the built-in views the brief does not name a sort for
- * ("Awaiting payment", "Unbilled", "Everything"). "Live work" has an explicit
- * one (`receivedDate` desc); these get the same ordering rather than an
- * arbitrary different one, so a desk agent moving between built-in views
- * does not also have to re-learn a new sort each time.
+ * Default sort for built-in views: newest REF first (CRM-110). Desk REFs are
+ * sequential numbers; highest caseRef at the top matches the spreadsheet habit.
  */
-const DEFAULT_BUILT_IN_SORT: LedgerSort = { column: "receivedDate", direction: "desc" };
+const DEFAULT_BUILT_IN_SORT: LedgerSort = { column: "caseRef", direction: "desc" };
 
 const LIVE_WORK_VIEW_ID = "built-in-live-work";
 const COLLECT_TODAY_VIEW_ID = "built-in-collect-today";
@@ -102,7 +99,7 @@ export function builtInLedgerViews(): LedgerView[] {
       viewId: LIVE_WORK_VIEW_ID,
       name: "Live work",
       filters: { statuses: [...crm.LIVE_CASE_STATUSES] },
-      sort: { column: "receivedDate", direction: "desc" },
+      sort: DEFAULT_BUILT_IN_SORT,
     },
     {
       viewId: COLLECT_TODAY_VIEW_ID,

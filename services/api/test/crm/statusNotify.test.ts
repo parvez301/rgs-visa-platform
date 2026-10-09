@@ -331,13 +331,19 @@ describe("status-change email", () => {
     expect(changeNotifications).toHaveLength(0);
   });
 
-  it("sends nothing when no template row exists, and never falls back to a generic body", async () => {
+  it("falls back to the built-in default template when no template row exists", async () => {
     const context = await buildTestContext({ seedStatusEmailTemplates: false });
-    const created = await seedCase(context, { caseRef: "RGS-NOROW-1", partnerContactEmail: "desk@skyline.test" });
+    const created = await seedCase(context, {
+      caseRef: "RGS-NOROW-1",
+      partnerContactEmail: "desk@skyline.test",
+      clientEmail: "asha@example.com",
+    });
+    context.email.sentEmails.length = 0;
 
     await changeCaseStatus(context, TENANT_ID, created.caseId, "DOCS_UNDER_REVIEW", ACTOR);
 
-    expect(context.email.sentEmails).toHaveLength(0);
+    expect(context.email.sentEmails).toHaveLength(2);
+    expect(context.email.sentEmails[0]!.subject).toContain("Documents Under Review");
     expect((await getCase(context, TENANT_ID, created.caseId)).caseStatus).toBe("DOCS_UNDER_REVIEW");
   });
 

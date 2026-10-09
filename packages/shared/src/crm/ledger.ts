@@ -135,6 +135,7 @@ export const LedgerRowSchema = z.object({
   caseStatus: z.enum(CASE_STATUSES),
   billingStatus: z.enum(BILLING_STATUSES),
   receivedDate: isoDate,
+  submissionDate: isoDate.optional(),
   appointmentDate: isoDate.optional(),
   expectedCollectionDate: isoDate.optional(),
   totalInr: z.number().int().nonnegative(),

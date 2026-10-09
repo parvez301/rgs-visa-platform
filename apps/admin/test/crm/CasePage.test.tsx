@@ -145,7 +145,7 @@ function renderCasePage(
       };
       return Promise.resolve({ ok: true, status: 200, json: async () => updatedCase });
     }
-    if (requestMethod === "GET" && requestUrl.endsWith("/invoice")) {
+    if (requestMethod === "GET" && /\/invoice(?:\?|$)/.test(requestUrl)) {
       return Promise.resolve({
         ok: true,
         status: 200,
@@ -264,7 +264,8 @@ describe("CasePage", () => {
     expect(screen.getAllByText("Skyline Travels")).toHaveLength(1);
     expect(screen.getByLabelText("Vendor email")).toHaveValue("desk@skyline.test");
     expect(screen.getAllByText("Visa · Tourist")).toHaveLength(1);
-    expect(screen.getAllByText("2026-03-01")).toHaveLength(1);
+    expect(screen.getByLabelText("Received date")).toHaveValue("2026-03-01");
+    expect(screen.getByLabelText("Online submission date")).toHaveValue("2026-03-05");
 
     const applicantRows = screen.getAllByTestId("case-applicant-row");
     expect(applicantRows).toHaveLength(2);
@@ -327,7 +328,9 @@ describe("CasePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Download invoice" }));
 
     await waitFor(() => {
-      expect(requestLog.some((request) => request.url.endsWith("/invoice"))).toBe(true);
+      expect(
+        requestLog.some((request) => /\/invoice\?lineItemIndexes=/.test(request.url)),
+      ).toBe(true);
       expect(createObjectUrl).toHaveBeenCalled();
     });
   });
@@ -427,7 +430,10 @@ describe("CasePage", () => {
     // all four to the server. `fireEvent.change` rather than `user.type`
     // because that is exactly the sequence of values a date input hands React,
     // and it is the sequence -- not the typing -- this test is about.
-    const { requestLog } = renderCasePage({ caseRecord: buildCase({ appointmentDate: "2026-03-09" }) });
+    // Already APPOINTMENT_SET so booking the date does not also PUT /status.
+    const { requestLog } = renderCasePage({
+      caseRecord: buildCase({ appointmentDate: "2026-03-09", caseStatus: "APPOINTMENT_SET" }),
+    });
 
     const appointmentDateControl = await screen.findByLabelText("Appointment date");
     for (const partiallyTypedDate of ["0002-03-20", "0020-03-20", "0202-03-20", "2026-03-20"]) {

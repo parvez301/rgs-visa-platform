@@ -215,6 +215,7 @@ select
   c.case_status,
   c.billing_status,
   to_char(c.received_date, 'YYYY-MM-DD') as received_date,
+  to_char(c.submission_date, 'YYYY-MM-DD') as submission_date,
   to_char(c.appointment_date, 'YYYY-MM-DD') as appointment_date,
   to_char(c.expected_collection_date, 'YYYY-MM-DD') as expected_collection_date,
   c.total_inr,
@@ -278,6 +279,7 @@ function ledgerRowFromDb(dbRow: LedgerDbRow): crm.LedgerRow {
   const optionalColumns: ReadonlyArray<readonly [string, string]> = [
     ["visaType", "visa_type"],
     ["groupName", "group_name"],
+    ["submissionDate", "submission_date"],
     ["appointmentDate", "appointment_date"],
     ["expectedCollectionDate", "expected_collection_date"],
     ["applicantSummary", "applicant_summary"],

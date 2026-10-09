@@ -15,7 +15,12 @@ import {
   type ApplicantEdit,
   type ApplicantEditAxis,
 } from "../api/applicantMutations";
-import { crmClient, type CaseView, type CrmEventView } from "../api/crmClient";
+import {
+  crmClient,
+  type CaseView,
+  type CrmEventView,
+  type UpdateCaseDetailsBody,
+} from "../api/crmClient";
 import { crmQueryKeys, useCase, useCaseEvents, usePartners } from "../api/hooks";
 import { describeLedgerEditValue, useLedgerEdit, type LedgerEditColumn } from "../api/mutations";
 import {
@@ -105,6 +110,7 @@ function CaseScreen({ caseId }: { caseId: string }) {
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
   const [clientEmailErrorMessage, setClientEmailErrorMessage] = useState<string | null>(null);
   const [vendorEmailErrorMessage, setVendorEmailErrorMessage] = useState<string | null>(null);
+  const [detailsErrorMessage, setDetailsErrorMessage] = useState<string | null>(null);
   const clientEmailMutation = useMutation({
     mutationFn: (clientEmail: string | null) => crmClient.updateCaseDetails(idToken!, caseId, { clientEmail }),
     onMutate: () => setClientEmailErrorMessage(null),
@@ -123,6 +129,18 @@ function CaseScreen({ caseId }: { caseId: string }) {
         `Not saved: ${mutationError instanceof Error ? mutationError.message : String(mutationError)}`,
       ),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: crmQueryKeys.partners() }),
+  });
+  const detailsMutation = useMutation({
+    mutationFn: (patch: UpdateCaseDetailsBody) => crmClient.updateCaseDetails(idToken!, caseId, patch),
+    onMutate: () => setDetailsErrorMessage(null),
+    onError: (mutationError) =>
+      setDetailsErrorMessage(
+        `Not saved: ${mutationError instanceof Error ? mutationError.message : String(mutationError)}`,
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: crmQueryKeys.case(caseId) });
+      void queryClient.invalidateQueries({ queryKey: ["crm", "ledger"] });
+    },
   });
 
   const caseRecord: CaseView | undefined = caseQuery.data;
@@ -215,8 +233,11 @@ function CaseScreen({ caseId }: { caseId: string }) {
                   onCommitVendorEmail={(contactEmail) =>
                     vendorEmailMutation.mutate({ partnerId: caseRecord.partnerId, contactEmail })
                   }
+                  onCommitDetails={(patch) => detailsMutation.mutate(patch)}
+                  canWriteCrm={canWriteCrm}
                   clientEmailErrorMessage={clientEmailErrorMessage}
                   vendorEmailErrorMessage={vendorEmailErrorMessage}
+                  detailsErrorMessage={detailsErrorMessage}
                 />
 
                 <LineItemsTable caseRecord={caseRecord} />
@@ -413,8 +434,11 @@ function CaseContextFields({
   onCommitCaseEdit,
   onCommitClientEmail,
   onCommitVendorEmail,
+  onCommitDetails,
+  canWriteCrm,
   clientEmailErrorMessage,
   vendorEmailErrorMessage,
+  detailsErrorMessage,
 }: {
   caseRecord: crm.CrmCase;
   partnerName: string;
@@ -422,14 +446,22 @@ function CaseContextFields({
   onCommitCaseEdit: (column: LedgerEditColumn, nextValue: string) => void;
   onCommitClientEmail: (clientEmail: string | null) => void;
   onCommitVendorEmail: (contactEmail: string | null) => void;
+  onCommitDetails: (patch: UpdateCaseDetailsBody) => void;
+  canWriteCrm: boolean;
   clientEmailErrorMessage: string | null;
   vendorEmailErrorMessage: string | null;
+  detailsErrorMessage: string | null;
 }) {
   const isVisaCase = caseRecord.caseType === "VISA";
 
   return (
     <CaseSection title="Case details">
       <div className={`${CARD_CLASS} flex flex-col gap-4 p-4`}>
+        {detailsErrorMessage !== null && (
+          <p role="alert" className="text-sm text-rose-800">
+            {detailsErrorMessage}
+          </p>
+        )}
         <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
           <CaseField fieldKey="partner" label="Partner">
             <span className="flex flex-col gap-1">
@@ -456,7 +488,7 @@ function CaseContextFields({
             <select
               aria-label="Visa type"
               value={caseRecord.visaType ?? ""}
-              disabled={!isVisaCase}
+              disabled={!isVisaCase || !canWriteCrm}
               title={isVisaCase ? undefined : "Only a VISA case can carry a visa type"}
               onChange={(changeEvent) => onCommitCaseEdit("visaType", changeEvent.target.value)}
               className={CONTROL_CLASS}
@@ -479,10 +511,30 @@ function CaseContextFields({
             </select>
           </CaseField>
           <CaseField fieldKey="receivedDate" label="Received">
-            {caseRecord.receivedDate}
+            {canWriteCrm ? (
+              <CaseDateControl
+                label="Received date"
+                storedDate={caseRecord.receivedDate}
+                allowClear={false}
+                onCommitDate={(confirmedDate) => onCommitDetails({ receivedDate: confirmedDate })}
+              />
+            ) : (
+              caseRecord.receivedDate
+            )}
           </CaseField>
-          <CaseField fieldKey="submissionDate" label="Submitted">
-            {caseRecord.submissionDate ?? NOT_RECORDED}
+          <CaseField fieldKey="submissionDate" label="Online submission">
+            {canWriteCrm ? (
+              <CaseDateControl
+                label="Online submission date"
+                storedDate={caseRecord.submissionDate}
+                allowClear
+                onCommitDate={(confirmedDate) =>
+                  onCommitDetails({ submissionDate: confirmedDate === "" ? null : confirmedDate })
+                }
+              />
+            ) : (
+              (caseRecord.submissionDate ?? NOT_RECORDED)
+            )}
           </CaseField>
           <CaseField fieldKey="appointmentDate" label="Appointment">
             <AppointmentDateControl
@@ -491,17 +543,60 @@ function CaseContextFields({
             />
           </CaseField>
           <CaseField fieldKey="expectedCollectionDate" label="Expected collection">
-            {caseRecord.expectedCollectionDate ?? NOT_RECORDED}
+            {canWriteCrm ? (
+              <CaseDateControl
+                label="Expected collection date"
+                storedDate={caseRecord.expectedCollectionDate}
+                allowClear
+                onCommitDate={(confirmedDate) =>
+                  onCommitDetails({
+                    expectedCollectionDate: confirmedDate === "" ? null : confirmedDate,
+                  })
+                }
+              />
+            ) : (
+              (caseRecord.expectedCollectionDate ?? NOT_RECORDED)
+            )}
           </CaseField>
           <CaseField fieldKey="entryType" label="Entry type">
-            {caseRecord.entryType === undefined ? NOT_RECORDED : ENTRY_TYPE_LABELS[caseRecord.entryType]}
+            {canWriteCrm ? (
+              <select
+                aria-label="Entry type"
+                value={caseRecord.entryType ?? ""}
+                onChange={(changeEvent) => {
+                  const nextValue = changeEvent.target.value;
+                  onCommitDetails({
+                    entryType: nextValue === "" ? null : (nextValue as crm.EntryType),
+                  });
+                }}
+                className={CONTROL_CLASS}
+              >
+                <option value="">Not set</option>
+                {crm.ENTRY_TYPES.map((entryType) => (
+                  <option key={entryType} value={entryType}>
+                    {ENTRY_TYPE_LABELS[entryType]}
+                  </option>
+                ))}
+              </select>
+            ) : caseRecord.entryType === undefined ? (
+              NOT_RECORDED
+            ) : (
+              ENTRY_TYPE_LABELS[caseRecord.entryType]
+            )}
           </CaseField>
           <CaseField fieldKey="courierDate" label="Couriered">
             {caseRecord.courierDate ?? NOT_RECORDED}
           </CaseField>
         </div>
         <CaseField fieldKey="remarks" label="Remarks">
-          <span className="whitespace-pre-wrap">{caseRecord.remarks ?? NOT_RECORDED}</span>
+          {canWriteCrm ? (
+            <InlineRemarksControl
+              storedValue={caseRecord.remarks}
+              onCommit={(remarks) => onCommitDetails({ remarks })}
+            />
+          ) : (
+            <span className="whitespace-pre-wrap">{caseRecord.remarks ?? NOT_RECORDED}</span>
+          )}
         </CaseField>
       </div>
     </CaseSection>
@@ -564,11 +659,29 @@ function AppointmentDateControl({
   storedDate: string | undefined;
   onCommitDate: (confirmedDate: string) => void;
 }) {
+  return (
+    <CaseDateControl
+      label="Appointment date"
+      storedDate={storedDate}
+      allowClear={false}
+      onCommitDate={onCommitDate}
+    />
+  );
+}
+
+/** Date field with blur/Enter commit; optional clear when `allowClear` is true. */
+function CaseDateControl({
+  label,
+  storedDate,
+  allowClear,
+  onCommitDate,
+}: {
+  label: string;
+  storedDate: string | undefined;
+  allowClear: boolean;
+  onCommitDate: (confirmedDate: string) => void;
+}) {
   const [draftDate, setDraftDate] = useState(storedDate ?? "");
-  // The stored value this draft was last seeded from. Compared during render
-  // (React's "adjusting state when a prop changes" pattern) rather than in an
-  // effect, so a rollback or a refetch that moves the date never paints the
-  // stale draft for a frame first.
   const [lastSeenStoredDate, setLastSeenStoredDate] = useState(storedDate);
   const alreadyCommittedDateRef = useRef<string | undefined>(undefined);
   if (storedDate !== lastSeenStoredDate) {
@@ -578,11 +691,8 @@ function AppointmentDateControl({
   }
 
   function commitDraftDate() {
-    if (draftDate === "" || draftDate === (storedDate ?? "")) return;
-    // Enter commits and then the input is usually blurred (by the human, or by
-    // the browser). Without this the second event would send the same date a
-    // second time, because the optimistic patch that makes `storedDate` agree
-    // is a microtask behind.
+    if (draftDate === (storedDate ?? "")) return;
+    if (!allowClear && draftDate === "") return;
     if (alreadyCommittedDateRef.current === draftDate) return;
     alreadyCommittedDateRef.current = draftDate;
     onCommitDate(draftDate);
@@ -591,7 +701,7 @@ function AppointmentDateControl({
   return (
     <input
       type="date"
-      aria-label="Appointment date"
+      aria-label={label}
       value={draftDate}
       onChange={(changeEvent) => setDraftDate(changeEvent.target.value)}
       onBlur={commitDraftDate}
@@ -605,6 +715,43 @@ function AppointmentDateControl({
         }
       }}
       className={CONTROL_CLASS}
+    />
+  );
+}
+
+function InlineRemarksControl({
+  storedValue,
+  onCommit,
+}: {
+  storedValue: string | undefined;
+  onCommit: (remarks: string | null) => void;
+}) {
+  const [draftValue, setDraftValue] = useState(storedValue ?? "");
+  const [lastSeenStoredValue, setLastSeenStoredValue] = useState(storedValue);
+  const alreadyCommittedValueRef = useRef<string | null | undefined>(undefined);
+  if (storedValue !== lastSeenStoredValue) {
+    setLastSeenStoredValue(storedValue);
+    setDraftValue(storedValue ?? "");
+    alreadyCommittedValueRef.current = undefined;
+  }
+
+  function commitDraft() {
+    const trimmedDraft = draftValue.trim();
+    if (trimmedDraft === (storedValue ?? "")) return;
+    const confirmedValue = trimmedDraft === "" ? null : trimmedDraft;
+    if (alreadyCommittedValueRef.current === confirmedValue) return;
+    alreadyCommittedValueRef.current = confirmedValue;
+    onCommit(confirmedValue);
+  }
+
+  return (
+    <textarea
+      aria-label="Remarks"
+      rows={3}
+      value={draftValue}
+      onChange={(changeEvent) => setDraftValue(changeEvent.target.value)}
+      onBlur={commitDraft}
+      className={`${CONTROL_CLASS} w-full resize-y`}
     />
   );
 }
@@ -865,6 +1012,14 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
   const [lineItemCode, setLineItemCode] = useState(crm.LINE_ITEM_CATALOG[0]?.code ?? "");
   const [quantity, setQuantity] = useState("1");
   const [unitPriceInr, setUnitPriceInr] = useState("");
+  const [selectedLineIndexes, setSelectedLineIndexes] = useState<number[]>(() =>
+    caseRecord.lineItems.map((_lineItem, index) => index),
+  );
+  const [lastSeenLineCount, setLastSeenLineCount] = useState(caseRecord.lineItems.length);
+  if (caseRecord.lineItems.length !== lastSeenLineCount) {
+    setLastSeenLineCount(caseRecord.lineItems.length);
+    setSelectedLineIndexes(caseRecord.lineItems.map((_lineItem, index) => index));
+  }
 
   const addLineItemMutation = useMutation({
     mutationFn: (input: crm.AddLineItemBody) =>
@@ -882,10 +1037,16 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
 
   async function downloadInvoice(): Promise<void> {
     if (idToken === null) return;
+    if (selectedLineIndexes.length === 0) {
+      setInvoiceError("Select at least one line item to invoice.");
+      return;
+    }
     setIsDownloadingInvoice(true);
     setInvoiceError(null);
     try {
-      const invoice = await crmClient.downloadCaseInvoice(idToken, caseRecord.caseId);
+      const invoice = await crmClient.downloadCaseInvoice(idToken, caseRecord.caseId, {
+        lineItemIndexes: selectedLineIndexes,
+      });
       const binary = atob(invoice.pdfBase64);
       const bytes = new Uint8Array(binary.length);
       for (let index = 0; index < binary.length; index += 1) {
@@ -917,6 +1078,15 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
     });
   }
 
+  function toggleLineSelection(lineIndex: number, checked: boolean): void {
+    setSelectedLineIndexes((previous) => {
+      if (checked) {
+        return previous.includes(lineIndex) ? previous : [...previous, lineIndex].sort((a, b) => a - b);
+      }
+      return previous.filter((index) => index !== lineIndex);
+    });
+  }
+
   return (
     <CaseSection
       title="Line items"
@@ -924,7 +1094,12 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
         <button
           type="button"
           className={SECONDARY_BUTTON_CLASS}
-          disabled={caseRecord.lineItems.length === 0 || isDownloadingInvoice || idToken === null}
+          disabled={
+            caseRecord.lineItems.length === 0 ||
+            selectedLineIndexes.length === 0 ||
+            isDownloadingInvoice ||
+            idToken === null
+          }
           onClick={() => void downloadInvoice()}
         >
           {isDownloadingInvoice ? "Preparing invoice…" : "Download invoice"}
@@ -1002,6 +1177,7 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
         <table className="w-full border-collapse text-left text-sm">
           <thead>
             <tr className="mrz border-b border-line bg-mist text-[10px] text-ink-soft">
+              <th className="px-4 py-2.5 font-medium">Invoice</th>
               <th className="px-4 py-2.5 font-medium">Item</th>
               <th className="px-4 py-2.5 font-medium">Kind</th>
               <th className="px-4 py-2.5 font-medium">Quantity</th>
@@ -1012,7 +1188,7 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
           <tbody>
             {caseRecord.lineItems.length === 0 ? (
               <tr className="border-t border-line">
-                <td colSpan={5} className="px-4 py-2.5 text-ink-soft">
+                <td colSpan={6} className="px-4 py-2.5 text-ink-soft">
                   No line items on this case.
                 </td>
               </tr>
@@ -1023,6 +1199,16 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
                   data-testid="case-line-item-row"
                   className="border-t border-line"
                 >
+                  <td className="px-4 py-2.5">
+                    <input
+                      type="checkbox"
+                      aria-label={`Include ${lineItem.label} on invoice`}
+                      checked={selectedLineIndexes.includes(lineIndex)}
+                      onChange={(changeEvent) =>
+                        toggleLineSelection(lineIndex, changeEvent.target.checked)
+                      }
+                    />
+                  </td>
                   <td className="px-4 py-2.5 text-ink">{lineItem.label}</td>
                   <td className="px-4 py-2.5 text-ink-soft">{LINE_ITEM_KIND_LABELS[lineItem.kind]}</td>
                   <td className="px-4 py-2.5 text-ink">{lineItem.quantity}</td>
@@ -1036,7 +1222,7 @@ function LineItemsTable({ caseRecord }: { caseRecord: crm.CrmCase }) {
           </tbody>
           <tfoot>
             <tr className="border-t border-line bg-mist">
-              <td colSpan={4} className={`${FIELD_LABEL_CLASS} px-4 py-2.5`}>
+              <td colSpan={5} className={`${FIELD_LABEL_CLASS} px-4 py-2.5`}>
                 Case total
               </td>
               <td data-testid="case-total" className="px-4 py-2.5 font-semibold text-ink">

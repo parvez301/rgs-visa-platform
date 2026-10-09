@@ -89,6 +89,7 @@ describe("LedgerTable", () => {
       "caseStatus",
       "billingStatus",
       "receivedDate",
+      "submissionDate",
       "appointmentDate",
       "expectedCollectionDate",
       "lineItemCount",
