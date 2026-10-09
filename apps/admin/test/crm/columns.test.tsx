@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { crm } from "@rgs/shared";
 import {
   collapsedLedgerRowHeight,
+  formatLedgerDateDdMmYyyy,
+  formatLedgerDestination,
   LEDGER_COLUMNS,
   LEDGER_ROW_HEIGHT,
 } from "../../src/crm/ledger/columns";
@@ -70,6 +72,35 @@ describe("REF column", () => {
       </MemoryRouter>,
     );
     expect(container.querySelector("[data-testid='ledger-applicant-refs']")).toBeNull();
+  });
+});
+
+describe("CRM-112 column helpers", () => {
+  it("formats dates as dd-mm-yyyy", () => {
+    expect(formatLedgerDateDdMmYyyy("2026-03-04")).toBe("04-03-2026");
+    expect(formatLedgerDateDdMmYyyy(undefined)).toBe("—");
+  });
+
+  it("formats destination as Country - Visa Type", () => {
+    expect(formatLedgerDestination(buildRow({ destinationCountry: "NZ", visaType: "TOURIST" }))).toBe(
+      "NZ - Tourist",
+    );
+    expect(formatLedgerDestination(buildRow({ destinationCountry: "AE", visaType: undefined }))).toBe(
+      "AE",
+    );
+  });
+
+  it("exposes exactly the eight Cases index columns in order", () => {
+    expect(LEDGER_COLUMNS.map((column) => column.header)).toEqual([
+      "REF",
+      "APPLICANT",
+      "DESTINATION",
+      "PARTNER",
+      "STATUS",
+      "SUB DATE",
+      "COLL DATE",
+      "BILLING STATUS",
+    ]);
   });
 });
 

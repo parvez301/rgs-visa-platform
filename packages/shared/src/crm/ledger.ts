@@ -146,6 +146,12 @@ export const LedgerRowSchema = z.object({
    * `crm_applicants` at list time — not the full applicant records.
    */
   applicantRefs: z.array(z.string().min(1)).optional(),
+  /**
+   * Desk Cases-index APPLICANT cell: one `Name – Passport` line per applicant
+   * (newline-joined for families). Projected at list time from travellers +
+   * applicant passport overrides.
+   */
+  applicantDisplay: z.string().min(1).optional(),
   updatedAt: z.string().datetime(),
   applicantSummary: ApplicantSummarySchema.optional(),
   /**

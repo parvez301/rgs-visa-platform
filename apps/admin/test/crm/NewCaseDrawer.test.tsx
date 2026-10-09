@@ -219,6 +219,24 @@ describe("NewCaseDrawer", () => {
     expect(requestLog.filter((request) => request.method === "POST")).toHaveLength(0);
   });
 
+  it("sends the online submission date when the desk sets it on create", async () => {
+    const { requestLog } = renderDrawer();
+    await fillTheCommonFields();
+    fireEvent.change(screen.getByLabelText("Partner"), { target: { value: "partner_1" } });
+    fireEvent.change(screen.getByLabelText("Online submission date"), {
+      target: { value: "2026-09-18" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create case" }));
+    await screen.findByText("Landed on the case page");
+
+    const caseWrite = requestLog.find((request) => request.method === "POST" && request.url.endsWith("/cases"));
+    expect(caseWrite!.body).toMatchObject({
+      receivedDate: "2026-09-16",
+      submissionDate: "2026-09-18",
+    });
+  });
+
   it("refuses a malformed new-partner email before sending anything (F4)", async () => {
     const { requestLog } = renderDrawer();
     await fillTheCommonFields();

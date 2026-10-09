@@ -5,16 +5,17 @@ import { gridReducer, type GridState } from "../../src/crm/ledger/useGridKeyboar
  * The synthetic grid this reducer is tested against, now carrying the one piece
  * of column metadata `gridReducer` is allowed to see (Critical #2 / G2).
  *
- * The indexes deliberately mirror `LEDGER_COLUMNS`'s real editable set -- Type
- * (visaType), Status, Billing and Appointment -- and, just as deliberately,
- * leave column 0 out: REF is read-only in the product, and a `bounds` object
- * carrying a bare `{ rowCount, columnCount }` is precisely what let
- * "begins an edit at columnIndex 0" pin the defect for the whole branch.
+ * The indexes deliberately mirror `LEDGER_COLUMNS`'s real editable set --
+ * DESTINATION/visaType (2), STATUS (4), BILLING STATUS (7) -- and, just as
+ * deliberately, leave column 0 out: REF is read-only in the product, and a
+ * `bounds` object carrying a bare `{ rowCount, columnCount }` is precisely
+ * what let "begins an edit at columnIndex 0" pin the defect for the whole
+ * branch.
  */
-const EDITABLE_COLUMN_INDEXES: ReadonlySet<number> = new Set([3, 5, 6, 8]);
+const EDITABLE_COLUMN_INDEXES: ReadonlySet<number> = new Set([2, 4, 7]);
 const READ_ONLY_COLUMN_INDEX = 0;
-const EDITABLE_COLUMN_INDEX = 5;
-const bounds = { rowCount: 10, columnCount: 10, editableColumnIndexes: EDITABLE_COLUMN_INDEXES };
+const EDITABLE_COLUMN_INDEX = 4;
+const bounds = { rowCount: 10, columnCount: 8, editableColumnIndexes: EDITABLE_COLUMN_INDEXES };
 const initialState: GridState = {
   focus: { rowIndex: 0, columnIndex: 0 },
   selectedRowIndexes: [],
@@ -64,9 +65,9 @@ describe("gridReducer", () => {
   it("does not wrap focus from the last column back to the first", () => {
     // expandedRowIndexes: [0] takes the REF-column overload out of play, so
     // this is purely the ordinary right-edge clamp on the last column.
-    const atLastColumn = { ...initialState, focus: { rowIndex: 0, columnIndex: 9 }, expandedRowIndexes: [0] };
+    const atLastColumn = { ...initialState, focus: { rowIndex: 0, columnIndex: 7 }, expandedRowIndexes: [0] };
     const moved = gridReducer(atLastColumn, { kind: "move", direction: "right" }, bounds);
-    expect(moved.focus).toEqual({ rowIndex: 0, columnIndex: 9 });
+    expect(moved.focus).toEqual({ rowIndex: 0, columnIndex: 7 });
   });
 
   it("clamps Shift+arrow selection extension at both row edges, rather than wrapping the selection", () => {

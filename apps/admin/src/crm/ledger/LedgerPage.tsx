@@ -35,12 +35,14 @@ import {
   appointmentsTodayViewId,
   appointmentsUpcomingViewId,
   collectTodayViewId,
+  everythingViewId,
   findBuiltInLedgerView,
   liveWorkViewId,
 } from "./views";
 import { ViewChips } from "./ViewChips";
 
-const DEFAULT_LIVE_WORK = findBuiltInLedgerView(liveWorkViewId())!;
+/** CRM-115: Cases dashboard opens on Everything, not Live work. */
+const DEFAULT_LEDGER_VIEW = findBuiltInLedgerView(everythingViewId())!;
 
 /**
  * Status, partner, and the rest of the ledger filters combine server-side
@@ -79,16 +81,16 @@ export function LedgerPage() {
   const { email: signedInUserEmail, idToken } = useAuth();
   const { canWrite } = useAdminAccess();
   const canWriteCrm = canWrite("crm");
-  // Default Live work: smaller first fetch and matches the daily work queue.
+  // Default Everything (CRM-115): show all statuses until the desk picks a queue.
   const [selectedCaseStatuses, setSelectedCaseStatuses] = useState<crm.CaseStatus[]>([
-    ...DEFAULT_LIVE_WORK.filters.statuses,
+    ...DEFAULT_LEDGER_VIEW.filters.statuses,
   ]);
   const [selectedPartnerId, setSelectedPartnerId] = useState<string | undefined>(undefined);
   const [clientLedgerFilters, setClientLedgerFilters] = useState<ClientOnlyLedgerFilters>(() =>
-    clientOnlyFiltersFromView(DEFAULT_LIVE_WORK.filters),
+    clientOnlyFiltersFromView(DEFAULT_LEDGER_VIEW.filters),
   );
-  const [ledgerSort, setLedgerSort] = useState<LedgerSort>(DEFAULT_LIVE_WORK.sort);
-  const [activeViewId, setActiveViewId] = useState<string | undefined>(liveWorkViewId());
+  const [ledgerSort, setLedgerSort] = useState<LedgerSort>(DEFAULT_LEDGER_VIEW.sort);
+  const [activeViewId, setActiveViewId] = useState<string | undefined>(everythingViewId());
   const [isStatusMenuOpen, setIsStatusMenuOpen] = useState(false);
   const [isNewCaseDrawerOpen, setIsNewCaseDrawerOpen] = useState(false);
   const [selectedIssueFilter, setSelectedIssueFilter] = useState<IssueFilter>(ALL_CASES);

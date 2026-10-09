@@ -246,7 +246,38 @@ select
       where a.tenant_id = c.tenant_id
         and a.case_id = c.case_id
     ) applicant_display_refs
-  ) as applicant_refs
+  ) as applicant_refs,
+  (
+    select string_agg(line, E'\n' order by applicant_index)
+    from (
+      select
+        a.applicant_index,
+        case
+          when nullif(btrim(coalesce(t.full_name, '')), '') is not null
+            and nullif(
+              btrim(coalesce(a.passport_number, t.passport_number, '')),
+              ''
+            ) is not null
+            then btrim(t.full_name)
+              || ' – '
+              || btrim(coalesce(a.passport_number, t.passport_number))
+          when nullif(btrim(coalesce(t.full_name, '')), '') is not null
+            then btrim(t.full_name)
+          when nullif(
+            btrim(coalesce(a.passport_number, t.passport_number, '')),
+            ''
+          ) is not null
+            then btrim(coalesce(a.passport_number, t.passport_number))
+          else null
+        end as line
+      from crm_applicants a
+      left join crm_travellers t
+        on t.tenant_id = a.tenant_id and t.traveller_id = a.traveller_id
+      where a.tenant_id = c.tenant_id
+        and a.case_id = c.case_id
+    ) applicant_lines
+    where line is not null
+  ) as applicant_display
 from crm_cases c
 left join crm_partners p
   on p.tenant_id = c.tenant_id and p.partner_id = c.partner_id
@@ -284,6 +315,7 @@ function ledgerRowFromDb(dbRow: LedgerDbRow): crm.LedgerRow {
     ["expectedCollectionDate", "expected_collection_date"],
     ["applicantSummary", "applicant_summary"],
     ["searchText", "search_text"],
+    ["applicantDisplay", "applicant_display"],
   ];
   for (const [fieldName, columnName] of optionalColumns) {
     const columnValue = dbRow[columnName];

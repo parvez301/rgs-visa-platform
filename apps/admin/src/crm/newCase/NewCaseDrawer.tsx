@@ -65,6 +65,7 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
   const [visaType, setVisaType] = useState<crm.VisaType | "">("");
   const [entryType, setEntryType] = useState<crm.EntryType | "">("");
   const [receivedDate, setReceivedDate] = useState(todayIsoDate);
+  const [submissionDate, setSubmissionDate] = useState("");
   const [expectedCollectionDate, setExpectedCollectionDate] = useState("");
   const [remarks, setRemarks] = useState("");
   const [groupName, setGroupName] = useState("");
@@ -138,6 +139,7 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
         ...(caseType === "VISA" && visaType !== "" ? { visaType } : {}),
         ...(caseType === "VISA" && entryType !== "" ? { entryType } : {}),
         receivedDate,
+        ...(submissionDate !== "" ? { submissionDate } : {}),
         ...(expectedCollectionDate !== "" ? { expectedCollectionDate } : {}),
         ...(trimmedRemarks !== "" ? { remarks: trimmedRemarks } : {}),
         ...(groupName.trim() !== "" ? { groupName: groupName.trim() } : {}),
@@ -171,6 +173,9 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
     }
     if (destinationCountry === "") return "Choose the destination country.";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedDate)) return "Enter the received date as a full date.";
+    if (submissionDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(submissionDate)) {
+      return "Enter the online submission date as a full date.";
+    }
     if (expectedCollectionDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedCollectionDate)) {
       return "Enter the collection date as a full date.";
     }
@@ -355,6 +360,15 @@ export function NewCaseDrawer({ onClose }: NewCaseDrawerProps) {
                 type="date"
                 value={receivedDate}
                 onChange={(changeEvent) => setReceivedDate(changeEvent.target.value)}
+                className={FIELD_CLASS}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className={FIELD_LABEL_CLASS}>Online submission date</span>
+              <input
+                type="date"
+                value={submissionDate}
+                onChange={(changeEvent) => setSubmissionDate(changeEvent.target.value)}
                 className={FIELD_CLASS}
               />
             </label>

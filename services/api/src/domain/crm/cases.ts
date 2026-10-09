@@ -38,6 +38,7 @@ export interface CreateCaseInput {
   entryType?: crm.EntryType;
   processing?: crm.ProcessingSpeed;
   receivedDate: string;
+  submissionDate?: string;
   expectedCollectionDate?: string;
   remarks?: string;
   groupName?: string;
@@ -92,6 +93,7 @@ export async function createCase(
       caseStatus: "NEW",
       billingStatus: "UNBILLED",
       receivedDate: input.receivedDate,
+      ...(input.submissionDate !== undefined ? { submissionDate: input.submissionDate } : {}),
       ...(input.expectedCollectionDate !== undefined
         ? { expectedCollectionDate: input.expectedCollectionDate }
         : {}),

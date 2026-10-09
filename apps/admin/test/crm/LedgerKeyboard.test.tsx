@@ -257,12 +257,13 @@ describe("LedgerTable keyboard and selection", () => {
 
     await user.keyboard("{ArrowRight}");
     // The first → on a collapsed REF cell expands the row instead of moving
-    // -- focus must stay on the REF cell, not slide onto "partner".
+    // -- focus must stay on the REF cell, not slide onto "applicant".
     expect(mountedCell(container, "case_0000", "caseRef")).toHaveFocus();
 
     await user.keyboard("{ArrowRight}");
-    // Now that the row is expanded, → behaves like an ordinary move.
-    expect(mountedCell(container, "case_0000", "partner")).toHaveFocus();
+    // Now that the row is expanded, → behaves like an ordinary move (CRM-112:
+    // column 1 is APPLICANT).
+    expect(mountedCell(container, "case_0000", "applicant")).toHaveFocus();
 
     await user.keyboard("{ArrowLeft}");
     // Back on the REF column: this ← does not need to move (only one column

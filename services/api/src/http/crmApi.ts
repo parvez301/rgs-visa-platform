@@ -92,6 +92,7 @@ const CreateCaseBody = z.object({
   entryType: z.enum(crm.ENTRY_TYPES).optional(),
   processing: z.enum(crm.PROCESSING_SPEEDS).optional(),
   receivedDate: realIsoDateBody,
+  submissionDate: realIsoDateBody.optional(),
   expectedCollectionDate: realIsoDateBody.optional(),
   remarks: z.string().trim().min(1).max(2000).optional(),
   groupName: z.string().trim().min(1).max(120).optional(),

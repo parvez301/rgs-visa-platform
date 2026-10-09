@@ -45,7 +45,7 @@ export const OUTCOME_LABELS: Record<crm.ApplicantOutcome, string> = {
 
 export const BILLING_LABELS: Record<crm.BillingStatus, string> = {
   UNBILLED: "Unbilled",
-  BILL_SENT: "Bill sent",
+  BILL_SENT: "Billed",
   PAID: "Paid",
   PART_PAID: "Part paid",
   WRITTEN_OFF: "Written off",

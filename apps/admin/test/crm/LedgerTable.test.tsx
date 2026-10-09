@@ -82,18 +82,13 @@ describe("LedgerTable", () => {
     );
     expect(headerKeys).toEqual([
       "caseRef",
+      "applicant",
+      "destination",
       "partner",
-      "destinationCountry",
-      "caseType",
-      "applicants",
       "caseStatus",
-      "billingStatus",
-      "receivedDate",
       "submissionDate",
-      "appointmentDate",
       "expectedCollectionDate",
-      "lineItemCount",
-      "totalInr",
+      "billingStatus",
     ]);
   });
 
@@ -121,27 +116,45 @@ describe("LedgerTable", () => {
     expect(mountedCell(container, "case_0000", "partner").textContent).toBe("Skyline Travels");
   });
 
-  it("carries the custody roll-up on the collapsed parent row", () => {
-    // Spec §4: the collapsed parent must carry enough per-applicant signal
-    // that expanding is rarely needed, and the roll-up comes from the META
-    // item's summary -- the row never reads applicant records.
+  it("shows applicantDisplay as Name – Passport on the APPLICANT column", () => {
+    const rows = buildRows(1).map((row) => ({
+      ...row,
+      applicantDisplay: "Asha Mehta – A1234567",
+    }));
     const { container } = renderLedger(
-      <LedgerTable rows={buildRows(5)} partnerNamesById={partnerNames} />,
+      <LedgerTable rows={rows} partnerNamesById={partnerNames} />,
     );
 
-    const applicantsCell = mountedCell(container, "case_0000", "applicants");
-    expect(applicantsCell.textContent).toContain("3");
-    expect(applicantsCell.textContent).toContain("2 at embassy · 1 with us");
+    expect(mountedCell(container, "case_0000", "applicant").textContent).toBe(
+      "Asha Mehta – A1234567",
+    );
   });
 
-  it("says 'Not summarised' for a case imported before the roll-up existed", () => {
-    const [rowWithoutSummary] = buildRows(1);
-    const { applicantSummary: _dropped, ...bareRow } = rowWithoutSummary!;
+  it("shows an em dash when applicantDisplay is missing", () => {
     const { container } = renderLedger(
-      <LedgerTable rows={[bareRow]} partnerNamesById={partnerNames} />,
+      <LedgerTable rows={buildRows(1)} partnerNamesById={partnerNames} />,
     );
 
-    expect(mountedCell(container, "case_0000", "applicants").textContent).toContain("Not summarised");
+    expect(mountedCell(container, "case_0000", "applicant").textContent).toBe("—");
+  });
+
+  it("formats DESTINATION as Country - Visa Type and dates as dd-mm-yyyy", () => {
+    const rows = buildRows(1).map((row) => ({
+      ...row,
+      destinationCountry: "NZ",
+      visaType: "TOURIST" as const,
+      submissionDate: "2026-03-04",
+      expectedCollectionDate: "2026-04-15",
+    }));
+    const { container } = renderLedger(
+      <LedgerTable rows={rows} partnerNamesById={partnerNames} />,
+    );
+
+    expect(mountedCell(container, "case_0000", "destination").textContent).toBe("NZ - Tourist");
+    expect(mountedCell(container, "case_0000", "submissionDate").textContent).toBe("04-03-2026");
+    expect(mountedCell(container, "case_0000", "expectedCollectionDate").textContent).toBe(
+      "15-04-2026",
+    );
   });
 
   it("marks an UNKNOWN billing status as import debt", () => {

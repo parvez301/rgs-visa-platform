@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { crm } from "@rgs/shared";
 import type { OpenReviewSummaryEntry } from "../api/crmClient";
 import { AxisChip } from "../components/Chip";
-import { describeCaseType, describeCustodyRollUp, formatInr } from "../labels";
+import { VISA_TYPE_LABELS } from "../labels";
 import { ReviewMarker } from "./ReviewMarker";
 
 /**
@@ -24,10 +24,15 @@ export function collapsedLedgerRowHeight(row: crm.LedgerRow): number {
   const extraApplicantRefs = (row.applicantRefs ?? []).filter(
     (applicantRef) => applicantRef !== row.caseRef,
   );
+  const applicantExtraLines = Math.max(
+    0,
+    (row.applicantDisplay?.split("\n").length ?? 1) - 1,
+  );
   const extraLines =
-    (extraApplicantRefs.length > 0 ? 1 : 0) + (row.groupName !== undefined ? 1 : 0);
+    (extraApplicantRefs.length > 0 ? 1 : 0) +
+    (row.groupName !== undefined ? 1 : 0) +
+    applicantExtraLines;
   if (extraLines === 0) return LEDGER_ROW_HEIGHT;
-  // Primary REF + each secondary line, with a little vertical pad for the chip column.
   return Math.max(LEDGER_ROW_HEIGHT, 12 + (1 + extraLines) * COLLAPSED_REF_LINE_PX);
 }
 
@@ -60,7 +65,10 @@ export interface LedgerCellContext {
 export interface LedgerColumn {
   key: string;
   header: string;
-  /** px. The table is a CSS grid, not a <table>: a virtualizer needs fixed track widths. */
+  /**
+   * CSS grid `fr` weight. Tracks sum to the viewport so the Cases index fills
+   * 100% width with no horizontal scroll (CRM-112).
+   */
   width: number;
   /** REF only. Sticky-left, so the row a desk agent is editing never loses its name. */
   sticky?: boolean;
@@ -75,19 +83,30 @@ export interface LedgerColumn {
   render(row: crm.LedgerRow, partnerName: string, cellContext: LedgerCellContext): ReactNode;
 }
 
-function renderApplicants(row: crm.LedgerRow): ReactNode {
-  if (row.applicantSummary === undefined) {
-    return describeCustodyRollUp(row.applicantSummary);
-  }
-  return `${row.applicantSummary.count} · ${describeCustodyRollUp(row.applicantSummary)}`;
+/** `2026-10-08` → `08-10-2026` (desk Sub/Coll date format). */
+export function formatLedgerDateDdMmYyyy(isoDate: string | undefined): string {
+  if (isoDate === undefined || isoDate === "") return "—";
+  const [year, month, day] = isoDate.split("-");
+  if (year === undefined || month === undefined || day === undefined) return isoDate;
+  return `${day}-${month}-${year}`;
 }
 
+/** `NZ` + Tourist → `NZ - Tourist`; bare country when visa type unset. */
+export function formatLedgerDestination(row: crm.LedgerRow): string {
+  if (row.visaType === undefined) return row.destinationCountry;
+  return `${row.destinationCountry} - ${VISA_TYPE_LABELS[row.visaType]}`;
+}
+
+/**
+ * Exact 8-column Cases index (CRM-112): REF · APPLICANT · DESTINATION ·
+ * PARTNER · STATUS · SUB DATE · COLL DATE · BILLING STATUS. `fr` weights keep
+ * the grid inside the viewport.
+ */
 export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
   {
     key: "caseRef",
     header: "REF",
-    // Wide enough for case REF + family REF NO line + review marker.
-    width: 200,
+    width: 1.1,
     sticky: true,
     // Spec §5: the Case screen is "reached by clicking a REF". `tabIndex={-1}`
     // on purpose (Task 14): the grid owns its own roving tabindex on the
@@ -147,60 +166,73 @@ export const LEDGER_COLUMNS: readonly LedgerColumn[] = [
       );
     },
   },
-  { key: "partner", header: "Partner", width: 160, render: (_row, partnerName) => partnerName },
-  { key: "destinationCountry", header: "Country", width: 72, render: (row) => row.destinationCountry },
   {
-    key: "caseType",
-    header: "Type",
-    width: 130,
-    // Fix round 1, F1: this axis's edit was implemented and pinned in
-    // EditableCell.test.tsx (Task 12) but never wired to a column, so it was
-    // unreachable in the product. "Type" is the only column that already
-    // displays a visa type, so it is the natural home for editing one.
-    editable: "visaType",
-    render: (row) => describeCaseType(row),
+    key: "applicant",
+    header: "APPLICANT",
+    width: 1.8,
+    render: (row) => (
+      <span
+        data-testid="ledger-applicant-display"
+        title={row.applicantDisplay}
+        className="min-w-0 whitespace-pre-line leading-tight"
+      >
+        {row.applicantDisplay ?? "—"}
+      </span>
+    ),
   },
-  { key: "applicants", header: "Applicants", width: 180, render: (row) => renderApplicants(row) },
+  {
+    key: "destination",
+    header: "DESTINATION",
+    width: 1.3,
+    editable: "visaType",
+    render: (row) => (
+      <span className="truncate" title={formatLedgerDestination(row)}>
+        {formatLedgerDestination(row)}
+      </span>
+    ),
+  },
+  {
+    key: "partner",
+    header: "PARTNER",
+    width: 1.4,
+    render: (_row, partnerName) => (
+      <span className="truncate" title={partnerName}>
+        {partnerName}
+      </span>
+    ),
+  },
   {
     key: "caseStatus",
-    header: "Status",
-    // Longest label is "Additional Documents Required" — keep the pill uncropped.
-    width: 260,
+    header: "STATUS",
+    width: 1.6,
     editable: "caseStatus",
     render: (row) => <AxisChip axis="caseStatus" value={row.caseStatus} size="md" />,
   },
   {
-    key: "billingStatus",
-    header: "Billing",
-    width: 110,
-    editable: "billingStatus",
-    render: (row) => <AxisChip axis="billing" value={row.billingStatus} />,
-  },
-  { key: "receivedDate", header: "Received", width: 100, render: (row) => row.receivedDate },
-  {
     key: "submissionDate",
-    header: "Sub date",
-    width: 100,
-    render: (row) => row.submissionDate ?? "—",
-  },
-  {
-    key: "appointmentDate",
-    header: "Appointment",
-    width: 110,
-    editable: "appointmentDate",
-    render: (row) => row.appointmentDate ?? "—",
+    header: "SUB DATE",
+    width: 0.9,
+    render: (row) => (
+      <span className="tabular-nums whitespace-nowrap">
+        {formatLedgerDateDdMmYyyy(row.submissionDate)}
+      </span>
+    ),
   },
   {
     key: "expectedCollectionDate",
-    header: "Collect",
-    width: 100,
-    render: (row) => row.expectedCollectionDate ?? "—",
+    header: "COLL DATE",
+    width: 0.9,
+    render: (row) => (
+      <span className="tabular-nums whitespace-nowrap">
+        {formatLedgerDateDdMmYyyy(row.expectedCollectionDate)}
+      </span>
+    ),
   },
   {
-    key: "lineItemCount",
-    header: "Lines",
-    width: 70,
-    render: (row) => String(row.lineItemCount ?? 0),
+    key: "billingStatus",
+    header: "BILLING STATUS",
+    width: 1.1,
+    editable: "billingStatus",
+    render: (row) => <AxisChip axis="billing" value={row.billingStatus} />,
   },
-  { key: "totalInr", header: "Total", width: 100, render: (row) => formatInr(row.totalInr) },
 ];

@@ -8,128 +8,30 @@ import {
   isCaseClosable,
   isCaseGroup,
 } from "../../src/crm/stateMachines";
+import { CASE_STATUSES } from "../../src/crm/statuses";
 
 describe("case status machine", () => {
-  it("walks the happy path forward", () => {
-    const happyPath = [
-      "NEW",
-      "DOCS_UNDER_REVIEW",
-      "ADDITIONAL_DOCS_REQUIRED",
-      "READY_FOR_SUBMISSION",
-      "APPOINTMENT_SET",
-      "ONLINE_SUBMISSION_DONE",
-      "SUBMITTED",
-      "UNDER_PROCESS",
-      "PASSPORT_RECEIVED",
-      "DECIDED",
-      "CLOSED",
-    ] as const;
-    for (let stepIndex = 0; stepIndex < happyPath.length - 1; stepIndex += 1) {
-      expect(canTransitionCaseStatus(happyPath[stepIndex]!, happyPath[stepIndex + 1]!)).toBe(true);
-    }
-  });
-
-  it("decides an individual case into VISA_GRANTED or VISA_REFUSED, then closes it", () => {
-    for (const verdictStatus of ["VISA_GRANTED", "VISA_REFUSED"] as const) {
-      expect(canTransitionCaseStatus("PASSPORT_RECEIVED", verdictStatus)).toBe(true);
-      expect(canTransitionCaseStatus("DECIDED", verdictStatus)).toBe(true);
-      expect(canTransitionCaseStatus(verdictStatus, "CLOSED")).toBe(true);
-    }
-  });
-
-  it("skips ahead from an early live status to any later stage and CLOSED", () => {
-    for (const earlyStatus of ["NEW", "DOCS_UNDER_REVIEW", "ADDITIONAL_DOCS_REQUIRED"] as const) {
-      for (const laterStatus of [
-        "UNDER_PROCESS",
-        "PASSPORT_RECEIVED",
-        "DECIDED",
-        "VISA_GRANTED",
-        "VISA_REFUSED",
-        "CLOSED",
-      ] as const) {
-        expect(canTransitionCaseStatus(earlyStatus, laterStatus)).toBe(true);
+  it("allows any status to change to any other status (CRM-114)", () => {
+    for (const fromStatus of CASE_STATUSES) {
+      for (const toStatus of CASE_STATUSES) {
+        expect(canTransitionCaseStatus(fromStatus, toStatus)).toBe(fromStatus !== toStatus);
       }
     }
   });
 
-  it("reopens every decision status to SUBMITTED", () => {
-    for (const decisionStatus of ["DECIDED", "VISA_GRANTED", "VISA_REFUSED"] as const) {
-      expect(canTransitionCaseStatus(decisionStatus, "SUBMITTED")).toBe(true);
-    }
-  });
-
-  it("does not let VISA_GRANTED and VISA_REFUSED swap, since they are siblings", () => {
-    expect(canTransitionCaseStatus("VISA_GRANTED", "VISA_REFUSED")).toBe(false);
-    expect(canTransitionCaseStatus("VISA_REFUSED", "VISA_GRANTED")).toBe(false);
-  });
-
-  it("refuses to move backwards through the new stages", () => {
-    expect(canTransitionCaseStatus("UNDER_PROCESS", "READY_FOR_SUBMISSION")).toBe(false);
-    expect(canTransitionCaseStatus("PASSPORT_RECEIVED", "UNDER_PROCESS")).toBe(false);
+  it("still refuses a no-op same-status transition", () => {
+    expect(canTransitionCaseStatus("SUBMITTED", "SUBMITTED")).toBe(false);
+    expect(canTransitionCaseStatus("CLOSED", "CLOSED")).toBe(false);
   });
 
   it("lets a verdict widen to DECIDED, since DECIDED is the neutral superset of a verdict", () => {
     expect(canTransitionCaseStatus("VISA_GRANTED", "DECIDED")).toBe(true);
     expect(canTransitionCaseStatus("VISA_REFUSED", "DECIDED")).toBe(true);
-    // The group derivation that needs it: an individual verdict plus a second applicant.
     const derivedStatus = deriveCaseStatusFromApplicants("VISA_GRANTED", ["APPROVED", "APPROVED"], {
       isGroup: true,
     });
     expect(derivedStatus).toBe("DECIDED");
     expect(canTransitionCaseStatus("VISA_GRANTED", derivedStatus)).toBe(true);
-  });
-
-  it("allows skipping the appointment step, since e-visas have no appointment", () => {
-    expect(canTransitionCaseStatus("DOCS_UNDER_REVIEW", "SUBMITTED")).toBe(true);
-  });
-
-  it("refuses to move backwards", () => {
-    expect(canTransitionCaseStatus("SUBMITTED", "DOCS_UNDER_REVIEW")).toBe(false);
-    expect(canTransitionCaseStatus("DECIDED", "DOCS_UNDER_REVIEW")).toBe(false);
-    expect(canTransitionCaseStatus("DECIDED", "APPOINTMENT_SET")).toBe(false);
-    expect(canTransitionCaseStatus("DECIDED", "NEW")).toBe(false);
-  });
-
-  // DECIDED used to be absorbing: its only successor was CLOSED, the off-ramps
-  // need a LIVE status, and the derivation short-circuited on it. A case marked
-  // decided that then had a passport handed back was stuck holding a live
-  // applicant, and the only way out was to CLOSE a file the embassy had
-  // actually returned.
-  it("reopens a decided case to SUBMITTED, the one step back that exists", () => {
-    expect(canTransitionCaseStatus("DECIDED", "SUBMITTED")).toBe(true);
-    // ...and from there the ordinary machine applies again, off-ramps included.
-    expect(canTransitionCaseStatus("SUBMITTED", "WITHDRAWN")).toBe(true);
-    expect(canTransitionCaseStatus("SUBMITTED", "DECIDED")).toBe(true);
-  });
-
-  it("still refuses to reopen a case that is genuinely over", () => {
-    expect(canTransitionCaseStatus("CLOSED", "SUBMITTED")).toBe(false);
-    expect(canTransitionCaseStatus("WITHDRAWN", "SUBMITTED")).toBe(false);
-  });
-
-  it("refuses to leave a terminal status", () => {
-    expect(canTransitionCaseStatus("CLOSED", "DOCS_UNDER_REVIEW")).toBe(false);
-    expect(canTransitionCaseStatus("WITHDRAWN", "DOCS_UNDER_REVIEW")).toBe(false);
-    expect(canTransitionCaseStatus("DUPLICATE", "NEW")).toBe(false);
-  });
-
-  it("allows the off-ramps from any live status", () => {
-    for (const liveStatus of ["NEW", "DOCS_UNDER_REVIEW", "APPOINTMENT_SET", "SUBMITTED"] as const) {
-      expect(canTransitionCaseStatus(liveStatus, "WITHDRAWN")).toBe(true);
-      expect(canTransitionCaseStatus(liveStatus, "DUPLICATE")).toBe(true);
-      expect(canTransitionCaseStatus(liveStatus, "NOT_SUBMITTED")).toBe(true);
-    }
-  });
-
-  it("reaches DECIDED and CLOSED from any live status, since real rows skip steps", () => {
-    // REF 31376: Status "Handover" (-> CLOSED) with no prior DECIDED.
-    expect(canTransitionCaseStatus("DOCS_UNDER_REVIEW", "DECIDED")).toBe(true);
-    expect(canTransitionCaseStatus("DOCS_UNDER_REVIEW", "CLOSED")).toBe(true);
-    expect(canTransitionCaseStatus("SUBMITTED", "CLOSED")).toBe(true);
-    expect(canTransitionCaseStatus("NEW", "DECIDED")).toBe(true);
-    expect(canTransitionCaseStatus("NEW", "CLOSED")).toBe(true);
-    expect(canTransitionCaseStatus("APPOINTMENT_SET", "DECIDED")).toBe(true);
-    expect(canTransitionCaseStatus("APPOINTMENT_SET", "CLOSED")).toBe(true);
   });
 
   it("agrees with deriveCaseStatusFromApplicants once it reports a decision", () => {
@@ -145,13 +47,6 @@ describe("case status machine", () => {
     );
     expect(derivedGroupStatus).toBe("DECIDED");
     expect(canTransitionCaseStatus("DOCS_UNDER_REVIEW", derivedGroupStatus)).toBe(true);
-  });
-
-  it("still refuses to re-enter a terminal status even after widening DECIDED/CLOSED reachability", () => {
-    expect(canTransitionCaseStatus("WITHDRAWN", "DOCS_UNDER_REVIEW")).toBe(false);
-    expect(canTransitionCaseStatus("WITHDRAWN", "DECIDED")).toBe(false);
-    expect(canTransitionCaseStatus("WITHDRAWN", "CLOSED")).toBe(false);
-    expect(canTransitionCaseStatus("CLOSED", "DECIDED")).toBe(false);
   });
 });
 

@@ -1,5 +1,4 @@
 import {
-  LIVE_CASE_STATUSES,
   TERMINAL_CASE_STATUSES,
   type ApplicantOutcome,
   type BillingStatus,
@@ -7,80 +6,16 @@ import {
   type CustodyStatus,
 } from "./statuses";
 
-// Every live status can reach any LATER happy-path status and CLOSED, not just
-// its immediate successor: real e-visas are approved with no recorded
-// SUBMITTED step, and non-visa cases (ATTESTATION/APOSTILLE/PASSPORT) close
-// via custody + billing without ever earning a per-applicant outcome
-// (spec §5 line 229, §6 line 261; e.g. REF 31376, Status "Handover", no
-// prior DECIDED). The stages between NEW and PASSPORT_RECEIVED are desk-set,
-// so skipping any of them has to stay legal too.
-const CASE_STATUS_HAPPY_PATH: readonly CaseStatus[] = [
-  "NEW",
-  "DOCS_UNDER_REVIEW",
-  "ADDITIONAL_DOCS_REQUIRED",
-  "READY_FOR_SUBMISSION",
-  "APPOINTMENT_SET",
-  "ONLINE_SUBMISSION_DONE",
-  "SUBMITTED",
-  "UNDER_PROCESS",
-  "PASSPORT_RECEIVED",
-  "DECIDED",
-];
-
-// VISA_GRANTED and VISA_REFUSED are siblings, each a verdict on an individual
-// case that follows DECIDED: neither leads to the other (but each may widen
-// back to DECIDED, see the transition table).
-const CASE_STATUS_VERDICTS: readonly CaseStatus[] = ["VISA_GRANTED", "VISA_REFUSED"];
-
-/** Every status strictly after `fromStatus` on the happy path, plus CLOSED. */
-function laterHappyPathStatuses(fromStatus: CaseStatus): readonly CaseStatus[] {
-  const fromIndex = CASE_STATUS_HAPPY_PATH.indexOf(fromStatus);
-  return [...CASE_STATUS_HAPPY_PATH.slice(fromIndex + 1), ...CASE_STATUS_VERDICTS, "CLOSED"];
-}
-
-// SUBMITTED is the reopen edge from every decision status, not a step
-// backwards for its own sake: a decided case whose embassy hands a passport
-// back is live work again. Without it a decision status absorbed the case —
-// the off-ramps need a LIVE status, the derivation could not undo itself, and
-// the only exit left was to CLOSE a file that had actually come back.
-const CASE_STATUS_FORWARD_TRANSITIONS: Record<CaseStatus, readonly CaseStatus[]> = {
-  NEW: laterHappyPathStatuses("NEW"),
-  DOCS_UNDER_REVIEW: laterHappyPathStatuses("DOCS_UNDER_REVIEW"),
-  ADDITIONAL_DOCS_REQUIRED: laterHappyPathStatuses("ADDITIONAL_DOCS_REQUIRED"),
-  READY_FOR_SUBMISSION: laterHappyPathStatuses("READY_FOR_SUBMISSION"),
-  APPOINTMENT_SET: laterHappyPathStatuses("APPOINTMENT_SET"),
-  ONLINE_SUBMISSION_DONE: laterHappyPathStatuses("ONLINE_SUBMISSION_DONE"),
-  SUBMITTED: laterHappyPathStatuses("SUBMITTED"),
-  UNDER_PROCESS: laterHappyPathStatuses("UNDER_PROCESS"),
-  PASSPORT_RECEIVED: laterHappyPathStatuses("PASSPORT_RECEIVED"),
-  DECIDED: ["SUBMITTED", "VISA_GRANTED", "VISA_REFUSED", "CLOSED"],
-  // A verdict may widen to DECIDED: an individual case that gains a second
-  // applicant becomes a group, and a group is always DECIDED.
-  VISA_GRANTED: ["SUBMITTED", "DECIDED", "CLOSED"],
-  VISA_REFUSED: ["SUBMITTED", "DECIDED", "CLOSED"],
-  CLOSED: [],
-  NOT_SUBMITTED: [],
-  WITHDRAWN: [],
-  DUPLICATE: [],
-};
-
-/** Off-ramps reachable from any status a case can still move out of. */
-const CASE_STATUS_OFF_RAMPS: readonly CaseStatus[] = ["NOT_SUBMITTED", "WITHDRAWN", "DUPLICATE"];
-
+/**
+ * CRM-114: desk may set any case status from any other (including reopen from
+ * terminal). Same-status is a no-op and stays false so callers that gate on
+ * "a real move" keep working.
+ */
 export function canTransitionCaseStatus(
   fromStatus: CaseStatus,
   toStatus: CaseStatus,
 ): boolean {
-  if (TERMINAL_CASE_STATUSES.includes(fromStatus)) {
-    return false;
-  }
-  if (
-    CASE_STATUS_OFF_RAMPS.includes(toStatus) &&
-    LIVE_CASE_STATUSES.includes(fromStatus)
-  ) {
-    return true;
-  }
-  return CASE_STATUS_FORWARD_TRANSITIONS[fromStatus].includes(toStatus);
+  return fromStatus !== toStatus;
 }
 
 const CUSTODY_TRANSITIONS: Record<CustodyStatus, readonly CustodyStatus[]> = {

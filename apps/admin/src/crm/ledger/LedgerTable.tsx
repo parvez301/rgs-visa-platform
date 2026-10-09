@@ -364,21 +364,23 @@ export function LedgerTable({
     focusedCellElement?.focus({ preventScroll: true });
   });
 
-  const gridTemplateColumns = LEDGER_COLUMNS.map((column) => `${column.width}px`).join(" ");
-  const gridMinWidthPx = LEDGER_COLUMNS.reduce((widthSum, column) => widthSum + column.width, 0);
+  // `fr` tracks fill the Cases viewport — no fixed px min-width, no H-scroll (CRM-112).
+  const gridTemplateColumns = LEDGER_COLUMNS.map(
+    (column) => `minmax(0, ${column.width}fr)`,
+  ).join(" ");
 
   return (
     <div className="crm-root relative flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper">
       <div
         data-testid="ledger-header"
-        className="mrz sticky top-0 z-20 grid border-b border-line bg-mist text-[10px] text-ink-soft"
-        style={{ gridTemplateColumns, height: LEDGER_ROW_HEIGHT, minWidth: gridMinWidthPx }}
+        className="mrz sticky top-0 z-20 grid w-full border-b border-line bg-mist text-[10px] text-ink-soft"
+        style={{ gridTemplateColumns, height: LEDGER_ROW_HEIGHT }}
       >
         {LEDGER_COLUMNS.map((column) => (
           <div
             key={column.key}
             data-column={column.key}
-            className={`flex items-center px-3 ${column.sticky ? "sticky left-0 z-30 bg-mist" : ""}`}
+            className={`flex min-w-0 items-center px-2 ${column.sticky ? "sticky left-0 z-30 bg-mist" : ""}`}
           >
             {column.header}
           </div>
@@ -388,7 +390,7 @@ export function LedgerTable({
       <div
         data-testid="ledger-scroll"
         ref={scrollContainerRef}
-        className="min-w-0 flex-1 overflow-auto"
+        className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden"
         role="grid"
         tabIndex={0}
         onKeyDown={(event) => handleGridKeyDown(event.nativeEvent)}
@@ -396,7 +398,7 @@ export function LedgerTable({
         {rows.length === 0 ? (
           <p className="p-6 text-sm text-ink-soft">No cases match these filters.</p>
         ) : (
-          <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", minWidth: gridMinWidthPx }}>
+          <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index]!;
               const isRowSelected = gridState.selectedRowIndexes.includes(virtualRow.index);
@@ -436,10 +438,9 @@ export function LedgerTable({
                   key={row.caseId}
                   data-testid="ledger-row"
                   data-case-id={row.caseId}
-                  className={`absolute left-0 border-b border-line ${rowBackgroundClass}`}
+                  className={`absolute left-0 w-full border-b border-line ${rowBackgroundClass}`}
                   style={{
                     height: virtualRow.size,
-                    width: gridMinWidthPx,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                 >
@@ -447,7 +448,7 @@ export function LedgerTable({
                     role="row"
                     aria-selected={isRowSelected ? "true" : "false"}
                     aria-expanded={isRowExpanded}
-                    className={`grid ${rowBackgroundClass} ${isRowSelected ? "" : "hover:bg-mist"}`}
+                    className={`grid w-full ${rowBackgroundClass} ${isRowSelected ? "" : "hover:bg-mist"}`}
                     style={{ gridTemplateColumns, height: collapsedLedgerRowHeight(row) }}
                   >
                     {LEDGER_COLUMNS.map((column, columnIndex) => {
@@ -479,8 +480,8 @@ export function LedgerTable({
                               withShift: event.shiftKey,
                             });
                           }}
-                          className={`flex items-center gap-1.5 px-3 text-sm outline-none ${
-                            column.key === "caseRef" || column.key === "caseStatus"
+                          className={`flex min-w-0 items-center gap-1 px-2 text-sm outline-none ${
+                            column.key === "caseRef" || column.key === "caseStatus" || column.key === "applicant"
                               ? "overflow-visible"
                               : "truncate"
                           } ${column.sticky ? "sticky left-0 z-10 bg-inherit font-medium" : ""} ${

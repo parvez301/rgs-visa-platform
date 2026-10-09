@@ -238,7 +238,7 @@ describe("crm admin routes", () => {
     expect(moved.payload.caseStatus).toBe("DOCS_UNDER_REVIEW");
   });
 
-  it("returns 409 for an illegal transition", async () => {
+  it("returns 409 for a no-op status change", async () => {
     const context = await buildTestContext();
     const router = buildRouter(context);
     const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
@@ -255,13 +255,37 @@ describe("crm admin routes", () => {
       applicants: [{ applicantRef: "31377", travellerId }],
     });
     const caseId = created.payload.caseId;
+    const noop = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
+      toStatus: "NEW",
+    });
+    expect(noop.statusCode).toBe(409);
+  });
+
+  it("allows reopening a withdrawn case (CRM-114)", async () => {
+    const context = await buildTestContext();
+    const router = buildRouter(context);
+    const partner = await call(router, "POST", "/api/v1/admin/crm/partners", {
+      canonicalName: "Ozzy Travels",
+    });
+    const travellerId = await seedTraveller(router, "Umesh Kumar Yadav");
+    const created = await call(router, "POST", "/api/v1/admin/crm/cases", {
+      caseRef: "31378",
+      caseType: "VISA",
+      partnerId: partner.payload.partnerId,
+      destinationCountry: "BH",
+      visaType: "EVISA_TOURIST",
+      receivedDate: "2026-01-02",
+      applicants: [{ applicantRef: "31378", travellerId }],
+    });
+    const caseId = created.payload.caseId;
     await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
       toStatus: "WITHDRAWN",
     });
-    const illegal = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
+    const reopened = await call(router, "PUT", `/api/v1/admin/crm/cases/${caseId}/status`, {
       toStatus: "DOCS_UNDER_REVIEW",
     });
-    expect(illegal.statusCode).toBe(409);
+    expect(reopened.statusCode).toBe(200);
+    expect(reopened.payload.caseStatus).toBe("DOCS_UNDER_REVIEW");
   });
 
   // The embassy hands a passport back after ops has already marked the case

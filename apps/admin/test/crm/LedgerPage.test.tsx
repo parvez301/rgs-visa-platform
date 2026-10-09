@@ -354,7 +354,7 @@ describe("LedgerPage — combined status, partner and extra filters", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Partner" }), "partner_1");
     await user.click(screen.getByRole("button", { name: /Status ·/ }));
     expect(screen.getByRole("button", { name: "Application Received" })).toHaveAttribute("aria-pressed", "true");
-    // The default Live work statuses survive choosing the partner.
+    // CRM-115: default Everything statuses survive choosing the partner.
     expect(mockedUseLedgerRows).toHaveBeenLastCalledWith(
       expect.arrayContaining(["NEW"]),
       "partner_1",

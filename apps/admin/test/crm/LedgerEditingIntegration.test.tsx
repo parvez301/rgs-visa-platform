@@ -147,19 +147,19 @@ beforeEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("LedgerTable: visaType editing on the Type column (fix round 1, F1)", () => {
-  it("opens the visaType editor from the Type column on a VISA case, and commits a real write", async () => {
+describe("LedgerTable: visaType editing on the DESTINATION column (CRM-112)", () => {
+  it("opens the visaType editor from DESTINATION on a VISA case, and commits a real write", async () => {
     const user = userEvent.setup();
-    const row = buildRow({ caseType: "VISA", visaType: "TOURIST" });
+    const row = buildRow({
+      caseType: "VISA",
+      visaType: "TOURIST",
+      destinationCountry: "NZ",
+    });
     const { container, requestLog } = renderLedgerForEditing([row]);
 
-    // Closed state shows the combined case-type + visa-type label -- proof
-    // that wiring `editable: "visaType"` onto this column did not regress it
-    // to EditableCell's own bare visa-type display (which would show just
-    // "Tourist", not "Visa · Tourist").
-    expect(mountedCell(container, "case_0000", "caseType").textContent).toBe("Visa · Tourist");
+    expect(mountedCell(container, "case_0000", "destination").textContent).toBe("NZ - Tourist");
 
-    await user.click(mountedCell(container, "case_0000", "caseType"));
+    await user.click(mountedCell(container, "case_0000", "destination"));
     await user.keyboard("{Enter}");
 
     const select = screen.getByRole("combobox");
@@ -178,12 +178,12 @@ describe("LedgerTable: visaType editing on the Type column (fix round 1, F1)", (
 
   it("opens the visaType editor disabled, with a reason, on a non-VISA case -- reachable through the grid, not just in isolation", async () => {
     const user = userEvent.setup();
-    const row = buildRow({ caseType: "ATTESTATION", visaType: undefined });
+    const row = buildRow({ caseType: "ATTESTATION", visaType: undefined, destinationCountry: "AE" });
     const { container } = renderLedgerForEditing([row]);
 
-    expect(mountedCell(container, "case_0000", "caseType").textContent).toBe("Attestation");
+    expect(mountedCell(container, "case_0000", "destination").textContent).toBe("AE");
 
-    await user.click(mountedCell(container, "case_0000", "caseType"));
+    await user.click(mountedCell(container, "case_0000", "destination"));
     await user.keyboard("{Enter}");
 
     const select = screen.getByRole("combobox");
@@ -239,8 +239,8 @@ describe("LedgerTable: clicking a non-REF cell focuses it for editing (fix round
     // Confirms it is genuinely *this* cell's editor: caseStatus's options are
     // state-machine-filtered from "DOCS_UNDER_REVIEW", never the full enum.
     const optionLabels = screen.getAllByRole("option").map((option) => option.textContent);
-    expect(optionLabels.length).toBeGreaterThan(0);
-    expect(optionLabels).not.toContain("Application Received");
+    expect(optionLabels.length).toBe(crm.CASE_STATUSES.length);
+    expect(optionLabels).toContain("Application Received");
   });
 
   it("still reaches the real conflict dialog when driven the intended way -- click REF, then arrow across", async () => {
@@ -252,11 +252,10 @@ describe("LedgerTable: clicking a non-REF cell focuses it for editing (fix round
     const { container, rejectRequest, resolveRequest } = renderLedgerForEditing([row]);
 
     await user.click(mountedCell(container, "case_0000", "caseRef"));
-    // caseRef(0) -> partner(1) -> destinationCountry(2) -> caseType(3) ->
-    // applicants(4) -> caseStatus(5): five moves right lands on caseStatus,
-    // except the REF column's first → expands the row instead of moving
-    // (see useGridKeyboard.ts's "overloaded →"), so six are needed here.
-    await user.keyboard("{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}");
+    // CRM-112: caseRef(0) -> applicant(1) -> destination(2) -> partner(3) ->
+    // caseStatus(4). First → on REF expands the row instead of moving
+    // (see useGridKeyboard.ts's "overloaded →"), so five ArrowRights needed.
+    await user.keyboard("{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}");
 
     // Task 13: that first → also expanded the row, which mounts
     // `<ApplicantSubRows>` and fires its own GET for the case -- settle it

@@ -243,6 +243,7 @@ export interface CreateCaseInput {
   visaType?: crm.VisaType;
   entryType?: crm.EntryType;
   receivedDate: string;
+  submissionDate?: string;
   expectedCollectionDate?: string;
   remarks?: string;
   groupName?: string;

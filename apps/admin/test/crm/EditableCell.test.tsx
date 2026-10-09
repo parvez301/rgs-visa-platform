@@ -91,16 +91,14 @@ describe("EditableCell", () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
-  it("offers only the transitions the state machine allows from here", () => {
-    // A dropdown listing every CASE_STATUS invites a desk agent to pick one
-    // that 409s. crm.canTransitionCaseStatus is the same rule the server
-    // enforces, so the list and the server agree by construction.
+  it("offers every case status so the desk can change status anytime (CRM-114)", () => {
     const row = buildRow({ caseStatus: "DECIDED" });
     render(<EditableCell column="caseStatus" row={row} onCommit={vi.fn()} isEditing />);
 
     const optionLabels = screen.getAllByRole("option").map((option) => option.textContent);
     expect(optionLabels).toContain("Application Closed");
-    expect(optionLabels).not.toContain("Application Received");
+    expect(optionLabels).toContain("Application Received");
+    expect(optionLabels.length).toBe(crm.CASE_STATUSES.length);
   });
 
   it("offers only the billing transitions the state machine allows from here", () => {

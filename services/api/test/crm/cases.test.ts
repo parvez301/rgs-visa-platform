@@ -153,6 +153,28 @@ describe("crm cases", () => {
     expect(created.remarks).toBe("Passport copy is faint");
   });
 
+  it("stores an optional online submission date on create", async () => {
+    const context = await buildTestContext();
+    const partnerId = await seedPartner(context);
+    const travellerId = await seedTraveller(context, "Asha Rao");
+    const created = await createCase(
+      context,
+      "rgs",
+      {
+        caseRef: "RGS-sub-date",
+        caseType: "VISA",
+        partnerId,
+        destinationCountry: "AE",
+        visaType: "TOURIST",
+        receivedDate: "2026-09-16",
+        submissionDate: "2026-09-18",
+        applicants: [{ applicantRef: "A1", travellerId }],
+      },
+      "ops@rgs.test",
+    );
+    expect(created.submissionDate).toBe("2026-09-18");
+  });
+
   it("records a creation event", async () => {
     const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
@@ -327,14 +349,26 @@ describe("crm cases", () => {
     expect(statusEvent!.meta["toStatus"]).toBe("DOCS_UNDER_REVIEW");
   });
 
-  it("refuses an illegal case-status transition with a 409", async () => {
+  it("refuses a no-op case-status change with a 409", async () => {
+    const context = await buildTestContext();
+    const created = await seedCase(context, await seedPartner(context));
+    await expect(
+      changeCaseStatus(context, "rgs", created.caseId, "NEW", "ops@rgs.test"),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("reopens a withdrawn case when the desk sets a live status again (CRM-114)", async () => {
     const context = await buildTestContext();
     const created = await seedCase(context, await seedPartner(context));
     await changeCaseStatus(context, "rgs", created.caseId, "WITHDRAWN", "ops@rgs.test");
-    // WITHDRAWN is terminal — nothing may leave it.
-    await expect(
-      changeCaseStatus(context, "rgs", created.caseId, "DOCS_UNDER_REVIEW", "ops@rgs.test"),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    const reopened = await changeCaseStatus(
+      context,
+      "rgs",
+      created.caseId,
+      "DOCS_UNDER_REVIEW",
+      "ops@rgs.test",
+    );
+    expect(reopened.caseStatus).toBe("DOCS_UNDER_REVIEW");
   });
 
   it("moves custody on a single applicant without touching the case status", async () => {
@@ -1206,18 +1240,16 @@ describe("CRM case mutators on Postgres", () => {
     expect(events[1]?.meta).toEqual({ fromStatus: "NEW", toStatus: "DOCS_UNDER_REVIEW" });
   });
 
-  it("changeCaseStatus refuses an illegal move and leaves the Postgres row alone", async () => {
+  it("changeCaseStatus can move backwards when the desk corrects status (CRM-114)", async () => {
     const partnerId = await seedPartnerId();
     const created = await seedCase(partnerId, "31377");
 
     await expect(changeCaseStatus(context, TENANT_ID, created.caseId, "DECIDED", ACTOR)).resolves.toBeDefined();
-    // DECIDED -> NEW is not a legal edge.
-    await expect(changeCaseStatus(context, TENANT_ID, created.caseId, "NEW", ACTOR)).rejects.toMatchObject({
-      statusCode: 409,
-    });
-    expect((await readCaseOrThrow(context, TENANT_ID, created.caseId)).caseStatus).toBe("DECIDED");
+    const corrected = await changeCaseStatus(context, TENANT_ID, created.caseId, "NEW", ACTOR);
+    expect(corrected.caseStatus).toBe("NEW");
+    expect((await readCaseOrThrow(context, TENANT_ID, created.caseId)).caseStatus).toBe("NEW");
     const events = await listCaseEvents(context, TENANT_ID, created.caseId);
-    expect(events.filter((event) => event.eventType === "CASE_STATUS_CHANGED")).toHaveLength(1);
+    expect(events.filter((event) => event.eventType === "CASE_STATUS_CHANGED")).toHaveLength(2);
   });
 
   it("changeCaseStatus on a case that does not exist is a 404", async () => {
